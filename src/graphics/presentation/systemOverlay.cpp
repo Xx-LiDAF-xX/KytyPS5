@@ -13,7 +13,9 @@
 #include "libs/dialog.h"
 #include "libs/ime.h"
 #include "libs/imeDialog.h"
-
+#include "common/systemInfo.h"
+#include "kytyGitVersion.h"
+#include "loader/systemContent.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -488,14 +490,40 @@ void ShutdownSystemOverlayInput() {
 	g_input_window = nullptr;
 }
 
+std::atomic<int> g_osd_mode {0};
+std::atomic<int> g_osd_alignment {0};
+std::atomic<int> g_shaders_compiling {0};
+std::atomic<int> g_shaders_compiled {0};
+
+extern double g_game_fps;
+extern uint64_t g_game_frame_num;
+
+void OsdCycleMode() {
+	g_osd_mode.store((g_osd_mode.load() + 1) % 3, std::memory_order_relaxed);
+}
+
+void OsdSetMode(int mode) {
+	g_osd_mode.store(mode, std::memory_order_relaxed);
+}
+
+void OsdSetAlignment(int alignment) {
+	g_osd_alignment.store(alignment, std::memory_order_relaxed);
+}
+
 SystemOverlayVisualState GetSystemOverlayVisualState() noexcept {
 	const auto core   = CoreIme::GetVisualState();
 	const auto dialog = DialogIme::GetVisualState();
 	const auto error  = ErrorDialog::GetVisualState();
+<<<<<<< Updated upstream
 	return {core.active || dialog.active || error.active ||
 	            g_settings_open.load(std::memory_order_acquire),
 	        core.revision + dialog.revision + error.revision +
 	            g_settings_generation.load(std::memory_order_acquire)};
+=======
+	const int shaders_compiling = g_shaders_compiling.load(std::memory_order_relaxed);
+	return {core.active || dialog.active || error.active || (g_osd_mode.load(std::memory_order_relaxed) != 0) || (shaders_compiling > 0),
+	        core.revision + dialog.revision + error.revision + g_osd_mode.load(std::memory_order_relaxed) + g_osd_alignment.load(std::memory_order_relaxed) + shaders_compiling + g_shaders_compiled.load(std::memory_order_relaxed)};
+>>>>>>> Stashed changes
 }
 
 bool ProcessSystemOverlayInput(const SDL_Event& event) {
@@ -1010,6 +1038,7 @@ struct SystemOverlay::Impl {
 		}
 	}
 
+<<<<<<< Updated upstream
 	void DrawSettings(vk::Extent2D extent) {
 		const ImVec2 display(static_cast<float>(extent.width), static_cast<float>(extent.height));
 		const float  scale = std::max(std::min(display.x / 1280.0f, display.y / 720.0f), 0.75f);
@@ -1182,28 +1211,108 @@ struct SystemOverlay::Impl {
 		if (close) {
 			SetSettingsOpen(false);
 		}
+=======
+	void DrawOsd(int mode, int alignment, int shaders_compiling) {
+		ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
+		const float PAD = 10.0f;
+		
+		const ImGuiViewport* viewport = ImGui::GetMainViewport();
+		ImVec2 work_pos = viewport->WorkPos;
+		ImVec2 work_size = viewport->WorkSize;
+
+		ImVec2 window_pos;
+		ImVec2 window_pos_pivot;
+
+		// 0: Top-Left, 1: Top-Right, 2: Bottom-Left, 3: Bottom-Right
+		if (alignment == 0) {
+			window_pos = ImVec2(work_pos.x + PAD, work_pos.y + PAD);
+			window_pos_pivot = ImVec2(0.0f, 0.0f);
+		} else if (alignment == 1) {
+			window_pos = ImVec2(work_pos.x + work_size.x - PAD, work_pos.y + PAD);
+			window_pos_pivot = ImVec2(1.0f, 0.0f);
+		} else if (alignment == 2) {
+			window_pos = ImVec2(work_pos.x + PAD, work_pos.y + work_size.y - PAD);
+			window_pos_pivot = ImVec2(0.0f, 1.0f);
+		} else {
+			window_pos = ImVec2(work_pos.x + work_size.x - PAD, work_pos.y + work_size.y - PAD);
+			window_pos_pivot = ImVec2(1.0f, 1.0f);
+		}
+		
+		if (shaders_compiling > 0) {
+			ImGui::SetNextWindowPos(window_pos, ImGuiCond_Always, window_pos_pivot);
+			ImGui::SetNextWindowBgAlpha(0.85f);
+			if (ImGui::Begin("ShaderCompilation", nullptr, window_flags)) {
+				ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.0f, 1.0f), "Compiling Shaders... (%d active)", shaders_compiling);
+				ImGui::Text("Total compiled: %d", g_shaders_compiled.load(std::memory_order_relaxed));
+			}
+			float h = ImGui::GetWindowHeight();
+			if (alignment < 2) {
+				window_pos.y += h + PAD;
+			} else {
+				window_pos.y -= h + PAD;
+			}
+			ImGui::End();
+		}
+
+		if (mode == 0) return;
+
+		ImGui::SetNextWindowPos(window_pos, ImGuiCond_Always, window_pos_pivot);
+		ImGui::SetNextWindowBgAlpha(0.35f);
+		if (ImGui::Begin("OSD", nullptr, window_flags)) {
+			ImGui::Text("FPS: %.1f", g_game_fps);
+			ImGui::Text("Frame Time: %.3f ms", g_game_fps > 0 ? 1000.0f / g_game_fps : 0.0f);
+			if (mode == 2) {
+				ImGui::Text("Frame Number: %llu", g_game_frame_num);
+				ImGui::Separator();
+				static char title[128] = {0};
+				static char title_id[12] = {0};
+				static char app_ver[12] = {0};
+				static bool has_title = Loader::SystemContentParamSfoGetString("TITLE", title, sizeof(title));
+				static bool has_title_id = Loader::SystemContentParamSfoGetString("TITLE_ID", title_id, sizeof(title_id));
+				static bool has_app_ver = Loader::SystemContentParamSfoGetString("APP_VER", app_ver, sizeof(app_ver));
+				if (has_title) ImGui::Text("Game: %s", title);
+				if (has_title_id) ImGui::Text("Title ID: %s", title_id);
+				if (has_app_ver) ImGui::Text("App Version: %s", app_ver);
+				ImGui::Separator();
+				ImGui::Text("Build: %s", KYTY_BUILD_LABEL);
+				ImGui::Text("CPU: %s", Common::GetSystemInfo().ProcessorName.c_str());
+				ImGui::Text("GPU: %s", graphics.GetPhysicalDeviceProperties().deviceName.data());
+			}
+		}
+		ImGui::End();
+>>>>>>> Stashed changes
 	}
 
 	bool PrepareFrame(vk::Extent2D frame_extent, vk::Format format, uint32_t image_count) {
 		OverlaySnapshot snapshot;
-		if (!GetOverlaySnapshot(&snapshot)) {
+		bool has_overlay = GetOverlaySnapshot(&snapshot);
+		int osd_mode = g_osd_mode.load(std::memory_order_relaxed);
+		int shaders_compiling = g_shaders_compiling.load(std::memory_order_relaxed);
+
+		if (!has_overlay && osd_mode == 0 && shaders_compiling == 0) {
 			return false;
 		}
+		
 		const auto prepared_session = snapshot.session;
 		EnsureVulkan(format, image_count);
-		if (session != snapshot.session) {
-			session       = snapshot.session;
-			focus_pending = true;
-			shift         = (snapshot.ime.option & Ime::OPTION_NO_AUTO_CAPITALIZE) == 0;
-			symbol_mode   = false;
-			panel_offset  = {};
-			right_stick   = {};
-			auto& io      = ImGui::GetIO();
-			io.ClearEventsQueue();
-			io.ClearInputKeys();
-			io.ClearInputMouse();
+		
+		if (has_overlay) {
+			if (session != snapshot.session) {
+				session       = snapshot.session;
+				focus_pending = true;
+				shift         = (snapshot.ime.option & Ime::OPTION_NO_AUTO_CAPITALIZE) == 0;
+				symbol_mode   = false;
+				panel_offset  = {};
+				right_stick   = {};
+				auto& io      = ImGui::GetIO();
+				io.ClearEventsQueue();
+				io.ClearInputKeys();
+				io.ClearInputMouse();
+			}
+			DrainInput(snapshot.session);
+		} else {
+			session = {};
 		}
-		DrainInput(snapshot.session);
 
 		auto& io       = ImGui::GetIO();
 		io.DisplaySize = {static_cast<float>(frame_extent.width),
@@ -1216,17 +1325,31 @@ struct SystemOverlay::Impl {
 		last_frame     = now;
 		ImGui_ImplVulkan_NewFrame();
 		ImGui::NewFrame();
-		if (!GetOverlaySnapshot(&snapshot) || snapshot.session != prepared_session) {
+		
+		bool overlay_still_valid = has_overlay;
+		if (has_overlay) {
+			if (!GetOverlaySnapshot(&snapshot) || snapshot.session != prepared_session) {
+				overlay_still_valid = false;
+			}
+		}
+
+		if (overlay_still_valid) {
+			if (snapshot.session.kind == OverlayKind::Error) {
+				DrawError(snapshot.error, frame_extent);
+			} else if (snapshot.session.kind == OverlayKind::Settings) {
+				DrawSettings(frame_extent);
+			} else {
+				DrawIme(snapshot.ime, frame_extent);
+			}
+		}
+
+		DrawOsd(osd_mode, g_osd_alignment.load(std::memory_order_relaxed), shaders_compiling);
+
+		if (!overlay_still_valid && osd_mode == 0 && shaders_compiling == 0) {
 			ImGui::EndFrame();
 			return false;
 		}
-		if (snapshot.session.kind == OverlayKind::Error) {
-			DrawError(snapshot.error, frame_extent);
-		} else if (snapshot.session.kind == OverlayKind::Settings) {
-			DrawSettings(frame_extent);
-		} else {
-			DrawIme(snapshot.ime, frame_extent);
-		}
+
 		ImGui::Render();
 		extent = frame_extent;
 		return true;

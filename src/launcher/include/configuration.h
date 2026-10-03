@@ -91,6 +91,9 @@ public:
 	PresentMode            present_mode                = PresentMode::Mailbox;
 	int                    gpu_index                   = -1;
 	bool                   fullscreen_enabled          = false;
+	int                    osd_mode                    = 0;
+	int                    osd_alignment               = 0;
+	int                    performance_profile         = 2;
 	bool                   readback_linear_images      = false;
 	bool                   tessellation_enabled        = false;
 	int                    vblank_frequency            = 60;
@@ -122,6 +125,9 @@ public:
 		present_mode                = other.present_mode;
 		gpu_index                   = other.gpu_index;
 		fullscreen_enabled          = other.fullscreen_enabled;
+		osd_mode                    = other.osd_mode;
+		osd_alignment               = other.osd_alignment;
+		performance_profile         = other.performance_profile;
 		readback_linear_images      = other.readback_linear_images;
 		tessellation_enabled        = other.tessellation_enabled;
 		vblank_frequency            = other.vblank_frequency;
@@ -168,6 +174,9 @@ public:
 		KYTY_CFG_SET(present_mode);
 		KYTY_CFG_SET(gpu_index);
 		KYTY_CFG_SET(fullscreen_enabled);
+		KYTY_CFG_SET(osd_mode);
+		KYTY_CFG_SET(osd_alignment);
+		KYTY_CFG_SET(performance_profile);
 		KYTY_CFG_SET(readback_linear_images);
 		KYTY_CFG_SET(tessellation_enabled);
 		KYTY_CFG_SET(vblank_frequency);
@@ -210,6 +219,9 @@ public:
 			present_mode = PresentMode::Mailbox;
 		}
 		KYTY_CFG_GET(fullscreen_enabled);
+		osd_mode = s->value("osd_mode", osd_mode).toInt();
+		osd_alignment = s->value("osd_alignment", osd_alignment).toInt();
+		performance_profile = s->value("performance_profile", 2).toInt();
 		KYTY_CFG_GET(readback_linear_images);
 		KYTY_CFG_GET(tessellation_enabled);
 		vblank_frequency = s->value("vblank_frequency", vblank_frequency).toInt();

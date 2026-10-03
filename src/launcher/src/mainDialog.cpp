@@ -226,6 +226,15 @@ static QStringList CreateEmulatorArgs(const Configuration& info) {
 	if (info.fullscreen_enabled) {
 		args << "--fullscreen";
 	}
+	args << "--osd-mode" << QString::number(info.osd_mode);
+	args << "--osd-alignment" << QString::number(info.osd_alignment);
+	if (info.performance_profile == 1) {
+		args << "--preset" << "quality";
+	} else if (info.performance_profile == 2) {
+		args << "--preset" << "balanced";
+	} else if (info.performance_profile == 3) {
+		args << "--preset" << "performance";
+	}
 	args << "--readback-linear-images" << BoolArg(info.readback_linear_images);
 	if (info.tessellation_enabled) {
 		args << "--tessellation";

@@ -230,6 +230,9 @@ void ConfigurationEditDialog::Init(const Configuration& info) {
 	    info.gpu_index >= 0 && info.gpu_index < m_ui->comboBox_gpu->count() - 1 ? info.gpu_index + 1
 	                                                                            : 0);
 	m_ui->checkBox_fullscreen->setChecked(info.fullscreen_enabled);
+	m_ui->comboBox_osd->setCurrentIndex(info.osd_mode);
+	m_ui->comboBox_osd_alignment->setCurrentIndex(info.osd_alignment);
+	m_ui->comboBox_profile->setCurrentIndex(info.performance_profile);
 	m_ui->checkBox_readback->setChecked(info.readback_linear_images);
 	m_ui->checkBox_tessellation->setChecked(info.tessellation_enabled);
 	m_ui->spinBox_vblank_frequency->setValue(info.vblank_frequency);
@@ -376,6 +379,9 @@ static void UpdateInfo(Configuration& info, Ui::ConfigurationEditDialog& ui) {
 	    TextToEnum<Configuration::PresentMode>(ui.comboBox_present_mode->currentText());
 	info.gpu_index                 = ui.comboBox_gpu->currentIndex() - 1;
 	info.fullscreen_enabled        = ui.checkBox_fullscreen->isChecked();
+	info.osd_mode                  = ui.comboBox_osd->currentIndex();
+	info.osd_alignment             = ui.comboBox_osd_alignment->currentIndex();
+	info.performance_profile       = ui.comboBox_profile->currentIndex();
 	info.readback_linear_images    = ui.checkBox_readback->isChecked();
 	info.tessellation_enabled      = ui.checkBox_tessellation->isChecked();
 	info.vblank_frequency          = ui.spinBox_vblank_frequency->value();

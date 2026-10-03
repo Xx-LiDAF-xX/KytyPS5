@@ -206,6 +206,11 @@ static void GameEventKeyboard(const EventKeyboard& key) {
 					RenderDocRequestCapture();
 				}
 				break;
+			case SDLK_F9:
+				if (!key.repeat) {
+					Libs::Graphics::OsdCycleMode();
+				}
+				break;
 			case SDLK_F11:
 				if (!key.repeat) {
 					ToggleDesktopFullscreen();
@@ -806,6 +811,8 @@ Presenter& WindowInit(uint32_t width, uint32_t height) {
 	window->graphic_ctx.screen_width  = width;
 	window->graphic_ctx.screen_height = height;
 
+	OsdSetMode(Config::GetOsdMode());
+	OsdSetAlignment(Config::GetOsdAlignment());
 	WindowCreate(*window);
 	window->CreateVulkan();
 	auto& presenter = *window->presenter;
@@ -906,12 +913,18 @@ void WindowContext::UpdateIcon() {
 	}
 }
 
+double g_game_fps = 0.0;
+uint64_t g_game_frame_num = 0;
+
 void WindowContext::UpdateTitle(bool new_frame) {
 	DrainStats::CountFrame(new_frame);
 	if (!frame_statistics.Record(Common::Timer::QueryPerformanceCounter(),
 	                             Common::Timer::QueryPerformanceFrequency(), new_frame)) {
 		return;
 	}
+	g_game_fps = frame_statistics.FrameRate();
+	g_game_frame_num = frame_statistics.TotalFrames();
+
 	static char title[128];
 	static char title_id[12];
 	static char app_ver[12];

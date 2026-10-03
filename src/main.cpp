@@ -48,6 +48,7 @@ static void PrintUsage() {
 	::printf("Options can also be set in kyty_settings.ini in the working directory, one per\n"
 	         "line without \"--\" (e.g. gpu-timestamp-scale = 115). The command line overrides it.\n\n");
 	::printf("Options:\n");
+	::printf("  --preset <Quality|Balanced|Performance>  Graphics and FPS preset profile.\n");
 	::printf("  --game <dir|elf|zar>                 Game directory, ELF, or ZArchive to load.\n");
 	::printf("  --game-patch <json>                  ETAHen cheat file.\n");
 	::printf("  --screen-width <num>                 Window width. Default: 1280.\n");
@@ -353,6 +354,59 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 		} else if (arg == "--vblank-frequency") {
 			if (!ParseUint32(value, options.config.vblank_frequency)) {
 				::printf("invalid vblank frequency: %s\n", value.c_str());
+				return false;
+			}
+		} else if (arg == "--osd-mode") {
+			if (!ParseInt32(value, options.config.osd_mode) || options.config.osd_mode < 0 || options.config.osd_mode > 2) {
+				::printf("invalid osd mode: %s\n", value.c_str());
+				return false;
+			}
+		} else if (arg == "--osd-alignment") {
+			if (!ParseInt32(value, options.config.osd_alignment) || options.config.osd_alignment < 0 || options.config.osd_alignment > 3) {
+				::printf("invalid osd alignment: %s\n", value.c_str());
+				return false;
+			}
+		} else if (arg == "--preset") {
+			std::string p = value;
+			std::transform(p.begin(), p.end(), p.begin(), ::tolower);
+			if (p == "quality") {
+				options.config.gpu_timestamp_scale_percent = 100;
+				options.config.async_submit_enabled        = true;
+				options.config.pipeline_libraries_enabled  = true;
+				options.config.async_pipelines_enabled     = false;
+				options.config.relaxed_readback_enabled    = false;
+				options.config.dcc_gpu_clear_enabled       = true;
+				options.config.gpu_mesh_indirect_enabled   = true;
+				options.config.amd_cpu_enabled             = true;
+				options.config.hardware_buffer_bounds      = true;
+				::printf("Profile preset applied: Quality (Native resolution, strict buffers, high precision)\n");
+			} else if (p == "balanced") {
+				options.config.gpu_timestamp_scale_percent = 115;
+				options.config.async_submit_enabled        = true;
+				options.config.pipeline_libraries_enabled  = true;
+				options.config.async_pipelines_enabled     = true;
+				options.config.relaxed_readback_enabled    = true;
+				options.config.dcc_gpu_clear_enabled       = true;
+				options.config.gpu_mesh_indirect_enabled   = true;
+				options.config.amd_cpu_enabled             = true;
+				options.config.record_thread_enabled       = true;
+				options.config.hardware_buffer_bounds      = true;
+				::printf("Profile preset applied: Balanced (115%% Dynamic scale headroom, 60 FPS target, optimized for Ryzen & Modern GPUs)\n");
+			} else if (p == "performance") {
+				options.config.gpu_timestamp_scale_percent = 130;
+				options.config.async_submit_enabled        = true;
+				options.config.pipeline_libraries_enabled  = true;
+				options.config.async_pipelines_enabled     = true;
+				options.config.relaxed_readback_enabled    = true;
+				options.config.speculative_draws_enabled   = true;
+				options.config.dcc_gpu_clear_enabled       = true;
+				options.config.gpu_mesh_indirect_enabled   = true;
+				options.config.amd_cpu_enabled             = true;
+				options.config.record_thread_enabled       = true;
+				options.config.hardware_buffer_bounds      = true;
+				::printf("Profile preset applied: Performance (130%% Dynamic scale headroom, maximum FPS)\n");
+			} else {
+				::printf("unknown preset: %s (choose Quality, Balanced, or Performance)\n", value.c_str());
 				return false;
 			}
 		} else if (arg == "--console-language") {

@@ -23,6 +23,10 @@ void                     ShutdownSystemOverlayInput();
 bool                     ProcessSystemOverlayInput(const SDL_Event& event);
 SystemOverlayVisualState GetSystemOverlayVisualState() noexcept;
 
+void                     OsdCycleMode();
+void                     OsdSetMode(int mode);
+void                     OsdSetAlignment(int alignment);
+
 class SystemOverlay final {
 public:
 	explicit SystemOverlay(GraphicContext& graphics);

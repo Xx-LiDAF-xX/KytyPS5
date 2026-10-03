@@ -401,18 +401,26 @@ struct PipelineCache::ProgramCache {
 	                                    ShaderRecompiler::TranslateResult                   translated,
 	                                    const ShaderRecompiler::IR::ResourceSpecialization& specialization,
 	                                    uint32_t push_data_start_dword) {
+		extern std::atomic<int> g_shaders_compiling;
+		extern std::atomic<int> g_shaders_compiled;
+
+		g_shaders_compiling++;
 		const char* stage_name = StageName(options.stage);
 		auto result = ShaderRecompiler::CompileProgram(std::move(translated), options,
 		                                               specialization, push_data_start_dword);
 		DumpShaderOriginal(stage_name, options.shader_hash, code);
 		if (!ValidateShaderSpirv(options.dump_label, options.shader_hash, result.spirv)) {
 			DumpShaderSpirv(stage_name, options.shader_hash, result.spirv);
+			g_shaders_compiling--;
 			EXIT("%s failed hash=0x%016" PRIx64 ": SPIR-V validation failed\n", options.dump_label,
 			     options.shader_hash);
 		}
 		DumpShaderSpirv(stage_name, options.shader_hash, result.spirv);
 
 		const auto module = CompileSPV(result.spirv, device);
+		g_shaders_compiling--;
+		g_shaders_compiled++;
+		
 		EXIT_IF(module == nullptr);
 		return {
 		    .program     = std::move(result.program).TakeCompiledInfo(),

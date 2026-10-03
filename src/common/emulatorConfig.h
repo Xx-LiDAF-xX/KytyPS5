@@ -51,6 +51,8 @@ struct ConfigOptions {
 	int32_t                gpu_index                   = -1;
 	bool                   fullscreen_enabled          = false;
 	bool                   vr_enabled                  = false;
+	int                    osd_mode                    = 0;
+	int                    osd_alignment               = 0;
 	bool                   amd_cpu_enabled             = false;
 	uint32_t               vblank_frequency            = 60;
 	uint32_t               console_language            = DEFAULT_CONSOLE_LANGUAGE;
@@ -103,6 +105,8 @@ BdaSyncMode        GetBdaSyncMode();
 int32_t GetGpuIndex();
 bool     FullscreenEnabled();
 bool     VrEnabled();
+int      GetOsdMode();
+int      GetOsdAlignment();
 bool     AmdCpuEnabled();
 uint32_t GetVblankFrequency();
 uint32_t GetConsoleLanguage();

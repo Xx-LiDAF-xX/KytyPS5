@@ -173,6 +173,47 @@
           <property name="text"><string>Enable tessellation support (experimental)</string></property>
          </widget>
         </item>
+        <item row="8" column="0">
+         <widget class="QLabel" name="label_osd">
+          <property name="text"><string>OSD Metrics:</string></property>
+         </widget>
+        </item>
+        <item row="8" column="1">
+         <widget class="QComboBox" name="comboBox_osd">
+          <property name="toolTip"><string>On-Screen Display for performance and shader metrics</string></property>
+          <item><property name="text"><string>Off</string></property></item>
+          <item><property name="text"><string>Basic (FPS &amp; Frame Time)</string></property></item>
+          <item><property name="text"><string>Detailed (All Stats)</string></property></item>
+         </widget>
+        </item>
+        <item row="9" column="0">
+         <widget class="QLabel" name="label_osd_alignment">
+          <property name="text"><string>OSD Position:</string></property>
+         </widget>
+        </item>
+        <item row="9" column="1">
+         <widget class="QComboBox" name="comboBox_osd_alignment">
+          <property name="toolTip"><string>Corner to display the OSD</string></property>
+          <item><property name="text"><string>Top Left</string></property></item>
+          <item><property name="text"><string>Top Right</string></property></item>
+          <item><property name="text"><string>Bottom Left</string></property></item>
+          <item><property name="text"><string>Bottom Right</string></property></item>
+         </widget>
+        </item>
+        <item row="10" column="0">
+         <widget class="QLabel" name="label_profile">
+          <property name="text"><string>Performance Profile:</string></property>
+         </widget>
+        </item>
+        <item row="10" column="1">
+         <widget class="QComboBox" name="comboBox_profile">
+          <property name="toolTip"><string>Optimized presets for AMD Ryzen &amp; modern GPUs</string></property>
+          <item><property name="text"><string>Custom</string></property></item>
+          <item><property name="text"><string>Quality (Native 100% / High Fidelity)</string></property></item>
+          <item><property name="text"><string>Balanced (Recommended / 60 FPS Target)</string></property></item>
+          <item><property name="text"><string>Performance (Maximum FPS / High Headroom)</string></property></item>
+         </widget>
+        </item>
        </layout>
       </widget>
      </item>

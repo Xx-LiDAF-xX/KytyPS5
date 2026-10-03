@@ -68,6 +68,14 @@ bool VrEnabled() {
 	return g_config->vr_enabled;
 }
 
+int GetOsdMode() {
+	return g_config->osd_mode;
+}
+
+int GetOsdAlignment() {
+	return g_config->osd_alignment;
+}
+
 bool AmdCpuEnabled() {
 	return g_config->amd_cpu_enabled;
 }
