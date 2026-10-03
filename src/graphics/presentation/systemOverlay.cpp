@@ -514,16 +514,15 @@ SystemOverlayVisualState GetSystemOverlayVisualState() noexcept {
 	const auto core   = CoreIme::GetVisualState();
 	const auto dialog = DialogIme::GetVisualState();
 	const auto error  = ErrorDialog::GetVisualState();
-<<<<<<< Updated upstream
-	return {core.active || dialog.active || error.active ||
-	            g_settings_open.load(std::memory_order_acquire),
-	        core.revision + dialog.revision + error.revision +
-	            g_settings_generation.load(std::memory_order_acquire)};
-=======
 	const int shaders_compiling = g_shaders_compiling.load(std::memory_order_relaxed);
-	return {core.active || dialog.active || error.active || (g_osd_mode.load(std::memory_order_relaxed) != 0) || (shaders_compiling > 0),
-	        core.revision + dialog.revision + error.revision + g_osd_mode.load(std::memory_order_relaxed) + g_osd_alignment.load(std::memory_order_relaxed) + shaders_compiling + g_shaders_compiled.load(std::memory_order_relaxed)};
->>>>>>> Stashed changes
+	return {core.active || dialog.active || error.active ||
+	            g_settings_open.load(std::memory_order_acquire) ||
+	            (g_osd_mode.load(std::memory_order_relaxed) != 0) || (shaders_compiling > 0),
+	        core.revision + dialog.revision + error.revision +
+	            g_settings_generation.load(std::memory_order_acquire) +
+	            g_osd_mode.load(std::memory_order_relaxed) +
+	            g_osd_alignment.load(std::memory_order_relaxed) +
+	            shaders_compiling + g_shaders_compiled.load(std::memory_order_relaxed)};
 }
 
 bool ProcessSystemOverlayInput(const SDL_Event& event) {
@@ -1038,7 +1037,6 @@ struct SystemOverlay::Impl {
 		}
 	}
 
-<<<<<<< Updated upstream
 	void DrawSettings(vk::Extent2D extent) {
 		const ImVec2 display(static_cast<float>(extent.width), static_cast<float>(extent.height));
 		const float  scale = std::max(std::min(display.x / 1280.0f, display.y / 720.0f), 0.75f);
@@ -1211,7 +1209,8 @@ struct SystemOverlay::Impl {
 		if (close) {
 			SetSettingsOpen(false);
 		}
-=======
+	}
+
 	void DrawOsd(int mode, int alignment, int shaders_compiling) {
 		ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
 		const float PAD = 10.0f;
@@ -1280,7 +1279,6 @@ struct SystemOverlay::Impl {
 			}
 		}
 		ImGui::End();
->>>>>>> Stashed changes
 	}
 
 	bool PrepareFrame(vk::Extent2D frame_extent, vk::Format format, uint32_t image_count) {
