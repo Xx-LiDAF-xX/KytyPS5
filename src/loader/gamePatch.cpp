@@ -6,6 +6,7 @@
 #include "kernel/memory.h"
 #include "loader/elf.h"
 #include "loader/runtimeLinker.h"
+#include "common/logging/log.h"
 #include "loader/systemContent.h"
 
 #include <algorithm>
@@ -106,8 +107,12 @@ bool ValidateGame(const Plan& plan, const Program* main_program, std::string* er
 	if (!SystemContentParamSfoGetString("TITLE_ID", &title_id) ||
 	    !SystemContentParamSfoGetString("APP_VER", &version) ||
 	    !Common::EqualNoCase(main_program->file_name.filename().string(), plan.process) ||
-	    !Common::EqualNoCase(title_id, plan.title_id) || version != plan.version) {
+	    !Common::EqualNoCase(title_id, plan.title_id)) {
 		return Fail(error, "cheat file does not match the loaded game");
+	}
+	if (!plan.version.empty() && plan.version != "*" && version != plan.version &&
+	    !version.starts_with(plan.version) && !plan.version.starts_with(version)) {
+		return Fail(error, "cheat file version does not match the loaded game");
 	}
 	return true;
 }
@@ -250,7 +255,7 @@ bool Apply(const std::filesystem::path& plan_path, Program* main_program,
 	Plan        plan;
 	std::string error;
 	if (!LoadPlan(plan_path, &plan, &error) || !ValidateGame(plan, main_program, &error)) {
-		::printf("Game cheat error: %s\n", error.c_str());
+		Log::WriteToConsoleAndLog(fmt::format("Game cheat error: {}\n", error));
 		return false;
 	}
 	if (plan.writes.empty()) {
@@ -266,7 +271,7 @@ bool Apply(const std::filesystem::path& plan_path, Program* main_program,
 			return true;
 		}
 	}
-	::printf("Game cheat: waiting for the matching module\n");
+	Log::WriteToConsoleAndLog("Game cheat: waiting for the matching module\n");
 	return true;
 }
 
@@ -276,20 +281,20 @@ bool ApplyPending(Program* program) {
 	    !Matches(g_pending_plan.get(), *program, &source_base)) {
 		return true;
 	}
-	::printf("Game cheat: matched %s with source base 0x%llx\n",
-	         program->file_name.filename().string().c_str(),
-	         static_cast<unsigned long long>(source_base));
+	Log::WriteToConsoleAndLog(
+	    fmt::format("Game cheat: matched {} with source base 0x{:x}\n",
+	                program->file_name.filename().string(), source_base));
 
 	std::string error;
 	if (!ApplyWrites(g_pending_plan.get(), *program, &error)) {
 		ReleaseCaves(&g_pending_plan->cave_pages);
 		g_pending_plan.reset();
-		::printf("Game cheat error: %s\n", error.c_str());
+		Log::WriteToConsoleAndLog(fmt::format("Game cheat error: {}\n", error));
 		return false;
 	}
 
 	for (const auto& name: g_pending_plan->mod_names) {
-		::printf("Successfully applied cheat: %s\n", name.c_str());
+		Log::WriteToConsoleAndLog(fmt::format("Successfully applied cheat: {}\n", name));
 	}
 	g_applied_cave_pages = std::move(g_pending_plan->cave_pages);
 	g_pending_plan.reset();

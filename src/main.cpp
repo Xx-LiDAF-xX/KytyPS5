@@ -200,6 +200,24 @@ static bool ParseUserId(const std::string& value, int32_t& out) {
 	return true;
 }
 
+static bool CheckOptionalBool(int& i, int argc, char* argv[], bool& out) {
+	if (i + 1 < argc) {
+		std::string_view next = argv[i + 1];
+		if (next == "true" || next == "1") {
+			out = true;
+			i++;
+			return true;
+		}
+		if (next == "false" || next == "0") {
+			out = false;
+			i++;
+			return true;
+		}
+	}
+	out = true;
+	return false;
+}
+
 static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_help) {
 	show_help = false;
 
@@ -213,55 +231,60 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 		}
 
 		if (arg == "--rd") {
-			options.config.renderdoc_enabled = true;
+			CheckOptionalBool(i, argc, argv, options.config.renderdoc_enabled);
 			continue;
 		}
 
 		if (arg == "--fullscreen") {
-			options.config.fullscreen_enabled = true;
+			CheckOptionalBool(i, argc, argv, options.config.fullscreen_enabled);
 			continue;
 		}
 
 		if (arg == "--vr") {
-			options.config.vr_enabled = true;
+			CheckOptionalBool(i, argc, argv, options.config.vr_enabled);
 			continue;
 		}
 
 		if (arg == "--amd-cpu") {
-			options.config.amd_cpu_enabled = true;
+			CheckOptionalBool(i, argc, argv, options.config.amd_cpu_enabled);
 			continue;
 		}
 
 		if (arg == "--playgo-hack") {
-			options.config.playgo_hack_enabled = true;
+			CheckOptionalBool(i, argc, argv, options.config.playgo_hack_enabled);
 			continue;
 		}
 
 		if (arg == "--tessellation") {
-			options.config.tessellation_enabled = true;
+			CheckOptionalBool(i, argc, argv, options.config.tessellation_enabled);
 			continue;
 		}
 
 		if (arg == "--profile") {
-			options.config.profiler_enabled = true;
+			CheckOptionalBool(i, argc, argv, options.config.profiler_enabled);
 			continue;
 		}
 
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 		if (arg == "--redzone") {
-			options.config.red_zone_protection_enabled = true;
+			CheckOptionalBool(i, argc, argv, options.config.red_zone_protection_enabled);
 			continue;
 		}
 #endif
 
 		if (!arg.starts_with("--")) {
-			::printf("game input must be provided with --game\n");
-			return false;
-		}
-
-		if (!NextArg(argc, argv, i, value)) {
-			::printf("missing value for %s\n", arg.c_str());
-			return false;
+			if (options.app0_dir.empty()) {
+				arg = "--game";
+				value = std::string(argv[i]);
+			} else {
+				::printf("game input must be provided with --game\n");
+				return false;
+			}
+		} else {
+			if (!NextArg(argc, argv, i, value)) {
+				::printf("missing value for %s\n", arg.c_str());
+				return false;
+			}
 		}
 
 		if (arg == "--game") {
