@@ -11,7 +11,7 @@ namespace LibGen5 {
 LIB_VERSION("VideoOut", 1, "VideoOut", 1, 1);
 
 LIB_DEFINE(InitVideoOut_1) {
-	PRINT_NAME_ENABLE(true);
+	PRINT_NAME_ENABLE(false);
 
 	LIB_FUNC("Up36PTk687E", VideoOut::VideoOutOpen);
 	LIB_FUNC("uquVH4-Du78", VideoOut::VideoOutClose);

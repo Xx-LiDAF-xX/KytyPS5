@@ -871,8 +871,8 @@ void VideoOutDriver::Impl::PresentThread(std::stop_token token) {
 		const auto frame_begin = Common::Timer::QueryPerformanceCounter();
 		total_wait -= static_cast<int64_t>(frame_begin - sleep_begin);
 
-		const auto refresh = std::max(Config::GetVblankFrequency(), 1u);
-		const auto period  = std::max(frequency / refresh, uint64_t {1});
+		const auto vblank_freq = Config::GetVblankFrequency();
+		const auto period = vblank_freq == 0 ? 0 : std::max(frequency / vblank_freq, uint64_t {1});
 
 		if (m_presenter.IsGuestPaused()) {
 			(void)m_presenter.PresentLastFrame();

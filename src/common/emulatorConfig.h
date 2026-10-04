@@ -27,6 +27,8 @@ enum class LogDirection { Silent, Console, File };
 
 enum class PresentMode { Fifo, Mailbox, Immediate };
 
+enum class BdaSyncMode { Selective, Legacy, SelectiveChecked };
+
 using Keymap = std::vector<std::string>;
 using ControllerColor = std::array<uint8_t, 3>;
 
@@ -51,15 +53,19 @@ struct ConfigOptions {
 	uint32_t               controller_speaker_volume      = 100;
 	uint32_t               controller_vibration_intensity = 100;
 	PresentMode            present_mode                = PresentMode::Mailbox;
+	BdaSyncMode            bda_sync_mode                   = BdaSyncMode::Selective;
 	int32_t                gpu_index                   = -1;
 	bool                   fullscreen_enabled          = false;
 	bool                   hide_cursor_enabled         = false;
 	bool                   vr_enabled                  = false;
+	int                    osd_mode                    = 0;
+	int                    osd_alignment               = 0;
 	bool                   amd_cpu_enabled             = false;
 	uint32_t               vblank_frequency            = 60;
 	uint32_t               console_language            = DEFAULT_CONSOLE_LANGUAGE;
 	bool                   vulkan_validation_enabled   = false;
 	bool                   shader_validation_enabled   = false;
+	bool                   shader_precompile_enabled       = true;
 	ShaderOptimizationType shader_optimization_type    = ShaderOptimizationType::None;
 	LogDirection           shader_log_direction        = LogDirection::Silent;
 	std::filesystem::path  shader_log_folder           = "_Shaders";
@@ -75,6 +81,29 @@ struct ConfigOptions {
 	bool                   readback_linear_images      = false;
 	bool                   tessellation_enabled        = false;
 	bool                   playgo_hack_enabled         = false;
+	uint32_t               drain_stats_interval        = 0;
+	bool                   dcc_gpu_clear_enabled       = true;
+	bool                   async_submit_enabled        = true;
+	bool                   gpu_mesh_indirect_enabled   = true;
+	uint32_t               gpu_frames_ahead            = 0;
+	uint32_t               label_flush_interval_us     = 2000;
+	uint32_t               gpu_timestamp_scale_percent = 100;
+	bool                   pipeline_libraries_enabled  = true;
+	bool                   async_pipelines_enabled     = false;
+	bool                   relaxed_readback_enabled    = false;
+	bool                   speculative_draws_enabled   = true;
+	bool                   record_thread_enabled       = true;
+	bool                   hardware_buffer_bounds      = true;
+	uint32_t               master_volume               = 100;
+	bool                   audio_muted                 = false;
+	int32_t                anisotropic_filtering       = -1;
+	uint32_t               resolution_scale_percent    = 100;
+	bool                   motion_blur_enabled         = true;
+	bool                   depth_of_field_enabled      = true;
+	bool                   bloom_enabled               = true;
+	bool                   ambient_occlusion_enabled   = true;
+	bool                   ray_tracing_enabled         = false;
+	bool                   auto_spec_optimization      = false;
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 	bool red_zone_protection_enabled = false;
 #endif
@@ -92,16 +121,20 @@ const std::optional<ControllerColor>& GetControllerColor();
 uint32_t GetControllerSpeakerVolume();
 uint32_t GetControllerVibrationIntensity();
 PresentMode GetPresentMode();
+BdaSyncMode        GetBdaSyncMode();
 int32_t GetGpuIndex();
 bool     FullscreenEnabled();
 bool     HideCursorEnabled();
 bool     VrEnabled();
+int      GetOsdMode();
+int      GetOsdAlignment();
 bool     AmdCpuEnabled();
 uint32_t GetVblankFrequency();
 uint32_t GetConsoleLanguage();
 bool     VulkanValidationEnabled();
 
 bool                   ShaderValidationEnabled();
+bool                   ShaderPrecompileEnabled();
 ShaderOptimizationType GetShaderOptimizationType();
 LogDirection           GetShaderLogDirection();
 std::filesystem::path  GetShaderLogFolder();
@@ -124,9 +157,82 @@ bool RenderDocEnabled();
 bool ReadbackLinearImagesEnabled();
 bool TessellationEnabled();
 bool PlayGoHackEnabled();
+// Seconds between GPU wait reports; 0 disables the accounting.
+uint32_t GetDrainStatsInterval();
+// Apply GPU-written DCC fast clears on the GPU instead of reading the keys back.
+bool DccGpuClearEnabled();
+// Submit the GPU thread's command buffers from a dedicated queue thread.
+bool AsyncSubmitEnabled();
+// Build mesh-emulated indirect draws with GPU-written arguments on the GPU.
+bool GpuMeshIndirectEnabled();
+// Frames the game may build ahead of Thread_Gpu at sceAgcSuspendPoint; 0 waits for idle.
+uint32_t GetGpuFramesAhead();
+// Minimum time between submits made at plain RELEASE_MEM labels; 0 submits at every idle label.
+uint32_t GetLabelFlushIntervalUs();
+// Stretch time measured between guest GPU timestamps within a frame, in percent (100 = off).
+// Games that size their dynamic resolution from GPU timestamps then leave more GPU headroom.
+uint32_t GetGpuTimestampScalePercent();
+// Changes it while running (the settings panel); takes effect at the next timestamp.
+void     SetGpuTimestampScalePercent(uint32_t percent);
+// Build new graphics pipelines from separately compiled, cached parts (pipeline libraries) where
+// the GPU driver supports it, so a new pipeline stalls for less time.
+bool PipelineLibrariesEnabled();
+// Changes it while running (the settings panel); applies to pipelines created afterwards.
+void SetPipelineLibrariesEnabled(bool enabled);
+// Draws whose graphics pipeline is still compiling are skipped instead of waiting for it, so a
+// new pipeline never stalls the game; what it draws appears a few frames late. Needs pipeline
+// libraries.
+bool AsyncPipelinesEnabled();
+// Changes it while running (the settings panel).
+void SetAsyncPipelinesEnabled(bool enabled);
+// A game thread reading memory the GPU is still writing gets the previous bytes at once instead
+// of waiting, as on hardware when the CPU reads before the GPU has written; the new bytes follow
+// with the download already under way. Off by default: a value can be a frame old.
+bool RelaxedReadbackEnabled();
+// Changes it while running (the settings panel).
+void SetRelaxedReadbackEnabled(bool enabled);
+// A second thread prepares draws' shader resources ahead of the GPU thread, which takes them
+// when they are still what it would prepare itself. Faster in scenes with many draws; uses one
+// more CPU core.
+bool SpeculativeDrawsEnabled();
+// Changes it while running (the settings panel).
+void SetSpeculativeDrawsEnabled(bool enabled);
+// The render thread queues its Vulkan commands for the submit thread, which records and submits
+// them. Faster in scenes with many draws; uses one more CPU core. Read at start.
+bool RecordThreadEnabled();
+// Storage buffer range checks are left to the device where it defines out-of-range dword
+// accesses (robustBufferAccess2), instead of being compiled into every shader. Read at start.
+bool HardwareBufferBoundsEnabled();
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 bool RedZoneProtectionEnabled();
 #endif
+
+uint32_t GetMasterVolume();
+void     SetMasterVolume(uint32_t volume);
+bool     AudioMuted();
+void     SetAudioMuted(bool muted);
+int32_t  GetAnisotropicFiltering();
+void     SetAnisotropicFiltering(int32_t aniso);
+uint32_t GetResolutionScalePercent();
+void     SetResolutionScalePercent(uint32_t percent);
+bool     MotionBlurEnabled();
+void     SetMotionBlurEnabled(bool enabled);
+bool     DepthOfFieldEnabled();
+void     SetDepthOfFieldEnabled(bool enabled);
+bool     BloomEnabled();
+void     SetBloomEnabled(bool enabled);
+bool     AmbientOcclusionEnabled();
+void     SetAmbientOcclusionEnabled(bool enabled);
+
+bool     RayTracingEnabled();
+void     SetRayTracingEnabled(bool enabled);
+
+bool     AutoSpecOptimizationEnabled();
+void     SetAutoSpecOptimizationEnabled(bool enabled);
+
+void     ApplyAutoOptimization(bool log_reason = true);
+void     SaveCurrentSettings();
+void     ReloadFromSettingsFile();
 
 const Keymap& GetKeymap();
 

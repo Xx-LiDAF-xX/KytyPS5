@@ -7,6 +7,7 @@
 #include "common/threads.h"
 #include "loader/timer.h" // IWYU pragma: keep
 
+#include <chrono>
 #include <fmt/format.h>
 
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
@@ -48,17 +49,52 @@
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 #define LIB_FUNC(n, f) LIB_ADD(n, f, Loader::SymbolType::Func)
 
+// The address of the function's return address on the stack, for KYTY_DEBUG_CALL_COUNTS traces.
+#if defined(_MSC_VER)
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
+#define KYTY_RETURN_ADDRESS_SLOT() _AddressOfReturnAddress()
+#else
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
+#define KYTY_RETURN_ADDRESS_SLOT() __builtin_frame_address(0)
+#endif
+
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 #define PRINT_NAME()                                                                               \
-	if (PRINT_NAME_ENABLED) {                                                                      \
-		Libs::PrintName(g_library, g_module, __func__);                                              \
-	}
+	do {                                                                                           \
+		if (PRINT_NAME_ENABLED) {                                                                  \
+			Libs::PrintName(g_library, g_module, __func__);                                        \
+		}                                                                                          \
+		if (Libs::g_count_call != nullptr) [[unlikely]] {                                          \
+			Libs::g_count_call(g_library, __func__, KYTY_RETURN_ADDRESS_SLOT());                   \
+		}                                                                                          \
+	} while (false)
+
+// The call-count half of PRINT_NAME, for hot functions that skip its logging.
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
+#define COUNT_CALL()                                                                               \
+	do {                                                                                           \
+		if (Libs::g_count_call != nullptr) [[unlikely]] {                                          \
+			Libs::g_count_call(g_library, __func__, KYTY_RETURN_ADDRESS_SLOT());                   \
+		}                                                                                          \
+	} while (false)
 
 namespace Loader {
 class SymbolDatabase;
 } // namespace Loader
 
 namespace Libs {
+
+// KYTY_DEBUG_CALL_COUNTS=1 counts the calls of every function that uses PRINT_NAME, and a helper
+// thread prints each 5 s window's counts, to see what a stalled game keeps calling (or stopped
+// calling). TraceCalls(n) also prints the calling thread's next n calls, each with the guest code
+// addresses on its stack above the return address, and TraceAllCalls(duration) every thread's
+// calls outside the command buffer builders for that long. Otherwise a call pays one test. libs.cpp
+// installs the counter at startup, so programs built from single libraries (their tests) link
+// without it and count nothing.
+using CountCallFunc = void (*)(const char* library, const char* function, void* return_slot);
+inline CountCallFunc g_count_call = nullptr;
+void                 TraceCalls(uint32_t count) noexcept;
+void                 TraceAllCalls(std::chrono::milliseconds duration) noexcept;
 
 // Keep the formatting path from inflating fiber functions' stack frames under LTO.
 [[gnu::noinline]] inline void PrintName(const char* library, const char* module, const char* function) {

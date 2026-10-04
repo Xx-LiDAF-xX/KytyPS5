@@ -238,7 +238,8 @@ static bool KernelRealtimeToTimespec(bool precise, KernelTimespec* tp) {
 		return false;
 	}
 
-	Kernel100nsToTimespec(value - WINDOWS_UNIX_EPOCH_DELTA_100NS, tp);
+	const auto shift = Common::DebugTimeOffsetSeconds() * 10000000;
+	Kernel100nsToTimespec(value - WINDOWS_UNIX_EPOCH_DELTA_100NS + static_cast<uint64_t>(shift), tp);
 	return true;
 }
 
@@ -1092,7 +1093,7 @@ void Initialize() {
 	g_pthread_context->SetDefaultCondattr(default_condattr);
 	g_pthread_context->SetDefaultAttr(default_attr);
 
-	PRINT_NAME_ENABLE(true);
+	PRINT_NAME_ENABLE(false);
 
 	Common::Thread thread(FreeDetachedThreads, nullptr);
 	thread.Detach();
@@ -3288,7 +3289,7 @@ int KYTY_SYSV_ABI PthreadCreate(Pthread* thread, const PthreadAttr* attr,
 
 	PthreadAttrDbgPrint(&created_thread->attr);
 
-	PRINT_NAME_ENABLE(true);
+	PRINT_NAME_ENABLE(false);
 
 	if (result < 0) {
 		return result;
@@ -3646,6 +3647,7 @@ int KYTY_SYSV_ABI KernelClockGetres(KernelClockid clock_id, KernelTimespec* tp) 
 }
 
 int KYTY_SYSV_ABI KernelClockGettime(KernelClockid clock_id, KernelTimespec* tp) {
+	COUNT_CALL();
 	// Called constantly by Python frame/timer code.
 
 	if (tp == nullptr) {
@@ -3677,6 +3679,7 @@ int KYTY_SYSV_ABI KernelClockGettime(KernelClockid clock_id, KernelTimespec* tp)
 }
 
 int KYTY_SYSV_ABI KernelGettimeofday(KernelTimeval* tp) {
+	COUNT_CALL();
 	// PRINT_NAME();
 
 	if (tp == nullptr) {
@@ -3692,6 +3695,7 @@ int KYTY_SYSV_ABI KernelGettimeofday(KernelTimeval* tp) {
 	ticks |= ft.dwLowDateTime;
 	ticks /= 10;
 	ticks -= 11644473600000000ULL;
+	ticks += static_cast<uint64_t>(Common::DebugTimeOffsetSeconds() * 1000000);
 	tp->tv_sec  = static_cast<int64_t>(ticks / 1000000);
 	tp->tv_usec = static_cast<int64_t>(ticks % 1000000);
 #else
@@ -3794,14 +3798,17 @@ int KYTY_SYSV_ABI KernelConvertUtcToLocaltime(int64_t utc_time, int64_t* local_t
 }
 
 uint64_t KYTY_SYSV_ABI KernelGetTscFrequency() {
+	COUNT_CALL();
 	return KernelGetTscFrequencyNative();
 }
 
 uint64_t KYTY_SYSV_ABI KernelReadTsc() {
+	COUNT_CALL();
 	return KernelReadTscNative();
 }
 
 uint64_t KYTY_SYSV_ABI KernelGetProcessTime() {
+	COUNT_CALL();
 	const auto frequency = KernelGetTscFrequencyNative();
 	if (frequency == 0) {
 		return static_cast<uint64_t>(Loader::Timer::GetTimeMs() * 1000.0);
@@ -3813,10 +3820,12 @@ uint64_t KYTY_SYSV_ABI KernelGetProcessTime() {
 }
 
 uint64_t KYTY_SYSV_ABI KernelGetProcessTimeCounter() {
+	COUNT_CALL();
 	return KernelGetElapsedTsc();
 }
 
 uint64_t KYTY_SYSV_ABI KernelGetProcessTimeCounterFrequency() {
+	COUNT_CALL();
 	return KernelGetTscFrequencyNative();
 }
 
@@ -3831,6 +3840,7 @@ void KYTY_SYSV_ABI KernelSetThreadDtors(thread_dtors_func_t dtors) {
 }
 
 int KYTY_SYSV_ABI KernelUsleep(KernelUseconds microseconds) {
+	COUNT_CALL();
 	SleepMicroWithSignalPoll(microseconds);
 	return OK;
 }
@@ -3841,6 +3851,8 @@ unsigned int KYTY_SYSV_ABI KernelSleep(unsigned int seconds) {
 }
 
 int KYTY_SYSV_ABI KernelNanosleep(const KernelTimespec* rqtp, KernelTimespec* rmtp) {
+	COUNT_CALL();
+	
 	if (rqtp == nullptr) {
 		return KERNEL_ERROR_EFAULT;
 	}

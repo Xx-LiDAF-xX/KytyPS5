@@ -146,7 +146,8 @@ public:
 			}
 
 			const bool reserved = binding.key == SDLK_ESCAPE || binding.key == SDLK_F1 ||
-			                      binding.key == SDLK_F7 || binding.key == SDLK_F11;
+			                      binding.key == SDLK_F2 || binding.key == SDLK_F7 ||
+			                      binding.key == SDLK_F11;
 			if (binding.control == INVALID_CONTROL || reserved ||
 			    (binding.key == SDLK_UNKNOWN && binding.mouse_button == 0)) {
 				EXIT("Invalid input mapping: %s\n", value.c_str());
@@ -455,7 +456,12 @@ void HostInputToggleMouseToJoystick() {
 }
 
 bool HostInputWaitEvent(SDL_Event* event) {
-	int timeout = -1;
+	// Return periodically so the main loop pumps events, and with them queued main-thread
+	// callbacks, even if a wakeup is missed. A presentation thread may be blocked on one of
+	// those callbacks (for example a window-title update). Half a vblank, at least 1 ms.
+	const int main_task_poll_ms = std::max(
+	    1, static_cast<int>(1000u / (2u * std::max(Config::GetVblankFrequency(), 1u))));
+	int timeout_ms = main_task_poll_ms;
 	if (!g_mouse.enabled || SDL_GetKeyboardFocus() != g_mouse_window) {
 		g_mouse.next_poll = 0;
 		CenterMouseStick();
@@ -464,28 +470,10 @@ bool HostInputWaitEvent(SDL_Event* event) {
 			SDL_GetRelativeMouseState(nullptr, nullptr);
 			g_mouse.next_poll = SDL_GetTicks() + MOUSE_POLL_INTERVAL_MS;
 		}
-		timeout = PollMouse(SDL_GetTicks());
+		timeout_ms = std::min(PollMouse(SDL_GetTicks()), main_task_poll_ms);
 	}
-
-	if (g_cursor_hide_at != 0) {
-		const auto now_ms = SDL_GetTicks();
-		const int  cursor_timeout =
-		    now_ms < g_cursor_hide_at ? static_cast<int>(g_cursor_hide_at - now_ms) : 0;
-		timeout = timeout < 0 ? cursor_timeout : std::min(timeout, cursor_timeout);
-	}
-	const bool has_event = SDL_WaitEventTimeout(event, timeout);
-
-	if (Config::HideCursorEnabled()) {
-		const auto now_ms = SDL_GetTicks();
-		if (has_event && !g_mouse.enabled && IsCursorActivity(*event) &&
-		    SDL_GetWindowFromEvent(event) == g_mouse_window) {
-			SDL_ShowCursor();
-			g_cursor_hide_at = now_ms + CURSOR_IDLE_HIDE_MS;
-		} else if (g_cursor_hide_at != 0 && now_ms >= g_cursor_hide_at) {
-			SDL_HideCursor();
-			g_cursor_hide_at = 0;
-		}
-	}
+	// SDL3 reports a timeout as false and has no separate error result for this call.
+	const bool has_event = SDL_WaitEventTimeout(event, timeout_ms);
 
 	if (has_event && event->type == SDL_EVENT_WINDOW_FOCUS_LOST &&
 	    event->window.windowID == SDL_GetWindowID(g_mouse_window)) {

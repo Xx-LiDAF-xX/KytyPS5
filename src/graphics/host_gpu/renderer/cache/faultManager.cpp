@@ -6,6 +6,8 @@
 #include "graphics/host_gpu/graphicContext.h"
 #include "graphics/host_gpu/renderer/cache/bufferCache.h"
 #include "graphics/host_gpu/renderer/commandScheduler.h"
+#include "graphics/host_gpu/renderer/drainStats.h"
+#include "graphics/host_gpu/renderer/gpuZones.h"
 #include "graphics/host_gpu/vulkanCommon.h"
 
 #include <bit>
@@ -76,6 +78,7 @@ FaultManager::~FaultManager() {
 
 void FaultManager::ProcessFaultBuffer() {
 	if (const auto wait_tick = m_fault_areas[m_current_area]; wait_tick != 0) {
+		DrainStats::ReasonScope reason(DrainStats::Reason::FaultBuffer);
 		m_scheduler.Wait(wait_tick);
 		m_scheduler.PopPendingOperations();
 	}
@@ -113,6 +116,7 @@ void FaultManager::ProcessFaultBuffer() {
 
 	m_scheduler.EndRendering();
 	auto command = m_scheduler.Current().Handle();
+	GpuZones::Mark(command, DrainStats::Zone::FaultBuffer);
 	vk::DependencyInfo dependency {};
 	dependency.dependencyFlags          = vk::DependencyFlagBits::eByRegion;
 	dependency.bufferMemoryBarrierCount = 1;

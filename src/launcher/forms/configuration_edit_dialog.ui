@@ -90,6 +90,26 @@
         <item row="0" column="1">
          <widget class="QComboBox" name="comboBox_audio_input_device"/>
         </item>
+        <item row="1" column="0">
+         <widget class="QLabel" name="label_master_volume">
+          <property name="text"><string>Master volume:</string></property>
+         </widget>
+        </item>
+        <item row="1" column="1">
+         <widget class="QSpinBox" name="spinBox_master_volume">
+          <property name="toolTip"><string>Master audio output volume (0-100%)</string></property>
+          <property name="minimum"><number>0</number></property>
+          <property name="maximum"><number>100</number></property>
+          <property name="value"><number>100</number></property>
+          <property name="suffix"><string>%</string></property>
+         </widget>
+        </item>
+        <item row="2" column="1">
+         <widget class="QCheckBox" name="checkBox_audio_muted">
+          <property name="toolTip"><string>Mute all emulator audio output</string></property>
+          <property name="text"><string>Mute audio</string></property>
+         </widget>
+        </item>
        </layout>
       </widget>
      </item>
@@ -129,8 +149,9 @@
         </item>
         <item row="2" column="1">
          <widget class="QSpinBox" name="spinBox_vblank_frequency">
-          <property name="toolTip"><string>Virtual display refresh rate used for frame pacing</string></property>
-          <property name="minimum"><number>30</number></property>
+          <property name="toolTip"><string>Virtual display refresh rate used for frame pacing (0 = Uncapped)</string></property>
+          <property name="specialValueText"><string>Uncapped</string></property>
+          <property name="minimum"><number>0</number></property>
           <property name="maximum"><number>360</number></property>
           <property name="value"><number>60</number></property>
          </widget>
@@ -173,12 +194,46 @@
           <property name="text"><string>Enable tessellation support (experimental)</string></property>
          </widget>
         </item>
-        <item row="8" column="1">
-         <widget class="QCheckBox" name="checkBox_hide_cursor">
-          <property name="toolTip"><string>Hide the host cursor after 2 seconds without mouse activity</string></property>
-          <property name="text"><string>Auto-hide cursor</string></property>
+        <item row="8" column="0">
+         <widget class="QLabel" name="label_osd">
+          <property name="text"><string>OSD Metrics:</string></property>
          </widget>
         </item>
+        <item row="8" column="1">
+         <widget class="QComboBox" name="comboBox_osd">
+          <property name="toolTip"><string>On-Screen Display for performance and shader metrics</string></property>
+          <item><property name="text"><string>Off</string></property></item>
+          <item><property name="text"><string>Basic (FPS &amp; Frame Time)</string></property></item>
+          <item><property name="text"><string>Detailed (All Stats)</string></property></item>
+         </widget>
+        </item>
+        <item row="9" column="0">
+         <widget class="QLabel" name="label_osd_alignment">
+          <property name="text"><string>OSD Position:</string></property>
+         </widget>
+        </item>
+        <item row="9" column="1">
+         <widget class="QComboBox" name="comboBox_osd_alignment">
+          <property name="toolTip"><string>Corner to display the OSD</string></property>
+          <item><property name="text"><string>Top Left</string></property></item>
+          <item><property name="text"><string>Top Right</string></property></item>
+          <item><property name="text"><string>Bottom Left</string></property></item>
+          <item><property name="text"><string>Bottom Right</string></property></item>
+         </widget>
+        </item>
+        <item row="10" column="0">
+         <widget class="QLabel" name="label_profile">
+          <property name="text"><string>MODE:</string></property>
+         </widget>
+        </item>
+        <item row="10" column="1">
+         <widget class="QComboBox" name="comboBox_profile">
+          <property name="toolTip"><string>Optimized presets for AMD Ryzen &amp; modern GPUs</string></property>
+          <item><property name="text"><string>Quality Mode</string></property></item>
+          <item><property name="text"><string>Performance Mode</string></property></item>
+         </widget>
+        </item>
+
        </layout>
       </widget>
      </item>
@@ -294,6 +349,13 @@
          <widget class="QCheckBox" name="checkBox_red_zone_protection">
           <property name="toolTip"><string>Helps prevent crashes in some games on Windows</string></property>
           <property name="text"><string>Windows SysV red zone crash protection (experimental)</string></property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QCheckBox" name="checkBox_auto_fix_missing_files">
+          <property name="toolTip"><string>Automatically resolve missing PlayGo chunks, PRX files, and game assets to prevent loading hangs</string></property>
+          <property name="text"><string>Auto-resolve missing PlayGo chunks &amp;&amp; files</string></property>
+          <property name="checked"><bool>true</bool></property>
          </widget>
         </item>
        </layout>

@@ -608,12 +608,12 @@ void TestGuardedDirectImageTable() {
                                              : CFG::BranchCondition::SccZero;
     auto condition = nonzero;
     if (guard == Guard::SccNonZero) {
-      condition = fixture.Emit(ValueOpcode::ConditionRef, {condition},
+      condition = fixture.Emit(ValueOpcode::ConditionRef, {condition, condition},
                                CFG::BranchCondition::SccNonZero);
     }
     condition = fixture.Emit(ValueOpcode::LogicalNot, {condition});
     if (guard != Guard::Plain && guard != Guard::SccNonZero) {
-      condition = fixture.Emit(ValueOpcode::ConditionRef, {condition}, kind);
+      condition = fixture.Emit(ValueOpcode::ConditionRef, {condition, condition}, kind);
     }
     fixture.program.block_info[0].condition = condition;
     fixture.program.block_info[0].terminator = {
@@ -886,7 +886,7 @@ void TestBoundedComputeImageLoop() {
         block->AddBranch(fixture.program.blocks[no]);
         const auto inverse = fixture.Emit(ValueOpcode::LogicalNot, {predicate}, 0, block);
         fixture.program.block_info[index].condition =
-            fixture.Emit(ValueOpcode::ConditionRef, {inverse}, kind, block);
+            fixture.Emit(ValueOpcode::ConditionRef, {inverse, inverse}, kind, block);
         fixture.program.block_info[index].terminator = {
             .kind = CFG::TerminatorKind::ConditionalBranch,
             .true_block = yes, .false_block = no};
@@ -920,7 +920,7 @@ void TestBoundedComputeImageLoop() {
       if (!nonzero)
         condition = fixture.Emit(ValueOpcode::LogicalNot, {condition}, 0, header);
       if (variant != Variant::Plain)
-        condition = fixture.Emit(ValueOpcode::ConditionRef, {condition},
+        condition = fixture.Emit(ValueOpcode::ConditionRef, {condition, condition},
             nonzero ? CFG::BranchCondition::ExecNonZero
                     : CFG::BranchCondition::ExecZero, header);
       if (variant == Variant::Nonzero || variant == Variant::WrongPolarity)
@@ -932,7 +932,7 @@ void TestBoundedComputeImageLoop() {
         const auto continuing = fixture.Emit(ValueOpcode::LogicalOr,
             {in_range, Value(previous)}, 0, latch);
         fixture.program.block_info[3].condition = fixture.Emit(ValueOpcode::ConditionRef,
-            {continuing}, CFG::BranchCondition::SccNonZero, latch);
+            {continuing, continuing}, CFG::BranchCondition::SccNonZero, latch);
       }
     }
     const auto step = fixture.Emit(ValueOpcode::IAdd32,
@@ -1067,7 +1067,7 @@ void TestUniformizedMaterialImageKeys() {
     const uint32_t sample_entry_id = first_lane_loop ? 10u : 9u;
     const auto branch = [&](Value predicate, CFG::BranchCondition kind, Block *block) {
       return variant == Variant::Plain ? predicate : fixture.Emit(
-          ValueOpcode::ConditionRef, {predicate}, kind, block);
+          ValueOpcode::ConditionRef, {predicate, predicate}, kind, block);
     };
     auto *entry = fixture.block;
     auto *header = fixture.AddBlock();

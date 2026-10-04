@@ -119,7 +119,9 @@ public:
 	PresentMode            present_mode                = PresentMode::Mailbox;
 	int                    gpu_index                   = -1;
 	bool                   fullscreen_enabled          = false;
-	bool                   hide_cursor_enabled         = false;
+	int                    osd_mode                    = 0;
+	int                    osd_alignment               = 0;
+	int                    performance_profile         = 2;
 	bool                   readback_linear_images      = false;
 	bool                   tessellation_enabled        = false;
 	int                    vblank_frequency            = 60;
@@ -136,6 +138,17 @@ public:
 	bool                   profiler_enabled            = false;
 	bool                   renderdoc_enabled           = false;
 	bool                   amd_cpu_enabled             = false;
+	int                    master_volume               = 100;
+	bool                   audio_muted                 = false;
+	int                    anisotropic_filtering       = 16;
+	int                    resolution_scale            = 100;
+	bool                   motion_blur                 = true;
+	bool                   depth_of_field              = true;
+	bool                   bloom                       = true;
+	bool                   ambient_occlusion           = true;
+	bool                   auto_fix_missing_files      = true;
+	bool                   ray_tracing                 = false;
+	bool                   auto_optimize               = true;
 #if defined(_WIN32)
 	bool red_zone_protection_enabled = false;
 #endif
@@ -151,7 +164,9 @@ public:
 		present_mode                = other.present_mode;
 		gpu_index                   = other.gpu_index;
 		fullscreen_enabled          = other.fullscreen_enabled;
-		hide_cursor_enabled         = other.hide_cursor_enabled;
+		osd_mode                    = other.osd_mode;
+		osd_alignment               = other.osd_alignment;
+		performance_profile         = other.performance_profile;
 		readback_linear_images      = other.readback_linear_images;
 		tessellation_enabled        = other.tessellation_enabled;
 		vblank_frequency            = other.vblank_frequency;
@@ -168,6 +183,17 @@ public:
 		profiler_enabled            = other.profiler_enabled;
 		renderdoc_enabled           = other.renderdoc_enabled;
 		amd_cpu_enabled             = other.amd_cpu_enabled;
+		master_volume               = other.master_volume;
+		audio_muted                 = other.audio_muted;
+		anisotropic_filtering       = other.anisotropic_filtering;
+		resolution_scale            = other.resolution_scale;
+		motion_blur                 = other.motion_blur;
+		depth_of_field              = other.depth_of_field;
+		bloom                       = other.bloom;
+		ambient_occlusion           = other.ambient_occlusion;
+		auto_fix_missing_files      = other.auto_fix_missing_files;
+		ray_tracing                 = other.ray_tracing;
+		auto_optimize               = other.auto_optimize;
 #if defined(_WIN32)
 		red_zone_protection_enabled = other.red_zone_protection_enabled;
 #endif
@@ -198,7 +224,9 @@ public:
 		KYTY_CFG_SET(present_mode);
 		KYTY_CFG_SET(gpu_index);
 		KYTY_CFG_SET(fullscreen_enabled);
-		KYTY_CFG_SET(hide_cursor_enabled);
+		KYTY_CFG_SET(osd_mode);
+		KYTY_CFG_SET(osd_alignment);
+		KYTY_CFG_SET(performance_profile);
 		KYTY_CFG_SET(readback_linear_images);
 		KYTY_CFG_SET(tessellation_enabled);
 		KYTY_CFG_SET(vblank_frequency);
@@ -215,6 +243,17 @@ public:
 		KYTY_CFG_SET(profiler_enabled);
 		KYTY_CFG_SET(renderdoc_enabled);
 		KYTY_CFG_SET(amd_cpu_enabled);
+		KYTY_CFG_SET(master_volume);
+		KYTY_CFG_SET(audio_muted);
+		KYTY_CFG_SET(anisotropic_filtering);
+		KYTY_CFG_SET(resolution_scale);
+		KYTY_CFG_SET(motion_blur);
+		KYTY_CFG_SET(depth_of_field);
+		KYTY_CFG_SET(bloom);
+		KYTY_CFG_SET(ambient_occlusion);
+		KYTY_CFG_SET(auto_fix_missing_files);
+		KYTY_CFG_SET(ray_tracing);
+		KYTY_CFG_SET(auto_optimize);
 #if defined(_WIN32)
 		KYTY_CFG_SET(red_zone_protection_enabled);
 #endif
@@ -241,7 +280,9 @@ public:
 			present_mode = PresentMode::Mailbox;
 		}
 		KYTY_CFG_GET(fullscreen_enabled);
-		KYTY_CFG_GET(hide_cursor_enabled);
+		osd_mode = s->value("osd_mode", osd_mode).toInt();
+		osd_alignment = s->value("osd_alignment", osd_alignment).toInt();
+		performance_profile = s->value("performance_profile", 2).toInt();
 		KYTY_CFG_GET(readback_linear_images);
 		KYTY_CFG_GET(tessellation_enabled);
 		vblank_frequency = s->value("vblank_frequency", vblank_frequency).toInt();
@@ -261,6 +302,17 @@ public:
 		KYTY_CFG_GET(profiler_enabled);
 		KYTY_CFG_GET(renderdoc_enabled);
 		amd_cpu_enabled = s->value("amd_cpu_enabled", false).toBool();
+		master_volume = s->value("master_volume", 100).toInt();
+		audio_muted = s->value("audio_muted", false).toBool();
+		anisotropic_filtering = s->value("anisotropic_filtering", 16).toInt();
+		resolution_scale = s->value("resolution_scale", 100).toInt();
+		motion_blur = s->value("motion_blur", true).toBool();
+		depth_of_field = s->value("depth_of_field", true).toBool();
+		bloom = s->value("bloom", true).toBool();
+		ambient_occlusion = s->value("ambient_occlusion", true).toBool();
+		auto_fix_missing_files = s->value("auto_fix_missing_files", true).toBool();
+		ray_tracing = s->value("ray_tracing", false).toBool();
+		auto_optimize = s->value("auto_optimize", true).toBool();
 #if defined(_WIN32)
 		red_zone_protection_enabled =
 		    s->value("red_zone_protection_enabled", red_zone_protection_enabled).toBool();

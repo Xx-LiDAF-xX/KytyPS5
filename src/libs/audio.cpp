@@ -312,7 +312,13 @@ const void* Audio::PrepareOutputBuffer(const PortOut& port, const void* data,
 	const auto bytes_per_sample = BytesPerSample(port.format);
 	const bool reorder          = channels >= 8 && !FormatIsStd(port.format);
 
-	bool volume_changed = gain != 1.0f;
+	bool volume_changed = false;
+	const float master_scale =
+	    Config::AudioMuted() ? 0.0f : (static_cast<float>(Config::GetMasterVolume()) / 100.0f);
+	if (master_scale != 1.0f) {
+		volume_changed = true;
+	}
+
 	for (uint32_t ch = 0; ch < channels; ch++) {
 		if (port.volume[ch] != 32768) {
 			volume_changed = true;
@@ -338,7 +344,7 @@ const void* Audio::PrepareOutputBuffer(const PortOut& port, const void* data,
 				const auto src_ch = reorder ? SDL_8CH_MAP[ch] : ch;
 				dst[frame * output_channels + ch] =
 				    src[frame * channels + src_ch] *
-				    (static_cast<float>(port.volume[src_ch]) / 32768.0f) * gain;
+				    (static_cast<float>(port.volume[src_ch]) / 32768.0f) * master_scale;
 			}
 			if (channels == 12) {
 				// Add the four top channels to their front/back channels, turning 12 into 8.
@@ -347,7 +353,7 @@ const void* Audio::PrepareOutputBuffer(const PortOut& port, const void* data,
 				for (uint32_t ch = 0; ch < 4; ch++) {
 					dst[frame * output_channels + HEIGHT_DST[ch]] +=
 					    src[frame * channels + 8 + ch] *
-					    (static_cast<float>(port.volume[8 + ch]) / 32768.0f) * gain;
+					    (static_cast<float>(port.volume[8 + ch]) / 32768.0f) * master_scale;
 				}
 			}
 		}
@@ -358,9 +364,10 @@ const void* Audio::PrepareOutputBuffer(const PortOut& port, const void* data,
 		for (uint32_t frame = 0; frame < frames; frame++) {
 			for (uint32_t ch = 0; ch < output_channels; ch++) {
 				const auto src_ch = reorder ? SDL_8CH_MAP[ch] : ch;
-				int64_t sample =
-				    static_cast<int64_t>(src[frame * channels + src_ch]) * port.volume[src_ch] / 32768;
-				sample = static_cast<int64_t>(sample * static_cast<double>(gain));
+				float sample_f =
+				    static_cast<float>(src[frame * channels + src_ch]) *
+				    (static_cast<float>(port.volume[src_ch]) / 32768.0f) * master_scale;
+				int64_t sample = static_cast<int64_t>(sample_f);
 				if (sample > std::numeric_limits<int16_t>::max()) {
 					sample = std::numeric_limits<int16_t>::max();
 				} else if (sample < std::numeric_limits<int16_t>::min()) {

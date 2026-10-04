@@ -16,6 +16,7 @@
 #include "graphics/host_gpu/graphicContext.h"
 #include "graphics/host_gpu/hostMemory.h"
 #include "graphics/host_gpu/renderer/colorRenderTarget.h"
+#include "graphics/host_gpu/renderer/commandHooks.h"
 #include "graphics/host_gpu/renderer/debug.h"
 #include "graphics/host_gpu/renderer/depthRenderTarget.h"
 #include "graphics/host_gpu/renderer/image/imageView.h"
@@ -31,12 +32,18 @@
 #include "kernel/memory.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <bit>
+#include <cstdlib>
+#include <cstring>
 #include <fmt/format.h>
 #include <limits>
+#include <new>
+#include <optional>
 #include <span>
 #include <vector>
+#include <xxhash.h>
 
 #ifdef min
 #undef min
@@ -125,8 +132,12 @@ NativeStorageBuffer(RenderContext& context, const PreparedBindings::BufferSource
 	if (size > graphics.GetPhysicalDeviceProperties().limits.maxStorageBufferRange) {
 		EXIT("storage buffer range is unsupported\n");
 	}
+	std::optional<DrawPhaseTimer::ProbeScope> obtain_probe;
+	obtain_probe.emplace(g_draw_phases, resource.written ? DrawPhaseTimer::BufferWritten
+	                                                     : DrawPhaseTimer::BufferRead);
 	auto [buffer, offset] = context.GetBufferCache().ObtainBuffer(address, size, resource.written,
 	                                                              resource.formatted, id);
+	obtain_probe.reset();
 	const auto aligned_offset = Common::AlignDown(offset, alignment);
 	const auto adjustment     = offset - aligned_offset;
 	const auto max_range      = graphics.GetPhysicalDeviceProperties().limits.maxStorageBufferRange;
@@ -134,8 +145,20 @@ NativeStorageBuffer(RenderContext& context, const PreparedBindings::BufferSource
 		EXIT("storage buffer offset adjustment is unsupported\n");
 	}
 	buffer_offset = static_cast<uint32_t>(adjustment);
-	const vk::DescriptorBufferInfo result {buffer->Handle(), aligned_offset, size + adjustment};
+	auto range = size + adjustment;
+	if (graphics.hardware_storage_buffer_bounds) {
+		// The device checks word accesses against the range, which the shader's own checks took
+		// in whole dwords: a trailing partial dword is out of range. A range without one whole
+		// dword is a null descriptor, which the device treats as empty.
+		range &= ~vk::DeviceSize {sizeof(uint32_t) - 1};
+		if (range == 0) {
+			buffer_offset = 0;
+			return {nullptr, 0, VK_WHOLE_SIZE};
+		}
+	}
+	const vk::DescriptorBufferInfo result {buffer->Handle(), aligned_offset, range};
 	if (resource.written) {
+		DrawPhaseTimer::ProbeScope probe(g_draw_phases, DrawPhaseTimer::BufferInvalidate);
 		context.GetTextureCache().InvalidateMemoryFromGPU(address, size);
 	}
 	return result;
@@ -538,25 +561,20 @@ static bool ResolveTextureMipView(const TileSurfaceDescription& description, boo
 	return false;
 }
 
-TextureBinding RenderExecutor::ResolveTexture(const ShaderRecompiler::IR::ImageResource&   resource,
-                                              const ShaderRecompiler::IR::DescriptorValue& value) {
-	if (resource.atomic64 && !m_context.GetGraphics().shader_image_int64_atomics_enabled) {
-		EXIT("64-bit image atomics require shaderImageInt64Atomics\n");
-	}
-	auto descriptor = DecodeNativeDescriptor<ShaderTextureResource>(value);
-	const bool storage = resource.written;
-	if (storage) {
-		ValidateStorageImageResource(resource);
-	}
+namespace {
 
-	auto& texture_cache = m_context.GetTextureCache();
-	if (descriptor.IsNull()) {
-		auto       desc = NullTextureDesc(resource, storage ? TextureCache::BindingType::Storage
-		                                                    : TextureCache::BindingType::Texture);
-		const auto id   = texture_cache.FindImage(desc);
-		return {id, nullptr, std::move(desc)};
-	}
+// Everything ResolveTexture derives from an image resource and its descriptor alone.
+struct TextureDescription {
+	TextureCache::ImageDesc desc;
+	vk::Format              pixel_format      = vk::Format::eUndefined;
+	vk::Format              view_format       = vk::Format::eUndefined;
+	uint64_t                size              = 0;
+	bool                    shader_conversion = false;
+};
 
+TextureDescription DescribeTexture(const ShaderRecompiler::IR::ImageResource& resource,
+                                   const ShaderTextureResource&               descriptor) {
+	const bool storage         = resource.written;
 	const auto address         = descriptor.Base40();
 	const auto width           = static_cast<uint32_t>(descriptor.Width5()) + 1u;
 	const auto height          = static_cast<uint32_t>(descriptor.Height5()) + 1u;
@@ -695,9 +713,205 @@ TextureBinding RenderExecutor::ResolveTexture(const ShaderRecompiler::IR::ImageR
 	                                 view_levels, desc.info.resources.layers);
 	desc.view_info.base_level = view_base;
 	desc.type = storage ? TextureCache::BindingType::Storage : TextureCache::BindingType::Texture;
+	return {std::move(desc), pixel_format, view_format, size.size, shader_conversion};
+}
 
-	auto       id                  = texture_cache.FindImage(desc, shader_conversion);
-	auto*      image               = &texture_cache.GetImage(id);
+// A texture description is a pure function of its inputs, and draws bind the same textures over
+// and over, so recent descriptions are kept. An entry holds copies of both inputs: a hit is exact.
+// A scene can bind a few thousand distinct textures (Sky Garden missed half its lookups in a
+// 256-entry direct-mapped table), so the table is set-associative and evicts the least recently
+// used entry of a set.
+class TextureDescriptionCache {
+public:
+	struct Entry {
+		uint32_t                              hash     = 0;
+		uint64_t                              last_use = 0; // 0: empty.
+		ShaderRecompiler::IR::DescriptorValue value;
+		ShaderRecompiler::IR::ImageResource   resource;
+		TextureDescription                    description;
+		// The description's last FindImage result (see TextureCache::RefindImage) and the image
+		// ResolveTexture bound for it; generation 0: none.
+		uint64_t                              generation = 0;
+		ImageId                               found;
+		ImageId                               bound;
+		// The view RebindImages acquired for a binding of this description.
+		PreparedBindings::ViewMemo            view;
+	};
+
+	// The entry stays valid until the next call.
+	Entry& Get(const ShaderRecompiler::IR::ImageResource&   resource,
+	           const ShaderRecompiler::IR::DescriptorValue& value,
+	           const ShaderTextureResource&                 descriptor) {
+		uint32_t hash = 2166136261u;
+		for (const auto dword: value.dwords) {
+			hash = (hash ^ dword) * 16777619u;
+		}
+		hash = (hash ^ resource.source) * 16777619u;
+		// Mix the high bits into the set index (MurmurHash3's finalizer).
+		hash ^= hash >> 16u;
+		hash *= 0x85ebca6bu;
+		hash ^= hash >> 13u;
+		hash *= 0xc2b2ae35u;
+		hash ^= hash >> 16u;
+		auto* const set    = &m_entries[(hash % Sets) * Ways];
+		Entry*      victim = set;
+		for (size_t way = 0; way < Ways; way++) {
+			auto& entry = set[way];
+			if (entry.last_use != 0 && entry.hash == hash && entry.value == value &&
+			    entry.resource == resource) {
+				entry.last_use = ++m_clock;
+				return entry;
+			}
+			if (entry.last_use < victim->last_use) {
+				victim = &entry;
+			}
+		}
+		victim->description = DescribeTexture(resource, descriptor);
+		victim->hash        = hash;
+		victim->last_use    = ++m_clock;
+		victim->value       = value;
+		victim->resource    = resource;
+		victim->generation  = 0;
+		victim->view        = {};
+		return *victim;
+	}
+
+private:
+	static constexpr size_t Ways = 4;
+	static constexpr size_t Sets = 1024;
+	uint64_t                m_clock   = 0;
+	std::vector<Entry>      m_entries = std::vector<Entry>(Sets * Ways);
+};
+
+// KYTY_DEBUG_TEXTURE_REUSE=0 resolves every texture binding from scratch, for A/B runs (see also
+// AbFeatureOff).
+bool TextureReuseEnabled() {
+	static const bool enabled = [] {
+		const char* text = std::getenv("KYTY_DEBUG_TEXTURE_REUSE");
+		return text == nullptr || std::strcmp(text, "0") != 0;
+	}();
+	static const bool ab = AbSelected("reuse");
+	return enabled && !(ab && AbFeatureOff());
+}
+
+// A null texture binding keeps its image and view while its descriptor repeats;
+// KYTY_DEBUG_AB=nullreuse alternates.
+bool NullReuseEnabled() {
+	static const bool ab = AbSelected("nullreuse");
+	return TextureReuseEnabled() && !(ab && AbFeatureOff());
+}
+
+// A resolved binding starts from the view its description's last binding acquired;
+// KYTY_DEBUG_AB=viewmemo alternates.
+bool ViewMemoEnabled() {
+	static const bool ab = AbSelected("viewmemo");
+	return TextureReuseEnabled() && !(ab && AbFeatureOff());
+}
+
+} // namespace
+
+TextureBinding RenderExecutor::ResolveTexture(const ShaderRecompiler::IR::ImageResource&   resource,
+                                              const ShaderRecompiler::IR::DescriptorValue& value,
+                                              PreparedBindings::ImageSource*               source) {
+	TextureBinding binding;
+	ResolveTextureInto(resource, value, source, binding);
+	return binding;
+}
+
+void RenderExecutor::ResolveTextureInto(const ShaderRecompiler::IR::ImageResource&   resource,
+                                        const ShaderRecompiler::IR::DescriptorValue& value,
+                                        PreparedBindings::ImageSource*               source,
+                                        TextureBinding&                              out) {
+	if (source != nullptr) {
+		source->generation = 0;
+		source->null_image = false;
+		source->view_memo  = nullptr;
+	}
+	out.image_view = nullptr;
+	out.layout     = vk::ImageLayout::eUndefined;
+	out.mip_views.clear();
+	auto descriptor = DecodeNativeDescriptor<ShaderTextureResource>(value);
+	const bool storage = resource.written;
+	if (storage) {
+		ValidateStorageImageResource(resource);
+	}
+
+	auto& texture_cache = m_context.GetTextureCache();
+	if (descriptor.IsNull()) {
+		out.desc     = NullTextureDesc(resource, storage ? TextureCache::BindingType::Storage
+		                                                 : TextureCache::BindingType::Texture);
+		out.image_id = texture_cache.FindImage(out.desc);
+		if (source != nullptr && !storage) {
+			source->resource   = resource;
+			source->value      = value;
+			source->found      = out.image_id;
+			source->null_image = true;
+		}
+		return;
+	}
+
+	thread_local TextureDescriptionCache descriptions;
+	std::optional<DrawPhaseTimer::ProbeScope> describe_probe;
+	describe_probe.emplace(g_draw_phases, DrawPhaseTimer::TextureDescribe);
+	auto&       entry     = descriptions.Get(resource, value, descriptor);
+	const auto& described = entry.description;
+	out.desc              = described.desc;
+	auto&       desc      = out.desc;
+	describe_probe.reset();
+	// Debug: KYTY_DEBUG_VOLUME_MIP0=1 views volume textures as their first level only, so every
+	// sample clamps to it: tells wrong lower levels (their layout) from wrong level 0.
+	static const bool volume_mip0 = std::getenv("KYTY_DEBUG_VOLUME_MIP0") != nullptr;
+	if (volume_mip0 && desc.info.IsVolume()) [[unlikely]] {
+		desc.view_info.level_count = 1;
+	}
+
+	const auto metadata_base_layer = desc.view_info.base_layer;
+	const auto remember            = [&](ImageId found, uint64_t generation) {
+		if (source != nullptr && generation != 0) {
+			source->resource            = resource;
+			source->value               = value;
+			source->found               = found;
+			source->generation          = generation;
+			source->metadata_base_layer = metadata_base_layer;
+		}
+	};
+	// The description's previous lookup still holds while the image set is unchanged, and the
+	// validation below passed for the image it bound while that image's stencil association is
+	// unchanged (see ReuseTexture).
+	if (TextureReuseEnabled() && entry.generation != 0 &&
+	    texture_cache.RefindImage(entry.found, entry.generation, desc, metadata_base_layer)) {
+		const auto depth_id = texture_cache.GetImage(entry.found).depth_id;
+		if ((depth_id ? depth_id : entry.found) == entry.bound) {
+			remember(entry.found, entry.generation);
+			out.image_id = entry.bound;
+			if (source != nullptr) {
+				source->view_memo = &entry.view;
+				// A binding of this description acquired a view before, maybe in another slot.
+				if (const auto& memo = entry.view;
+				    ViewMemoEnabled() && memo.generation != 0 && memo.image == entry.bound) {
+					source->view            = memo.view;
+					source->view_image      = memo.image;
+					source->view_info       = memo.info;
+					source->view_generation = memo.generation;
+				}
+			}
+			return;
+		}
+	}
+	entry.generation = 0;
+	if (source != nullptr) {
+		source->view_memo = &entry.view;
+	}
+
+	uint64_t generation = 0;
+	ImageId  id;
+	{
+		DrawPhaseTimer::ProbeScope probe(g_draw_phases, DrawPhaseTimer::TextureImage);
+		id = texture_cache.FindImage(desc, described.shader_conversion, &generation);
+	}
+	remember(id, generation);
+	const auto found = id;
+	auto*      image = &texture_cache.GetImage(id);
 	const bool stencil_association = static_cast<bool>(image->depth_id);
 	if (stencil_association) {
 		id    = image->depth_id;
@@ -706,14 +920,21 @@ TextureBinding RenderExecutor::ResolveTexture(const ShaderRecompiler::IR::ImageR
 		if (storage) {
 			EXIT("depth target cannot be bound as a storage image\n");
 		}
-		ValidateSampledDepthBinding(resource, descriptor, *image, pixel_format, size.size);
+		ValidateSampledDepthBinding(resource, descriptor, *image, described.pixel_format,
+		                            described.size);
 	} else if (storage) {
-		ValidateStorageColorView(image->info.pixel_format, view_format, descriptor.DstSelXYZW());
+		ValidateStorageColorView(image->info.pixel_format, described.view_format,
+		                         descriptor.DstSelXYZW());
 	} else {
-		(void)SelectSampledColorView(image->info.pixel_format, pixel_format,
+		(void)SelectSampledColorView(image->info.pixel_format, described.pixel_format,
 		                             descriptor.DstSelXYZW());
 	}
-	return {id, nullptr, std::move(desc)};
+	if (generation != 0) {
+		entry.generation = generation;
+		entry.found      = found;
+		entry.bound      = id;
+	}
+	out.image_id = id;
 }
 
 static vk::Sampler NativeSampler(RenderContext&                       context,
@@ -734,6 +955,7 @@ static vk::Sampler NativeSampler(RenderContext&                       context,
 static vk::DescriptorBufferInfo NativeUpload(RenderContext&            context,
                                              std::span<const uint32_t> data) {
 	EXIT_IF(data.empty());
+	DrawPhaseTimer::ProbeScope probe(g_draw_phases, DrawPhaseTimer::Upload);
 	auto& command_buffer = context.GetCommandScheduler().Current();
 	EXIT_IF(command_buffer.IsInvalid());
 	auto&      buffer = context.GetBufferCache().GetUtilityBuffer(MemoryUsage::Stream);
@@ -769,31 +991,232 @@ void RenderExecutor::ResetBindings() {
 	m_bound_images.clear();
 }
 
+// A sampled texture whose descriptor enables mip statistics counts in its counter, which texture
+// streamers read back (RenderContext::ReportMipStats).
+static void MarkMipStats(RenderContext& context, const ShaderRecompiler::IR::ImageResource& resource,
+                         const ShaderRecompiler::IR::DescriptorValue& value) {
+	if (resource.written || value.dword_count < 8) {
+		return;
+	}
+	const auto descriptor = DecodeNativeDescriptor<ShaderTextureResource>(value);
+	if (descriptor.MipStatsCntEn()) {
+		context.MarkMipStatsCounter(descriptor.MipStatsCntId());
+	}
+}
+
+// Whether a stage slot's previous image binding stands for ResolveTexture(resource, value): the
+// same resource and descriptor find the same image while the image set is unchanged, and the
+// binding follows that image's stencil association, which must not have changed either.
+static bool ReuseTexture(TextureCache& cache, const PreparedBindings::ImageSource& source,
+                         const TextureBinding&                        binding,
+                         const ShaderRecompiler::IR::ImageResource&   resource,
+                         const ShaderRecompiler::IR::DescriptorValue& value) {
+	if (source.null_image) {
+		// The same resource's null descriptor finds the same null image, which never changes.
+		return NullReuseEnabled() && source.value == value && source.resource == resource &&
+		       source.found == binding.image_id;
+	}
+	if (!TextureReuseEnabled() || source.generation == 0 || !(source.value == value) ||
+	    !(source.resource == resource) ||
+	    !cache.RefindImage(source.found, source.generation, binding.desc,
+	                       source.metadata_base_layer)) {
+		return false;
+	}
+	const auto depth_id = cache.GetImage(source.found).depth_id;
+	return (depth_id ? depth_id : source.found) == binding.image_id;
+}
+
+// KYTY_DEBUG_IMAGE_GROUPS=0 checks every image of every draw; KYTY_DEBUG_AB=imagegroups
+// alternates.
+static bool ImageGroupsEnabled() {
+	static const bool enabled = [] {
+		const char* text = std::getenv("KYTY_DEBUG_IMAGE_GROUPS");
+		return text == nullptr || std::strcmp(text, "0") != 0;
+	}();
+	static const bool ab = AbSelected("imagegroups");
+	return enabled && TextureReuseEnabled() && !(ab && AbFeatureOff());
+}
+
+// KYTY_VERIFY_IMAGE_GROUPS=1: a draw keeping its stage's image group also resolves each image and
+// acquires its view, and reports what came out differently.
+static bool VerifyImageGroups() {
+	static const bool enabled = std::getenv("KYTY_VERIFY_IMAGE_GROUPS") != nullptr;
+	return enabled;
+}
+
+static void ReportImageGroupCheck(bool same, uint64_t address) {
+	static std::atomic<uint64_t> checked {0};
+	static std::atomic<uint64_t> missed {0};
+	const auto                   count = checked.fetch_add(1, std::memory_order_relaxed) + 1;
+	if (!same && missed.fetch_add(1, std::memory_order_relaxed) < 32) {
+		std::printf("image-group verify: 0x%016" PRIx64 " kept binding differs\n", address);
+	}
+	if (count % 100000 == 0) {
+		std::printf("image-group verify: images=%" PRIu64 " missed=%" PRIu64 "\n", count,
+		            missed.load(std::memory_order_relaxed));
+		std::fflush(stdout);
+	}
+}
+
+// Whether the stage's recorded images still stand: no image was registered or unregistered and
+// the tick and GC tick are the ones they were checked under, so every lookup and view acquisition
+// would repeat itself (RefindImage, IsTextureCurrent), and each image is still clean, bound for
+// the image its lookup finds, and has no color clear to apply for its request.
+static bool ImageGroupStands(TextureCache& cache, const PreparedBindings& prepared) {
+	if (!(prepared.image_group.state == cache.CurrentTargetState())) {
+		return false;
+	}
+	for (size_t i = 0; i < prepared.images.size(); i++) {
+		const auto& source = prepared.image_sources[i];
+		const auto  bound  = prepared.images[i].image_id;
+		if (source.null_image) {
+			continue; // The null image never changes (see ReuseTexture).
+		}
+		const auto depth = cache.GetImage(source.found).depth_id;
+		if ((depth ? depth : source.found) != bound || !cache.IsTextureClean(bound) ||
+		    !cache.IsColorClearCurrent(source.found, prepared.images[i].desc,
+		                               source.metadata_base_layer)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+// Records the stage's images as RebindImages left them, for the next draw of the same program and
+// image descriptors (see PreparedBindings::ImageGroup). Only sampled textures that a lookup can
+// repeat (or null textures) and that keep their views qualify; ImageGroupStands also asks each
+// color-compressed surface whether its color clear check for the request still holds.
+static void RecordImageGroup(RenderContext& context, PreparedBindings& prepared,
+                             const ShaderRecompiler::IR::CompiledShaderInfo& program,
+                             const std::vector<ShaderRecompiler::IR::DescriptorValue>& values) {
+	auto& group   = prepared.image_group;
+	auto& cache   = context.GetTextureCache();
+	group.program = nullptr;
+	if (!ImageGroupsEnabled()) {
+		return;
+	}
+	group.mip_counters.clear();
+	for (size_t i = 0; i < prepared.images.size(); i++) {
+		const auto& binding = prepared.images[i];
+		const auto& source  = prepared.image_sources[i];
+		if (binding.desc.type != TextureCache::BindingType::Texture ||
+		    (source.generation == 0 && !(source.null_image && NullReuseEnabled())) ||
+		    source.view_generation == 0 || source.view_image != binding.image_id ||
+		    source.view != binding.image_view ||
+		    program.info.images[i].mip_mode == ShaderRecompiler::IR::ImageMipMode::DynamicStorage) {
+			return;
+		}
+		if (values[i].dword_count >= 8) {
+			const auto descriptor = DecodeNativeDescriptor<ShaderTextureResource>(values[i]);
+			if (descriptor.MipStatsCntEn()) {
+				group.mip_counters.push_back(descriptor.MipStatsCntId());
+			}
+		}
+	}
+	group.images.assign(values.begin(), values.end());
+	group.state   = cache.CurrentTargetState();
+	group.program = &program;
+}
+
+// Debugging aid for the draw-phases line: counts stages whose program and descriptors repeat the
+// previous draw's.
+static void NoteBindingRepeat(PreparedBindings& prepared, const ShaderStageRuntime& runtime) {
+	const auto& snapshot = *runtime.resources;
+	const auto  hash     = [](const std::vector<ShaderRecompiler::IR::DescriptorValue>& values) {
+		return values.empty() ? uint64_t {0}
+		                      : XXH3_64bits(values.data(), values.size() * sizeof(values[0]));
+	};
+	const PreparedBindings::RepeatKey key {runtime.program, hash(snapshot.images),
+	                                      hash(snapshot.buffers), hash(snapshot.samplers)};
+	const auto&                       last    = prepared.repeat_key;
+	const bool                        program = last.program == key.program;
+	auto&                             stats   = g_binding_repeats;
+	stats.stages.fetch_add(1, std::memory_order_relaxed);
+	stats.same_program.fetch_add(program ? 1 : 0, std::memory_order_relaxed);
+	stats.same_images.fetch_add(program && last.images == key.images ? 1 : 0,
+	                           std::memory_order_relaxed);
+	stats.same_buffers.fetch_add(program && last.buffers == key.buffers ? 1 : 0,
+	                            std::memory_order_relaxed);
+	stats.same_all.fetch_add(program && last.images == key.images && last.buffers == key.buffers &&
+	                                last.samplers == key.samplers
+	                            ? 1
+	                            : 0,
+	                        std::memory_order_relaxed);
+	prepared.repeat_key = key;
+}
+
 void RenderExecutor::PrepareBindings(const ShaderStageRuntime& runtime,
                                      PreparedBindings& prepared) {
 	KYTY_PROFILER_FUNCTION();
 	EXIT_IF(!runtime);
 	const auto& program  = *runtime.program;
 	const auto& snapshot = *runtime.resources;
+	if (g_draw_phases.Active()) [[unlikely]] {
+		NoteBindingRepeat(prepared, runtime);
+	}
 	prepared.runtime = &runtime;
 	prepared.gds = {nullptr, 0, VK_WHOLE_SIZE};
 	prepared.flattened_srt = {};
 	prepared.shader_data_buffer = {};
+	// buffer_sources keeps the previous draw's entries of this program's slots for FindBuffers,
+	// which replaces them all.
+	prepared.buffer_sources.resize(program.info.buffers.size());
+	prepared.buffers.clear();
 	prepared.images.resize(program.info.images.size());
+	prepared.image_sources.resize(program.info.images.size());
 	prepared.samplers.clear();
 	prepared.shader_data.clear();
-	for (uint32_t i = 0; i < program.info.images.size(); i++) {
-		auto binding = ResolveTexture(program.info.images[i], snapshot.images[i]);
-		BindImage(binding.image_id, binding.desc.type == TextureCache::BindingType::Storage);
-		binding.mip_views.swap(prepared.images[i].mip_views);
-		binding.mip_views.clear();
-		prepared.images[i] = std::move(binding);
+	auto& texture_cache = m_context.GetTextureCache();
+	// A draw repeating the stage's program and image descriptors binds its last images while they
+	// stand (see ImageGroupStands); RebindImages checks them again.
+	const auto& group = prepared.image_group;
+	prepared.image_group_kept =
+	    ImageGroupsEnabled() && group.program == &program &&
+	    std::ranges::equal(snapshot.images, group.images) && ImageGroupStands(texture_cache, prepared);
+	if (prepared.image_group_kept) {
+		for (const auto counter: group.mip_counters) {
+			m_context.MarkMipStatsCounter(counter);
+		}
+		for (const auto& binding: prepared.images) {
+			BindImage(binding.image_id, false);
+		}
+		if (VerifyImageGroups()) [[unlikely]] {
+			for (uint32_t i = 0; i < program.info.images.size(); i++) {
+				auto           source = prepared.image_sources[i];
+				TextureBinding check;
+				ResolveTextureInto(program.info.images[i], snapshot.images[i], &source, check);
+				const auto& kept = prepared.images[i];
+				ReportImageGroupCheck(check.image_id == kept.image_id &&
+				                          check.desc.view_info == kept.desc.view_info,
+				                      kept.desc.info.data.address);
+			}
+		}
 	}
+	for (uint32_t i = 0; !prepared.image_group_kept && i < program.info.images.size(); i++) {
+		MarkMipStats(m_context, program.info.images[i], snapshot.images[i]);
+		// Consecutive draws mostly bind the same textures.
+		auto& previous = prepared.images[i];
+		if (ReuseTexture(texture_cache, prepared.image_sources[i], previous,
+		                 program.info.images[i], snapshot.images[i])) {
+			// As ResolveTexture returns it; RebindImages acquires the views.
+			previous.image_view = nullptr;
+			previous.layout     = vk::ImageLayout::eUndefined;
+			previous.mip_views.clear();
+			BindImage(previous.image_id,
+			          previous.desc.type == TextureCache::BindingType::Storage);
+			continue;
+		}
+		ResolveTextureInto(program.info.images[i], snapshot.images[i], &prepared.image_sources[i],
+		                   previous);
+		BindImage(previous.image_id, previous.desc.type == TextureCache::BindingType::Storage);
+	}
+	g_draw_phases.Mark(DrawPhaseTimer::StageTextures);
 	prepared.samplers.reserve(program.info.samplers.size());
 	for (uint32_t i = 0; i < program.info.samplers.size(); i++) {
 		prepared.samplers.push_back(NativeSampler(
 		    m_context, program, i, snapshot.samplers[program.info.samplers[i].snapshot_index]));
 	}
+	g_draw_phases.Mark(DrawPhaseTimer::StageSamplers);
 	prepared.shader_data.reserve(program.bindings.ShaderDataDwords());
 	for (const auto reg: program.bindings.user_data_registers) {
 		prepared.shader_data.push_back(snapshot.user_data[reg - program.user_data_base]);
@@ -812,23 +1235,23 @@ void RenderExecutor::FindBuffers(PreparedBindings& prepared) {
 	const auto& snapshot = *prepared.runtime->resources;
 	auto&       cache    = m_context.GetBufferCache();
 
-	prepared.buffer_sources.clear();
-	const auto& layout = program.bindings;
-	if (layout.memory_offset_count == 0) {
-		return;
-	}
-	const auto& resources = layout.descriptors.front().resources;
-	prepared.buffer_sources.reserve(resources.size());
-	for (const auto resource: resources) {
-		auto descriptor = DecodeNativeDescriptor<ShaderBufferResource>(snapshot.buffers[resource]);
+	// The previous draw's sources of this stage: consecutive draws mostly bind buffers the same
+	// cached buffer still covers, which RefindBuffer confirms without the page table.
+	auto& sources = prepared.buffer_sources;
+	const auto previous_count = sources.size();
+	sources.resize(program.info.buffers.size());
+	for (uint32_t i = 0; i < program.info.buffers.size(); i++) {
+		auto descriptor = DecodeNativeDescriptor<ShaderBufferResource>(snapshot.buffers[i]);
 		const auto address = descriptor.Base48();
 		const auto requested_size = descriptor.GetSize();
 		if (address == 0 || requested_size == 0) {
-			prepared.buffer_sources.push_back({});
+			sources[i] = {};
 			continue;
 		}
 		const auto size = Libs::LibKernel::Memory::ClampRangeSize(address, requested_size);
-		prepared.buffer_sources.push_back({address, size, cache.FindBuffer(address, size)});
+		const auto id   = i < previous_count && sources[i].id ? sources[i].id : BufferId {};
+		sources[i]      = {address, size,
+		                   id ? cache.RefindBuffer(id, address, size) : cache.FindBuffer(address, size)};
 	}
 }
 
@@ -838,10 +1261,10 @@ void RenderExecutor::RebindBuffers(PreparedBindings& prepared) {
 	const auto& program   = *prepared.runtime->program;
 	const auto& snapshot  = *prepared.runtime->resources;
 	const auto& layout    = program.bindings;
-	EXIT_IF(prepared.buffer_sources.size() != layout.memory_offset_count);
+	EXIT_IF(prepared.buffer_sources.size() != program.info.buffers.size());
 
 	prepared.buffers.clear();
-	prepared.buffers.reserve(layout.memory_offset_count);
+	prepared.buffers.reserve(program.info.buffers.size());
 	EXIT_IF(prepared.shader_data.size() != layout.ShaderDataDwords());
 	std::fill(prepared.shader_data.begin() + layout.memory_offset_dword,
 	          prepared.shader_data.end(), 0);
@@ -850,14 +1273,13 @@ void RenderExecutor::RebindBuffers(PreparedBindings& prepared) {
 		const auto shift = (index % 4u) * 8u;
 		prepared.shader_data[dword] |= offset << shift;
 	};
-	for (uint32_t i = 0; i < layout.memory_offset_count; i++) {
-		const auto resource = layout.descriptors.front().resources[i];
+	for (uint32_t i = 0; i < program.info.buffers.size(); i++) {
 		uint32_t buffer_offset = 0;
 		prepared.buffers.push_back(NativeStorageBuffer(m_context, prepared.buffer_sources[i],
-		                                               program.info.buffers[resource],
-		                                               buffer_offset));
+		                                               program.info.buffers[i], buffer_offset));
 		pack_memory_offset(i, buffer_offset);
 	}
+	g_draw_phases.Mark(DrawPhaseTimer::BufferViews);
 	if (ShaderRecompiler::IR::FindBinding(
 	        layout, ShaderRecompiler::IR::DescriptorBindingKind::FlattenedSrt) != nullptr) {
 		prepared.flattened_srt = NativeUpload(m_context, snapshot.flattened_srt);
@@ -868,6 +1290,63 @@ void RenderExecutor::RebindBuffers(PreparedBindings& prepared) {
 	}
 }
 
+// KYTY_DEBUG_STORAGE_REUSE=0 acquires storage images every draw; KYTY_DEBUG_AB=storagereuse
+// alternates.
+static bool StorageReuseEnabled() {
+	static const bool enabled = [] {
+		const char* text = std::getenv("KYTY_DEBUG_STORAGE_REUSE");
+		return text == nullptr || std::strcmp(text, "0") != 0;
+	}();
+	static const bool ab = AbSelected("storagereuse");
+	return enabled && !(ab && AbFeatureOff());
+}
+
+// KYTY_VERIFY_STORAGE_REUSE=1: a storage binding that keeps its view acquires it anyway and
+// reports what FindTexture returned differently or changed (see TextureCache::IsStorageCurrent).
+static bool VerifyStorageReuse() {
+	static const bool enabled = std::getenv("KYTY_VERIFY_STORAGE_REUSE") != nullptr;
+	return enabled;
+}
+
+// KYTY_VERIFY_VIEW_REUSE=1: the same for sampled textures, including views that another slot's
+// binding of the description acquired (the view memo, see ResolveTextureInto).
+static bool VerifyViewReuse() {
+	static const bool enabled = std::getenv("KYTY_VERIFY_VIEW_REUSE") != nullptr;
+	return enabled;
+}
+
+static void CheckViewReuse(TextureCache& cache, const TextureBinding& binding) {
+	const bool  storage         = binding.desc.type == TextureCache::BindingType::Storage;
+	const auto& image           = cache.GetImage(binding.image_id);
+	const bool  gpu_modified    = image.IsGpuModified();
+	const bool  buffer_modified = image.IsBufferModified();
+	const bool  cpu_dirty       = image.IsCpuDirty();
+	const auto  view            = cache.FindTexture(binding.image_id, binding.desc);
+	const auto& after           = cache.GetImage(binding.image_id);
+	const bool  same            = view == binding.image_view &&
+	                  after.IsGpuModified() == gpu_modified &&
+	                  after.IsBufferModified() == buffer_modified && after.IsCpuDirty() == cpu_dirty;
+	static std::atomic<uint64_t> checked_counts[2] {};
+	static std::atomic<uint64_t> missed_counts[2] {};
+	auto&       checked = checked_counts[storage ? 1 : 0];
+	auto&       missed  = missed_counts[storage ? 1 : 0];
+	const char* kind    = storage ? "storage" : "texture";
+	const auto  count   = checked.fetch_add(1, std::memory_order_relaxed) + 1;
+	if (!same && missed.fetch_add(1, std::memory_order_relaxed) < 32) {
+		std::printf("%s-reuse verify: 0x%016" PRIx64
+		            " kept view would have missed a change (view %s, gpu %d->%d, buffer %d->%d, "
+		            "cpu %d->%d)\n",
+		            kind, image.info.data.address, view == binding.image_view ? "same" : "differs",
+		            gpu_modified, after.IsGpuModified(), buffer_modified, after.IsBufferModified(),
+		            cpu_dirty, after.IsCpuDirty());
+	}
+	if (count % 100000 == 0) {
+		std::printf("%s-reuse verify: reuses=%" PRIu64 " missed=%" PRIu64 "\n", kind, count,
+		            missed.load(std::memory_order_relaxed));
+		std::fflush(stdout);
+	}
+}
+
 void RenderExecutor::RebindImages(PreparedBindings& prepared) {
 	KYTY_PROFILER_FUNCTION();
 	EXIT_IF(prepared.runtime == nullptr || !*prepared.runtime);
@@ -875,7 +1354,20 @@ void RenderExecutor::RebindImages(PreparedBindings& prepared) {
 	const auto& snapshot = *prepared.runtime->resources;
 	auto&       images   = prepared.images;
 	EXIT_IF(images.size() != program.info.images.size());
+	// Bindings assembled without PrepareBindings have no recorded sources.
+	prepared.image_sources.resize(images.size());
 	auto& texture_cache = m_context.GetTextureCache();
+	// PrepareBindings kept the group; BDA synchronization since may have dirtied an image.
+	const bool group_kept     = prepared.image_group_kept;
+	prepared.image_group_kept = false;
+	if (group_kept && ImageGroupStands(texture_cache, prepared)) {
+		if (VerifyImageGroups()) [[unlikely]] {
+			for (const auto& binding: images) {
+				CheckViewReuse(texture_cache, binding);
+			}
+		}
+		return;
+	}
 	for (uint32_t i = 0; i < program.info.images.size(); i++) {
 		const auto old_image = texture_cache.m_slot_images.try_get(images[i].image_id);
 		if (old_image == nullptr || (!old_image->registered && !old_image->info.data.Empty()) ||
@@ -883,7 +1375,8 @@ void RenderExecutor::RebindImages(PreparedBindings& prepared) {
 			if (old_image != nullptr) {
 				old_image->binding = {};
 			}
-			images[i] = ResolveTexture(program.info.images[i], snapshot.images[i]);
+			ResolveTextureInto(program.info.images[i], snapshot.images[i],
+			                   &prepared.image_sources[i], images[i]);
 			BindImage(images[i].image_id,
 			          images[i].desc.type == TextureCache::BindingType::Storage);
 		}
@@ -905,14 +1398,45 @@ void RenderExecutor::RebindImages(PreparedBindings& prepared) {
 				binding.mip_views.push_back(texture_cache.FindTexture(binding.image_id, desc));
 			}
 			binding.image_view = binding.mip_views.front();
+		} else if (auto& source = prepared.image_sources[i];
+		           TextureReuseEnabled() && source.view_image == binding.image_id &&
+		           source.view_info == binding.desc.view_info &&
+		           (binding.desc.type == TextureCache::BindingType::Texture
+		                ? (source.null_image && source.view_generation != 0 && NullReuseEnabled()) ||
+		                      texture_cache.IsTextureCurrent(binding.image_id, source.view_generation)
+		                : binding.desc.type == TextureCache::BindingType::Storage &&
+		                      StorageReuseEnabled() &&
+		                      texture_cache.IsStorageCurrent(binding.image_id,
+		                                                     source.view_generation))) {
+			// A clean image keeps the view FindTexture returned for this binding before.
+			binding.image_view = source.view;
+			if (binding.desc.type == TextureCache::BindingType::Storage ? VerifyStorageReuse()
+			                                                              : VerifyViewReuse())
+			    [[unlikely]] {
+				CheckViewReuse(texture_cache, binding);
+			}
 		} else {
-			binding.image_view = texture_cache.FindTexture(binding.image_id, binding.desc);
+			const auto generation = texture_cache.ImageGeneration(binding.image_id);
+			binding.image_view    = texture_cache.FindTexture(binding.image_id, binding.desc);
+			source.view_generation =
+			    binding.desc.type == TextureCache::BindingType::Texture ||
+			            binding.desc.type == TextureCache::BindingType::Storage
+			        ? generation
+			        : 0;
+			source.view       = binding.image_view;
+			source.view_image = binding.image_id;
+			source.view_info  = binding.desc.view_info;
+			if (source.view_memo != nullptr && source.view_generation != 0) {
+				*source.view_memo = {source.view, source.view_image, source.view_info,
+				                     source.view_generation};
+			}
 		}
 		auto&      image   = texture_cache.GetImage(binding.image_id);
 		const bool storage = binding.desc.type == TextureCache::BindingType::Storage;
 		image.usage.storage |= storage;
 		image.usage.texture |= !storage;
 	}
+	RecordImageGroup(m_context, prepared, program, snapshot.images);
 }
 
 void RenderExecutor::PrepareGraphicsBindings(std::span<PreparedBindings* const> stages,
@@ -923,11 +1447,14 @@ void RenderExecutor::PrepareGraphicsBindings(std::span<PreparedBindings* const> 
 		uses_dma |= stage->runtime->program->info.uses_dma;
 	}
 	if (uses_dma) {
+		DrawPhaseTimer::ProbeScope probe(g_draw_phases, DrawPhaseTimer::Bda);
 		m_context.PrepareBda();
 	}
+	g_draw_phases.Mark(DrawPhaseTimer::FindBuffers);
 	for (auto* stage: stages) {
 		RebindImages(*stage);
 	}
+	g_draw_phases.Mark(DrawPhaseTimer::RebindImages);
 	auto& cache = m_context.GetTextureCache();
 	for (auto& target: colors) {
 		EXIT_IF(!target.image_id);
@@ -949,6 +1476,158 @@ void RenderExecutor::PrepareGraphicsBindings(std::span<PreparedBindings* const> 
 		RebindBuffers(*stage);
 	}
 }
+
+namespace {
+
+// A draw's push constants and push descriptor sets as CommitBindings hands them to the thread
+// recording its command buffer (see ReserveRecordedCall): this header, then the writes of set 0
+// and set 1, then each write's image or buffer infos in turn.
+struct RecordedBindings {
+	VkDevice                       device      = VK_NULL_HANDLE;
+	VkPipelineLayout               layout      = VK_NULL_HANDLE;
+	VkPipelineBindPoint            bind_point  = VK_PIPELINE_BIND_POINT_GRAPHICS;
+	VkShaderStageFlags             push_stages = 0; // 0: no push constants.
+	std::array<uint32_t, 2>        set_writes {};
+	// A set that does not push: allocated by CommitBindings, updated and bound by the recording
+	// thread. VK_NULL_HANDLE: the set pushes.
+	std::array<VkDescriptorSet, 2> sets {};
+	ShaderRecompiler::IR::PushData push_data;
+};
+
+struct RecordedWrite {
+	uint32_t         binding = 0;
+	uint32_t         count   = 0;
+	VkDescriptorType type    = VK_DESCRIPTOR_TYPE_SAMPLER;
+	uint32_t         images  = 0; // Whether the infos are image infos rather than buffer infos.
+};
+
+static_assert(sizeof(vk::DescriptorImageInfo) == sizeof(vk::DescriptorBufferInfo));
+static_assert(sizeof(RecordedBindings) % alignof(vk::DescriptorImageInfo) == 0 &&
+              sizeof(RecordedWrite) % alignof(vk::DescriptorImageInfo) == 0);
+constexpr size_t RecordedInfoBytes = sizeof(vk::DescriptorImageInfo);
+
+// On the recording thread: the calls CommitBindings would have made.
+void RunRecordedBindings(VkCommandBuffer command_buffer, const uint8_t* payload) {
+	const auto& header = *reinterpret_cast<const RecordedBindings*>(payload);
+	const auto* writes = reinterpret_cast<const RecordedWrite*>(payload + sizeof(RecordedBindings));
+	const auto  count  = header.set_writes[0] + header.set_writes[1];
+	const auto* infos  = payload + sizeof(RecordedBindings) + count * sizeof(RecordedWrite);
+	thread_local std::vector<vk::WriteDescriptorSet> vk_writes;
+	vk_writes.resize(count);
+	for (uint32_t i = 0; i < count; i++) {
+		const auto& write     = writes[i];
+		auto&       vk_write  = vk_writes[i];
+		vk_write              = vk::WriteDescriptorSet {};
+		vk_write.dstBinding      = write.binding;
+		vk_write.descriptorCount = write.count;
+		vk_write.descriptorType  = static_cast<vk::DescriptorType>(write.type);
+		if (write.images != 0) {
+			vk_write.pImageInfo = reinterpret_cast<const vk::DescriptorImageInfo*>(infos);
+		} else {
+			vk_write.pBufferInfo = reinterpret_cast<const vk::DescriptorBufferInfo*>(infos);
+		}
+		infos += write.count * RecordedInfoBytes;
+	}
+	const vk::CommandBuffer  buffer(command_buffer);
+	const vk::PipelineLayout layout(header.layout);
+	const auto               bind_point = static_cast<vk::PipelineBindPoint>(header.bind_point);
+	if (header.push_stages != 0) {
+		buffer.pushConstants(layout, static_cast<vk::ShaderStageFlags>(header.push_stages), 0,
+		                     sizeof(header.push_data), header.push_data.dwords.data());
+	}
+	auto* set_writes = vk_writes.data();
+	for (uint32_t set_index = 0; set_index < 2; set_index++) {
+		const auto count_in_set = header.set_writes[set_index];
+		if (count_in_set != 0) {
+			const vk::DescriptorSet set(header.sets[set_index]);
+			if (!set) {
+				buffer.pushDescriptorSetKHR(bind_point, layout, set_index, count_in_set, set_writes);
+			} else {
+				// A freshly allocated set, bound nowhere yet: updating it here, before its bind,
+				// is what CommitBindings did on its own thread.
+				for (uint32_t i = 0; i < count_in_set; i++) {
+					set_writes[i].dstSet = set;
+				}
+				vk::Device(header.device).updateDescriptorSets(count_in_set, set_writes, 0, nullptr);
+				buffer.bindDescriptorSets(bind_point, layout, set_index, 1, &set, 0, nullptr);
+			}
+		}
+		set_writes += count_in_set;
+	}
+}
+
+// Hands the push constants (with nonempty stages) and both descriptor sets to the thread that
+// records `buffer`, as one payload call instead of one deep-copied call each; false when its
+// recording is not deferred, and the caller makes the calls. A set that does not push
+// (push[set] false) gets its set from allocate(set) here, once the call is certain, and the
+// recording thread updates and binds it. KYTY_DEBUG_AB=pushpayload has the caller make the
+// calls in every other window.
+template <typename Allocate>
+bool RecordPushedBindings(vk::CommandBuffer buffer, vk::Device device,
+                          vk::PipelineBindPoint bind_point, vk::PipelineLayout layout,
+                          vk::ShaderStageFlags push_stages,
+                          const ShaderRecompiler::IR::PushData&    push_data,
+                          std::span<const vk::WriteDescriptorSet> set0,
+                          std::span<const vk::WriteDescriptorSet> set1, std::array<bool, 2> push,
+                          Allocate&& allocate) {
+	static const bool ab = AbSelected("pushpayload");
+	if (ab && AbFeatureOff()) {
+		return false;
+	}
+	size_t info_count = 0;
+	for (const auto* set: {&set0, &set1}) {
+		for (const auto& write: *set) {
+			// Each write carries its infos in one of the two arrays; leave anything else to the
+			// calls as they were.
+			if ((write.pImageInfo == nullptr) == (write.pBufferInfo == nullptr)) {
+				return false;
+			}
+			info_count += write.descriptorCount;
+		}
+	}
+	const auto write_count = set0.size() + set1.size();
+	if (write_count == 0 && !push_stages) {
+		return true;
+	}
+	auto* payload =
+	    ReserveRecordedCall(static_cast<VkCommandBuffer>(buffer),
+	                        sizeof(RecordedBindings) + write_count * sizeof(RecordedWrite) +
+	                            info_count * RecordedInfoBytes);
+	if (payload == nullptr) {
+		return false;
+	}
+	auto& header       = *::new (payload) RecordedBindings;
+	header.device      = static_cast<VkDevice>(device);
+	header.layout      = static_cast<VkPipelineLayout>(layout);
+	header.bind_point  = static_cast<VkPipelineBindPoint>(bind_point);
+	header.push_stages = static_cast<VkShaderStageFlags>(push_stages);
+	header.set_writes  = {static_cast<uint32_t>(set0.size()), static_cast<uint32_t>(set1.size())};
+	for (uint32_t set_index = 0; set_index < 2; set_index++) {
+		if (header.set_writes[set_index] != 0 && !push[set_index]) {
+			header.sets[set_index] = static_cast<VkDescriptorSet>(allocate(set_index));
+		}
+	}
+	header.push_data   = push_data;
+	auto* writes = reinterpret_cast<RecordedWrite*>(payload + sizeof(RecordedBindings));
+	auto* infos  = payload + sizeof(RecordedBindings) + write_count * sizeof(RecordedWrite);
+	for (const auto* set: {&set0, &set1}) {
+		for (const auto& write: *set) {
+			const bool images = write.pImageInfo != nullptr;
+			*writes++         = {write.dstBinding, write.descriptorCount,
+			                     static_cast<VkDescriptorType>(write.descriptorType), images ? 1u : 0u};
+			const size_t bytes = write.descriptorCount * RecordedInfoBytes;
+			std::memcpy(infos,
+			            images ? static_cast<const void*>(write.pImageInfo)
+			                   : static_cast<const void*>(write.pBufferInfo),
+			            bytes);
+			infos += bytes;
+		}
+	}
+	CommitRecordedCall(RunRecordedBindings);
+	return true;
+}
+
+} // namespace
 
 void RenderExecutor::CommitBindings(CommandBuffer&                     buffer,
                                     vk::PipelineBindPoint              pipeline_bind_point,
@@ -1022,10 +1701,16 @@ void RenderExecutor::CommitBindings(CommandBuffer&                     buffer,
 	m_descriptor_buffers.reserve(descriptor_count);
 	m_descriptor_images.reserve(descriptor_count);
 	m_descriptor_writes.reserve(write_count);
+	size_t pixel_write_start = write_count;
 
 	for (auto* prepared: prepared_bindings) {
 		const auto& program       = *prepared->runtime->program;
 		auto&       descriptors   = *prepared;
+		// The pixel stage comes last, so its writes form the tail committed to set 1.
+		EXIT_IF(pixel_write_start != write_count);
+		if (ShaderRecompiler::IR::NativeDescriptorSet(program.stage) != 0) {
+			pixel_write_start = m_descriptor_writes.size();
+		}
 		const auto  shader_stage  = NativeShaderStage(program.stage);
 		const auto  shader_stages = ShaderPipelineStages(shader_stage);
 		if (descriptors.gds.buffer != nullptr) {
@@ -1103,9 +1788,12 @@ void RenderExecutor::CommitBindings(CommandBuffer&                     buffer,
 			} else {
 				switch (binding.kind) {
 					case BindingKind::Buffers:
-						EXIT_IF(descriptors.buffers.size() != binding.resources.size());
-						for (const auto& view: descriptors.buffers) {
-							EXIT_IF(view.buffer == nullptr);
+						for (const auto resource: binding.resources) {
+							const auto& view = descriptors.buffers.at(resource);
+							// With hardware bounds, a range without a whole dword is a null
+							// descriptor (see NativeStorageBuffer).
+							EXIT_IF(view.buffer == nullptr &&
+							        !m_context.GetGraphics().hardware_storage_buffer_bounds);
 							m_descriptor_buffers.push_back(view);
 						}
 						break;
@@ -1168,29 +1856,53 @@ void RenderExecutor::CommitBindings(CommandBuffer&                     buffer,
 		}
 	}
 
+	if (has_push_data && pipeline.push_constant_stages) {
+		// The stages must match the layout's push constant range exactly.
+		push_stages = pipeline.push_constant_stages;
+	}
+	// Set 0 holds compute or vertex-side descriptors; the pixel shader's tail goes to set 1.
+	const auto set0 = std::span(m_descriptor_writes).first(pixel_write_start);
+	const auto set1 = std::span(m_descriptor_writes).subspan(pixel_write_start);
+	EXIT_IF((!set0.empty() && pipeline.descriptor_set_layout == nullptr) ||
+	        (!set1.empty() && pipeline.pixel_set_layout == nullptr));
+	// A graphics layout pushes at most one of its two sets, so the payload carries the other as
+	// an allocated set (see RecordPushedBindings).
+	if (RecordPushedBindings(
+	        vk_buffer, m_context.GetGraphics().device, pipeline_bind_point, pipeline.pipeline_layout,
+	        has_push_data ? push_stages : vk::ShaderStageFlags {}, push_data, set0, set1,
+	        {pipeline.uses_push_descriptors, pipeline.pixel_uses_push}, [&](uint32_t set_index) {
+		        return m_context.GetDescriptorHeap().Commit(
+		            set_index == 0 ? pipeline.descriptor_set_layout : pipeline.pixel_set_layout);
+	        })) {
+		return;
+	}
 	if (has_push_data) {
 		vk_buffer.pushConstants(pipeline.pipeline_layout, push_stages, 0, sizeof(push_data),
 		                        push_data.dwords.data());
 	}
 
-	if (!m_descriptor_writes.empty()) {
-		EXIT_IF(pipeline.descriptor_set_layout == nullptr);
-		if (pipeline.uses_push_descriptors) {
-			vk_buffer.pushDescriptorSetKHR(pipeline_bind_point, pipeline.pipeline_layout, 0,
-			                               static_cast<uint32_t>(m_descriptor_writes.size()),
-			                               m_descriptor_writes.data());
-		} else {
-			const auto set = m_context.GetDescriptorHeap().Commit(pipeline.descriptor_set_layout);
-			for (auto& write: m_descriptor_writes) {
-				write.dstSet = set;
-			}
-			m_context.GetGraphics().device.updateDescriptorSets(
-			    static_cast<uint32_t>(m_descriptor_writes.size()), m_descriptor_writes.data(), 0,
-			    nullptr);
-			vk_buffer.bindDescriptorSets(pipeline_bind_point, pipeline.pipeline_layout, 0, 1, &set,
-			                             0, nullptr);
+	const auto commit_set = [&](uint32_t set_index, vk::DescriptorSetLayout layout, bool push,
+	                            std::span<vk::WriteDescriptorSet> writes) {
+		if (writes.empty()) {
+			return;
 		}
-	}
+		EXIT_IF(layout == nullptr);
+		if (push) {
+			vk_buffer.pushDescriptorSetKHR(pipeline_bind_point, pipeline.pipeline_layout, set_index,
+			                               static_cast<uint32_t>(writes.size()), writes.data());
+			return;
+		}
+		const auto set = m_context.GetDescriptorHeap().Commit(layout);
+		for (auto& write: writes) {
+			write.dstSet = set;
+		}
+		m_context.GetGraphics().device.updateDescriptorSets(static_cast<uint32_t>(writes.size()),
+		                                                    writes.data(), 0, nullptr);
+		vk_buffer.bindDescriptorSets(pipeline_bind_point, pipeline.pipeline_layout, set_index, 1,
+		                             &set, 0, nullptr);
+	};
+	commit_set(0, pipeline.descriptor_set_layout, pipeline.uses_push_descriptors, set0);
+	commit_set(1, pipeline.pixel_set_layout, pipeline.pixel_uses_push, set1);
 }
 
 } // namespace Libs::Graphics

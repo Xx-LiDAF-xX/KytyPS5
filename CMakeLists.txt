@@ -168,6 +168,7 @@ add_custom_target(KytyGitVersion
 		-D OUTPUT_FILE=${PROJECT_BINARY_DIR}/kytyGitVersion.h
 		-D GIT_EXECUTABLE=${GIT_EXECUTABLE}
 		-D GIT_WORKING_DIRECTORY=${CMAKE_CURRENT_SOURCE_DIR}
+		-D SOURCE_DIRECTORY=${KYTY_SOURCE_DIR}
 		-P ${KYTY_SOURCE_DIR}/generate_version.cmake
 	BYPRODUCTS ${PROJECT_BINARY_DIR}/kytyGitVersion.h
 	COMMENT "Generate kytyGitVersion.h"
@@ -297,11 +298,42 @@ add_custom_command(
 list(APPEND kyty_emulator_src "${fault_buffer_shader_header}")
 list(APPEND kyty_emulator_src ${gpu_tiler_shader_headers})
 
+set(dcc_clear_shader_source "${gpu_tiler_shader_dir}/dcc_clear_check.comp")
+set(dcc_clear_shader_spv "${gpu_tiler_generated_dir}/dcc_clear_check.spv")
+set(dcc_clear_shader_header "${gpu_tiler_generated_dir}/dcc_clear_check_spv.h")
+add_custom_command(
+	OUTPUT "${dcc_clear_shader_header}"
+	COMMAND ${CMAKE_COMMAND} -E make_directory "${gpu_tiler_generated_dir}"
+	COMMAND "${KYTY_GLSLANG_VALIDATOR}" -V --target-env vulkan1.3 -Os
+	        -o "${dcc_clear_shader_spv}" "${dcc_clear_shader_source}"
+	COMMAND ${CMAKE_COMMAND} -DINPUT=${dcc_clear_shader_spv} -DOUTPUT=${dcc_clear_shader_header}
+	        -DSYMBOL=DCC_CLEAR_CHECK_SPV -P "${KYTY_SOURCE_DIR}/embed_spirv.cmake"
+	DEPENDS "${dcc_clear_shader_source}"
+	VERBATIM
+)
+list(APPEND kyty_emulator_src "${dcc_clear_shader_header}")
+
+set(mesh_indirect_shader_source "${gpu_tiler_shader_dir}/mesh_indirect_args.comp")
+set(mesh_indirect_shader_spv "${gpu_tiler_generated_dir}/mesh_indirect_args.spv")
+set(mesh_indirect_shader_header "${gpu_tiler_generated_dir}/mesh_indirect_args_spv.h")
+add_custom_command(
+	OUTPUT "${mesh_indirect_shader_header}"
+	COMMAND ${CMAKE_COMMAND} -E make_directory "${gpu_tiler_generated_dir}"
+	COMMAND "${KYTY_GLSLANG_VALIDATOR}" -V --target-env vulkan1.3 -Os
+	        -o "${mesh_indirect_shader_spv}" "${mesh_indirect_shader_source}"
+	COMMAND ${CMAKE_COMMAND} -DINPUT=${mesh_indirect_shader_spv} -DOUTPUT=${mesh_indirect_shader_header}
+	        -DSYMBOL=MESH_INDIRECT_ARGS_SPV -P "${KYTY_SOURCE_DIR}/embed_spirv.cmake"
+	DEPENDS "${mesh_indirect_shader_source}"
+	VERBATIM
+)
+list(APPEND kyty_emulator_src "${mesh_indirect_shader_header}")
+
 set(gpu_blit_generated_dir "${PROJECT_BINARY_DIR}/gpu_blit_shaders")
 set(gpu_blit_shader_sources
 	"${gpu_tiler_shader_dir}/gpu_blit_fs_triangle.vert"
 	"${gpu_tiler_shader_dir}/gpu_blit_color_to_ms_depth.frag"
 	"${gpu_tiler_shader_dir}/gpu_video_out_overlay.frag"
+	"${gpu_tiler_shader_dir}/gpu_video_out_downscale.frag"
 )
 foreach(shader_source IN LISTS gpu_blit_shader_sources)
 	get_filename_component(shader_name "${shader_source}" NAME_WE)
@@ -421,6 +453,23 @@ add_executable(bit_array_tests EXCLUDE_FROM_ALL
 	"${KYTY_TESTS_DIR}/BitArrayTests.cpp"
 )
 target_include_directories(bit_array_tests PRIVATE ${inc_headers})
+
+add_executable(frame_statistics_tests EXCLUDE_FROM_ALL
+	"${KYTY_TESTS_DIR}/FrameStatisticsTests.cpp"
+)
+target_include_directories(frame_statistics_tests PRIVATE ${inc_headers})
+
+add_executable(mesh_dispatch_tests EXCLUDE_FROM_ALL
+	"${KYTY_TESTS_DIR}/MeshDispatchTests.cpp"
+)
+target_include_directories(mesh_dispatch_tests PRIVATE ${inc_headers})
+
+add_executable(shader_precompile_record_tests EXCLUDE_FROM_ALL
+	"${KYTY_TESTS_DIR}/ShaderPrecompileRecordTests.cpp"
+	"${KYTY_SOURCE_DIR}/graphics/host_gpu/renderer/pipeline/shaderPrecompile.cpp"
+)
+target_link_libraries(shader_precompile_record_tests PRIVATE fmt::fmt xxhash)
+target_include_directories(shader_precompile_record_tests PRIVATE ${inc_headers})
 
 add_executable(lru_cache_tests EXCLUDE_FROM_ALL
 	"${KYTY_TESTS_DIR}/LruCacheTests.cpp"
@@ -545,6 +594,9 @@ add_executable(sync_on_address_tests EXCLUDE_FROM_ALL
 	"${KYTY_SOURCE_DIR}/kernel/syncOnAddress.cpp"
 )
 target_link_libraries(sync_on_address_tests common)
+if(WIN32)
+	target_link_libraries(sync_on_address_tests onecore)
+endif()
 target_include_directories(sync_on_address_tests PRIVATE ${inc_headers})
 
 add_executable(image_page_table_tests EXCLUDE_FROM_ALL
@@ -599,6 +651,16 @@ if(BUILD_TESTING)
 	add_test(NAME emulator_present_mode_invalid
 	         COMMAND $<TARGET_FILE:kyty_emulator> --help --present-mode Invalid)
 	set_tests_properties(emulator_present_mode_invalid PROPERTIES WILL_FAIL TRUE)
+	add_test(NAME emulator_bda_sync_cli
+	         COMMAND $<TARGET_FILE:kyty_emulator> --help --bda-sync SelectiveChecked)
+	add_test(NAME emulator_bda_sync_invalid
+	         COMMAND $<TARGET_FILE:kyty_emulator> --help --bda-sync Invalid)
+	set_tests_properties(emulator_bda_sync_invalid PROPERTIES WILL_FAIL TRUE)
+	add_test(NAME emulator_shader_precompile_cli
+	         COMMAND $<TARGET_FILE:kyty_emulator> --help --shader-precompile false)
+	add_test(NAME emulator_shader_precompile_invalid
+	         COMMAND $<TARGET_FILE:kyty_emulator> --help --shader-precompile Invalid)
+	set_tests_properties(emulator_shader_precompile_invalid PROPERTIES WILL_FAIL TRUE)
 	add_test(NAME ime_dialog COMMAND $<TARGET_FILE:ime_dialog_tests>)
 	add_test(NAME shader_cfg COMMAND $<TARGET_FILE:shader_cfg_tests>)
 	add_test(NAME scalar_provenance COMMAND $<TARGET_FILE:scalar_provenance_tests>)
@@ -608,6 +670,9 @@ if(BUILD_TESTING)
 	add_test(NAME archive_file COMMAND $<TARGET_FILE:archive_file_tests>)
 	add_test(NAME avplayer_file COMMAND $<TARGET_FILE:avplayer_file_tests>)
 	add_test(NAME bit_array COMMAND $<TARGET_FILE:bit_array_tests>)
+	add_test(NAME frame_statistics COMMAND $<TARGET_FILE:frame_statistics_tests>)
+	add_test(NAME mesh_dispatch COMMAND $<TARGET_FILE:mesh_dispatch_tests>)
+	add_test(NAME shader_precompile_record COMMAND $<TARGET_FILE:shader_precompile_record_tests>)
 	add_test(NAME lru_cache COMMAND $<TARGET_FILE:lru_cache_tests>)
 	add_test(NAME shader_vertex_metadata COMMAND $<TARGET_FILE:shader_vertex_metadata_tests>)
 	add_test(NAME resource_materialization COMMAND $<TARGET_FILE:resource_materialization_tests>)
@@ -626,6 +691,12 @@ if(BUILD_TESTING)
 	add_test(NAME save_data_dialog COMMAND $<TARGET_FILE:save_data_dialog_tests>)
 	add_test(NAME http_uri_parse COMMAND $<TARGET_FILE:http_uri_parse_tests>)
 	add_test(NAME shader_recompiler_compute COMMAND $<TARGET_FILE:shader_recompiler_compute_tests>)
+	add_test(NAME performance_memory
+	         COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --performance-memory-only)
+	add_test(NAME shader_precompile_gpu
+	         COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --shader-precompile-only)
+	add_test(NAME shader_recompiler_helper_quad
+		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --ds-append-helper-quad-only)
 	add_test(NAME shader_recompiler_alignbyte
 		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --alignbyte-only)
 	add_test(NAME graphics_pipeline_rasterization
@@ -640,6 +711,10 @@ if(BUILD_TESTING)
 		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --scheduler-only)
 	add_test(NAME stream_buffer_ring
 		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --stream-buffer-only)
+	add_test(NAME command_stream_payloads
+		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --command-stream-only)
+	add_test(NAME shader_recompiler_compute_hw_bounds
+		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --hardware-buffer-bounds)
 	add_test(NAME gpu_command_lane
 		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --gpu-command-lane-only)
 	add_test(NAME pm4_context_state
@@ -651,6 +726,8 @@ if(BUILD_TESTING)
 		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --layered-image-only)
 	add_test(NAME host_image_allocation
 		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --host-image-allocation-only)
+	add_test(NAME present_downscale
+		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --present-downscale-only)
 	add_test(NAME texture_cache_image_views
 		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --image-view-cache-only)
 	add_test(NAME texture_cache_storage_sampled
@@ -684,6 +761,9 @@ if(BUILD_TESTING)
 		archive_file_tests
 		avplayer_file_tests
 		bit_array_tests
+		frame_statistics_tests
+		mesh_dispatch_tests
+		shader_precompile_record_tests
 		lru_cache_tests
 		shader_vertex_metadata_tests
 		resource_materialization_tests
@@ -694,7 +774,7 @@ if(BUILD_TESTING)
 		shader_recompiler_compute_tests
 		virtual_memory_allocation_tests
 		audio_out2_port_tests
-		audio_out_timing_tests
+		save_data_memory_tests
 		ngs2_sampler_tests
 		pad_haptics_tests
 		controller_settings_tests

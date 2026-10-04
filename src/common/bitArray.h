@@ -2,6 +2,7 @@
 #define EMULATOR_SRC_COMMON_BITARRAY_H_
 
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -84,6 +85,14 @@ public:
 		return (m_data[index / BITS_PER_WORD] & (uint64_t {1} << (index % BITS_PER_WORD))) != 0;
 	}
 
+	// Reads a bit that another thread may be changing under its own lock. The result can be
+	// stale; callers must treat it as a hint.
+	[[nodiscard]] bool GetRelaxed(size_t index) const noexcept {
+		auto& word = const_cast<uint64_t&>(m_data[index / BITS_PER_WORD]);
+		return (std::atomic_ref<uint64_t>(word).load(std::memory_order_relaxed) &
+		        (uint64_t {1} << (index % BITS_PER_WORD))) != 0;
+	}
+
 	constexpr void Set(size_t index) {
 		m_data[index / BITS_PER_WORD] |= uint64_t {1} << (index % BITS_PER_WORD);
 	}
@@ -154,6 +163,63 @@ public:
 	}
 
 	[[nodiscard]] constexpr bool Any() const { return !None(); }
+
+	// BitArray(*this, start, end).Any() without building the masked copy: reads only the words
+	// the range covers.
+	[[nodiscard]] constexpr bool AnyInRange(size_t start, size_t end) const {
+		if (start >= end || end > N) {
+			return false;
+		}
+
+		const auto first_word = start / BITS_PER_WORD;
+		const auto last_word  = (end - 1) / BITS_PER_WORD;
+		const auto end_bit    = (end - 1) % BITS_PER_WORD;
+		const auto start_mask = ~uint64_t {0} << (start % BITS_PER_WORD);
+		const auto end_mask =
+		    end_bit == BITS_PER_WORD - 1 ? ~uint64_t {0} : (uint64_t {1} << (end_bit + 1)) - 1;
+
+		if (first_word == last_word) {
+			return (m_data[first_word] & start_mask & end_mask) != 0;
+		}
+		uint64_t combined = (m_data[first_word] & start_mask) | (m_data[last_word] & end_mask);
+		for (auto word = first_word + 1; word < last_word; word++) {
+			combined |= m_data[word];
+		}
+		return combined != 0;
+	}
+
+	// Splits the bits into 64 equal slices; bit s of the result is set when any bit of slice s
+	// is set.
+	[[nodiscard]] constexpr uint64_t SliceSummary() const {
+		static_assert(N % 64 == 0, "BitArray slices need a multiple of 64 bits");
+		constexpr size_t SLICE_BITS = N / 64;
+		uint64_t         summary    = 0;
+		if constexpr (SLICE_BITS >= BITS_PER_WORD) {
+			constexpr size_t WORDS_PER_SLICE = SLICE_BITS / BITS_PER_WORD;
+			for (size_t slice = 0; slice < 64; slice++) {
+				uint64_t any = 0;
+				for (size_t word = 0; word < WORDS_PER_SLICE; word++) {
+					any |= m_data[slice * WORDS_PER_SLICE + word];
+				}
+				summary |= static_cast<uint64_t>(any != 0) << slice;
+			}
+		} else {
+			constexpr size_t   SLICES_PER_WORD = BITS_PER_WORD / SLICE_BITS;
+			constexpr uint64_t SLICE_MASK      = (uint64_t {1} << SLICE_BITS) - 1;
+			for (size_t word = 0; word < WORD_COUNT; word++) {
+				const auto bits = m_data[word];
+				if (bits == 0) {
+					continue;
+				}
+				for (size_t slice = 0; slice < SLICES_PER_WORD; slice++) {
+					if (((bits >> (slice * SLICE_BITS)) & SLICE_MASK) != 0) {
+						summary |= uint64_t {1} << (word * SLICES_PER_WORD + slice);
+					}
+				}
+			}
+		}
+		return summary;
+	}
 
 	[[nodiscard]] constexpr Range FirstRangeFrom(size_t start) const {
 		if (start >= N) {
@@ -240,6 +306,19 @@ public:
 	[[nodiscard]] constexpr BitArray operator^(const BitArray& other) const {
 		auto result = *this;
 		result ^= other;
+		return result;
+	}
+
+	constexpr BitArray& operator|=(const BitArray& other) {
+		for (size_t word = 0; word < WORD_COUNT; word++) {
+			m_data[word] |= other.m_data[word];
+		}
+		return *this;
+	}
+
+	[[nodiscard]] constexpr BitArray operator|(const BitArray& other) const {
+		auto result = *this;
+		result |= other;
 		return result;
 	}
 

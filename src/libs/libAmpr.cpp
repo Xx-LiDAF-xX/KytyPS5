@@ -3,6 +3,7 @@
 #include "common/file.h"
 #include "common/logging/log.h"
 #include "common/stringUtils.h"
+#include "graphics/host_gpu/renderer/renderContext.h"
 #include "kernel/eventQueue.h"
 #include "kernel/fileSystem.h"
 #include "kernel/memory.h"
@@ -14,11 +15,13 @@
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -194,6 +197,13 @@ static int GetHostPathStat(const std::string& host_path, LibKernel::FileSystem::
 	return OK;
 }
 
+// KYTY_DEBUG_APR=1 prints each path's first resolution, file reads as DebugAprRead describes and
+// the read rate, to find reads a game keeps repeating.
+static bool AprDebugEnabled() {
+	static const bool enabled = std::getenv("KYTY_DEBUG_APR") != nullptr;
+	return enabled;
+}
+
 static int ResolveOnePath(const char* guest_path, uint32_t* id, uint64_t* size) {
 	if (guest_path == nullptr || guest_path[0] == '\0') {
 		return LibKernel::KERNEL_ERROR_EINVAL;
@@ -239,6 +249,12 @@ static int ResolveOnePath(const char* guest_path, uint32_t* id, uint64_t* size) 
 		}
 		if (log_missing) {
 			LOGF("\tAPR resolve missing path: %s -> %s\n", guest_path, info.host_path.c_str());
+		}
+		if (AprDebugEnabled()) {
+			std::printf("apr-resolve: %s -> %s size=0x%llx result=0x%x\n", guest_path,
+			            info.host_path.c_str(), static_cast<unsigned long long>(info.file_size),
+			            static_cast<uint32_t>(info.result));
+			std::fflush(stdout);
 		}
 	} else if (info.result == OK) {
 		AprShared::RegisterHostPath(info.file_id, info.host_path, info.file_size, info.is_dir);
@@ -1172,91 +1188,95 @@ static bool AppendCommandRecord(uint64_t command_buffer, CommandBufferState::Com
 static int ReadHostFileToGuest(const std::string& host_path, uint64_t file_offset,
                                uint64_t destination, uint64_t size, uint64_t* bytes_read);
 
-static int ExecuteCommand(const CommandBufferState::Command& entry) {
-	if (const auto* payload = std::get_if<CommandBufferState::ReadFileCommand>(&entry.data)) {
-		const auto& command = *payload;
-		std::string host_path;
-		if (!AprShared::TryGetHostPath(command.file_id, &host_path)) {
-			LOGF("\tAPR submit failed for unknown file id: 0x%08" PRIx32 "\n", command.file_id);
-			return LibKernel::KERNEL_ERROR_ENOENT;
-		}
-
-		uint64_t bytes_read = 0;
-		auto     result = ReadHostFileToGuest(host_path, command.file_offset, command.destination,
-		                                      command.size, &bytes_read);
-		if (result != OK) {
-			LOGF("\tAPR submit read failed: id=0x%08" PRIx32 ", result=0x%08" PRIx32 ", path=%s\n",
-			     command.file_id, static_cast<uint32_t>(result), host_path.c_str());
-			return result;
-		}
-	} else if (const auto* payload =
-	               std::get_if<CommandBufferState::KernelEventCommand>(&entry.data)) {
-		const auto& command = *payload;
-		const auto  eq      = static_cast<LibKernel::EventQueue::KernelEqueue>(command.eq);
-		auto        result  = LibKernel::EventQueue::KernelTriggerUserEvent(
-		    eq, command.id, reinterpret_cast<void*>(command.data));
-		if (result != OK) {
-			LOGF("\tAPR submit event failed: eq=0x%016" PRIx64 ", id=%" PRId32
-			     ", result=0x%08" PRIx32 "\n",
-			     command.eq, command.id, static_cast<uint32_t>(result));
-			return result;
-		}
-	} else if (const auto* payload =
-	               std::get_if<CommandBufferState::WriteAddressCommand>(&entry.data)) {
-		const auto& command = *payload;
-		std::atomic_ref(*reinterpret_cast<uint64_t*>(command.address))
-		    .store(command.value, std::memory_order_release);
-	} else if (const auto* payload = std::get_if<CommandBufferState::AmmMapCommand>(&entry.data)) {
-		const auto& command = *payload;
-		int         result  = OK;
-		if (command.kind == AmmCommandKind::Unmap) {
-			result = LibKernel::Memory::KernelMunmap(command.va, command.size);
-		} else {
-			result = ExecuteAmmMapCommand(command);
-		}
-
-		if (result != OK) {
-			LOGF("\tAMM submit command failed: kind=%u va=0x%016" PRIx64 " dmem=0x%016" PRIx64
-			     " size=0x%016" PRIx64 " type=%" PRId32 " prot=0x%08" PRIx32 " result=0x%08" PRIx32
-			     "\n",
-			     static_cast<uint32_t>(command.kind), command.va, command.dmem_offset, command.size,
-			     command.type, static_cast<uint32_t>(command.prot), static_cast<uint32_t>(result));
-			return result;
+// With AprShared::AprDebugEnabled: each distinct file read once, and again whenever its repeat
+// count reaches a power of two, and every 5 s the read rate. A read repeated 64 and 1024 times
+// has its thread's next calls traced (and twice every thread's), with KYTY_DEBUG_CALL_COUNTS.
+static void DebugAprRead(const std::string& path, uint64_t offset, uint64_t size,
+                         uint64_t destination, uint64_t bytes_read, int result) {
+	if (!AprShared::AprDebugEnabled()) {
+		return;
+	}
+	static std::mutex                      mutex;
+	static std::map<std::string, uint64_t> counts;
+	const auto key = fmt::format("{} offset=0x{:x} size=0x{:x} dst=0x{:x} read=0x{:x} result=0x{:x}",
+	                             path, offset, size, destination, bytes_read,
+	                             static_cast<uint32_t>(result));
+	uint64_t count = 0;
+	{
+		std::scoped_lock lock(mutex);
+		count = ++counts[key];
+		// Every 5 s: the reads and bytes read in the window.
+		static uint64_t window_reads = 0;
+		static uint64_t window_bytes = 0;
+		static auto     window_start = std::chrono::steady_clock::now();
+		window_reads++;
+		window_bytes += bytes_read;
+		const auto now = std::chrono::steady_clock::now();
+		if (now - window_start >= std::chrono::seconds(5)) {
+			const double seconds = std::chrono::duration<double>(now - window_start).count();
+			std::printf("apr-rate: t=%.0fs reads/s=%.1f MB/s=%.1f\n",
+			            static_cast<double>(Loader::Timer::GetTimeMs()) / 1000.0,
+			            static_cast<double>(window_reads) / seconds,
+			            static_cast<double>(window_bytes) / seconds / 1e6);
+			std::fflush(stdout);
+			window_reads = 0;
+			window_bytes = 0;
+			window_start = now;
 		}
 	}
-	return OK;
-}
-
-struct Submission {
-	std::vector<CommandBufferState::Command> commands;
-	size_t                                   cursor = 0;
-	void*                                    result = nullptr;
-	uint32_t                                 id     = 0;
-};
-
-static bool IsWaitSatisfied(const CommandBufferState::WaitAddressCommand& wait) {
-	const uint64_t value =
-	    std::atomic_ref(*reinterpret_cast<uint64_t*>(wait.address)).load(std::memory_order_acquire);
-	switch (wait.compare) {
-		case 0: return value == wait.value;
-		case 1: return value > wait.value;
-		case 2: return value < wait.value;
-		case 3: return value != wait.value;
-		case 4: return static_cast<int64_t>(value - wait.value) >= 0;
-		case 5: return static_cast<int64_t>(value) > static_cast<int64_t>(wait.value);
-		default: return static_cast<int64_t>(value) < static_cast<int64_t>(wait.value);
+	if ((count & (count - 1)) == 0) {
+		std::printf("apr-read x%llu tid=%d: %s\n", static_cast<unsigned long long>(count),
+		            Common::Thread::GetThreadIdUnique(), key.c_str());
+		std::fflush(stdout);
+	}
+	if (count == 64 || count == 1024) {
+		Libs::TraceCalls(400);
+		static std::atomic<int> windows {0};
+		if (windows.fetch_add(1) < 2) {
+			Libs::TraceAllCalls(std::chrono::milliseconds(150));
+		}
 	}
 }
 
-class CommandEngine {
-public:
-	explicit CommandEngine(size_t priorities)
-	    : m_queues(priorities), m_worker([this](std::stop_token stop) { Run(stop); }) {}
+// Games read a large file region once and keep it, unless a texture streamer is asked to keep more
+// than it can fit and reloads the same textures in turn (Graphics::NoteStreamingThrash).
+static void NoteRepeatedRead(uint32_t file_id, uint64_t offset, uint64_t size) {
+	constexpr uint64_t MinSize = 1024 * 1024;
+	constexpr uint32_t Repeats = 4;
+	constexpr auto     Window  = std::chrono::seconds(10);
+	if (size < MinSize) {
+		return;
+	}
+	struct Read {
+		uint64_t                              key   = 0;
+		uint32_t                              count = 0;
+		std::chrono::steady_clock::time_point first;
+	};
+	static std::mutex            mutex;
+	static std::array<Read, 256> reads;
+	const uint64_t key = (static_cast<uint64_t>(file_id) * 0x9E3779B97F4A7C15ull) ^
+	                     (offset * 0xC2B2AE3D27D4EB4Full) ^ size;
+	const auto     now  = std::chrono::steady_clock::now();
+	bool           note = false;
+	{
+		std::scoped_lock lock(mutex);
+		auto&            read = reads[(key ^ (key >> 29u)) % reads.size()];
+		if (read.key != key || now - read.first > Window) {
+			read = {key, 1, now};
+		} else if (++read.count >= Repeats) {
+			read = {key, 0, now};
+			note = true;
+		}
+	}
+	if (note) {
+		Graphics::NoteStreamingThrash();
+	}
+}
 
-	~CommandEngine() {
-		std::scoped_lock lock(m_mutex);
-		m_worker.request_stop();
-		m_cv.notify_all();
+static int ExecuteAprCommandBuffer(uint64_t command_buffer, int32_t* execution_result,
+                                   uint32_t* error_offset) {
+	if (execution_result == nullptr || error_offset == nullptr) {
+		return LibKernel::KERNEL_ERROR_EINVAL;
 	}
 
 	void Submit(uint32_t priority, Submission submission) {
@@ -1357,10 +1377,99 @@ static int QueueCommandBuffer(Engine engine, uint64_t command_buffer, uint32_t b
 	if (out_submission_id != nullptr) {
 		AprShared::WriteGuest(reinterpret_cast<uint64_t>(out_submission_id), id);
 	}
-	static CommandEngine apr_engine(7);
-	static CommandEngine amm_engine(3);
-	(amm ? amm_engine : apr_engine)
-	    .Submit(priority, {std::move(state.commands), 0, result, id});
+	for (size_t i = 0; i < state.write_address_commands.size(); i++) {
+		if (state.write_address_commands[i].record_offset < state.write_offset) {
+			ordered.push_back(
+			    {state.write_address_commands[i].record_offset, CommandKind::WriteAddress, i});
+		}
+	}
+	for (size_t i = 0; i < state.amm_map_commands.size(); i++) {
+		if (state.amm_map_commands[i].record_offset < state.write_offset) {
+			ordered.push_back({state.amm_map_commands[i].record_offset, CommandKind::AmmMap, i});
+		}
+	}
+
+	std::sort(ordered.begin(), ordered.end(), [](const OrderedCommand& a, const OrderedCommand& b) {
+		return a.record_offset < b.record_offset;
+	});
+
+	for (const auto& entry: ordered) {
+		switch (entry.kind) {
+			case CommandKind::ReadFile: {
+				const auto& command = state.read_file_commands[entry.index];
+				std::string host_path;
+				if (!AprShared::TryGetHostPath(command.file_id, &host_path)) {
+					LOGF("\tAPR submit failed for unknown file id: 0x%08" PRIx32 "\n",
+					     command.file_id);
+					*execution_result = LibKernel::KERNEL_ERROR_ENOENT;
+					*error_offset     = static_cast<uint32_t>(command.record_offset);
+					return OK;
+				}
+
+				uint64_t bytes_read = 0;
+				auto result = ReadHostFileToGuest(host_path, command.file_offset,
+				                                  command.destination, command.size, &bytes_read);
+				DebugAprRead(host_path, command.file_offset, command.size, command.destination,
+				             bytes_read, result);
+				if (result != OK) {
+					LOGF("\tAPR submit read failed: id=0x%08" PRIx32 ", result=0x%08" PRIx32
+					     ", path=%s\n",
+					     command.file_id, static_cast<uint32_t>(result), host_path.c_str());
+					*execution_result = result;
+					*error_offset     = static_cast<uint32_t>(command.record_offset);
+					return OK;
+				}
+				NoteRepeatedRead(command.file_id, command.file_offset, bytes_read);
+			} break;
+			case CommandKind::KernelEvent: {
+				const auto& command = state.kernel_event_commands[entry.index];
+				const auto  eq      = static_cast<LibKernel::EventQueue::KernelEqueue>(command.eq);
+				auto        result  = LibKernel::EventQueue::KernelTriggerUserEvent(
+				    eq, command.id, reinterpret_cast<void*>(command.data));
+				if (result != OK) {
+					LOGF("\tAPR submit event failed: eq=0x%016" PRIx64 ", id=%" PRId32
+					     ", result=0x%08" PRIx32 "\n",
+					     command.eq, command.id, static_cast<uint32_t>(result));
+					*execution_result = result;
+					*error_offset     = static_cast<uint32_t>(command.record_offset);
+					return OK;
+				}
+			} break;
+			case CommandKind::WriteAddress: {
+				const auto& command = state.write_address_commands[entry.index];
+				if (!AprShared::WriteGuest(command.address, command.value)) {
+					LOGF("\tAMPR submit write-address failed: address=0x%016" PRIx64
+					     " value=0x%016" PRIx64 "\n",
+					     command.address, command.value);
+					*execution_result = LibKernel::KERNEL_ERROR_EFAULT;
+					*error_offset     = static_cast<uint32_t>(command.record_offset);
+					return OK;
+				}
+			} break;
+			case CommandKind::AmmMap: {
+				const auto& command = state.amm_map_commands[entry.index];
+				int         result  = OK;
+				if (command.kind == AmmCommandKind::Unmap) {
+					result = LibKernel::Memory::KernelMunmap(command.va, command.size);
+				} else {
+					result = ExecuteAmmMapCommand(command);
+				}
+
+				if (result != OK) {
+					LOGF("\tAMM submit command failed: kind=%u va=0x%016" PRIx64
+					     " dmem=0x%016" PRIx64 " size=0x%016" PRIx64 " type=%" PRId32
+					     " prot=0x%08" PRIx32 " result=0x%08" PRIx32 "\n",
+					     static_cast<uint32_t>(command.kind), command.va, command.dmem_offset,
+					     command.size, command.type, static_cast<uint32_t>(command.prot),
+					     static_cast<uint32_t>(result));
+					*execution_result = result;
+					*error_offset     = static_cast<uint32_t>(command.record_offset);
+					return OK;
+				}
+			} break;
+		}
+	}
+
 	return OK;
 }
 

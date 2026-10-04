@@ -4,12 +4,15 @@
 #include "common/abi.h"
 #include "common/assert.h"
 #include "common/common.h"
+#include "graphics/guest_gpu/hardwareContext.h"
+#include "graphics/host_gpu/renderer/colorRenderTarget.h"
 #include "graphics/host_gpu/renderer/pipeline/descriptors.h"
 #include "graphics/host_gpu/renderer/pipeline/pipelineCache.h"
 #include "graphics/host_gpu/renderer/renderTarget.h"
 #include "graphics/host_gpu/vulkanCommon.h"
 
 #include <array>
+#include <memory>
 #include <optional>
 #include <span>
 #include <vector>
@@ -28,12 +31,20 @@ struct ShaderComputeInputInfo;
 struct RenderDepthInfo;
 struct RenderColorInfo;
 struct DrawCallInfo;
+class MeshIndirectArgs;
 struct DrawEmitInfo;
 struct DrawIndexBufferSource;
 struct DrawRenderState;
 class RenderContext;
 class CommandScheduler;
 struct RenderExecutorTestAccess;
+
+// KYTY_DEBUG_IMAGE_USERS=<guest address> (see renderDraw.cpp): whether it is set, and a draw's or
+// dispatch's bindings to count (pixel_hash 0 and no targets for a dispatch).
+[[nodiscard]] bool ImageUsersEnabled();
+void NoteImageUsers(TextureCache& cache, std::span<PreparedBindings* const> stages,
+                    std::span<const RenderColorInfo> colors, const RenderDepthInfo* depth,
+                    uint64_t pixel_hash, uint64_t vertex_hash);
 
 enum class CommandBufferDebugOp : uint32_t {
 	DispatchDirect,
@@ -63,6 +74,10 @@ struct DrawIndexArgs {
 	uint32_t         first_instance             = 0;
 	DrawOffsetSource offset_source              = DrawOffsetSource::DrawState;
 	uint32_t         render_target_slice_offset = 0;
+	// GPU-written DrawIndexedIndirectArgs for a mesh-emulated draw: the counts above are
+	// placeholders, index_addr is the index buffer base, and index_limit its size in elements.
+	uint64_t         indirect_args              = 0;
+	uint32_t         index_limit                = 0;
 };
 
 struct DrawAutoArgs {
@@ -111,7 +126,50 @@ public:
 	void SetDebugInfo(uint32_t op, uint64_t submit_id, uint32_t arg0 = 0, uint32_t arg1 = 0,
 	                  uint32_t arg2 = 0, uint32_t arg3 = 0, uint64_t arg4 = 0);
 	void BeginRendering(const RenderState& state) const;
+	// Ends the rendering instance, then records the barrier of any deferred shader writes.
 	void EndRendering() const;
+	// A draw whose shaders wrote buffers leaves the barrier that makes the writes visible pending
+	// while rendering continues. Every command other than a draw ends rendering before it records,
+	// which records the barrier; a later draw that may read the writes ends rendering first.
+	void DeferShaderWriteBarrier(vk::PipelineStageFlags source_stages) const {
+		m_pending_shader_writes |= source_stages;
+	}
+	[[nodiscard]] bool HasPendingShaderWrites() const noexcept {
+		return static_cast<bool>(m_pending_shader_writes);
+	}
+
+	// The graphics pipeline and dynamic state draws last recorded into this command buffer, so
+	// that a draw skips commands that would set the same values again. Every graphics pipeline a
+	// draw binds keeps this state dynamic, except color write enables without color attachments.
+	// Anything else that binds a graphics pipeline or sets dynamic state here must call
+	// InvalidateGraphicsState.
+	struct GraphicsState {
+		static constexpr uint32_t ViewportSlots = 16;
+
+		vk::Pipeline                                pipeline;
+		uint32_t                                    viewport_count = 0; // 0: unknown.
+		std::array<vk::Viewport, ViewportSlots>     viewports {};
+		uint32_t                                    scissor_count = 0; // 0: unknown.
+		std::array<vk::Rect2D, ViewportSlots>       scissors {};
+		bool                                        fixed_valid   = false;
+		float                                       line_width    = 1.0f;
+		std::array<float, 4>                        blend_constants {};
+		vk::Bool32                                  depth_test    = VK_FALSE;
+		vk::Bool32                                  depth_write   = VK_FALSE;
+		vk::CompareOp                               depth_compare = vk::CompareOp::eNever;
+		vk::Bool32                                  depth_bias    = VK_FALSE;
+		vk::Bool32                                  stencil_test  = VK_FALSE;
+		bool                                        bias_valid    = false;
+		std::array<float, 3>                        bias {};
+		bool                                        stencil_valid = false;
+		std::array<vk::StencilOpState, 2>           stencil {};
+		uint32_t                                    color_write_count = 0; // 0: unknown.
+		std::array<vk::Bool32, RENDER_COLOR_ATTACHMENTS_MAX> color_write {};
+		bool                                        feedback_valid = false;
+		vk::ImageAspectFlags                        feedback;
+	};
+	[[nodiscard]] GraphicsState& GetGraphicsState() const noexcept { return m_graphics_state; }
+	void InvalidateGraphicsState() const noexcept { m_graphics_state = {}; }
 
 	[[nodiscard]] vk::CommandBuffer Handle() const;
 	[[nodiscard]] GraphicContext&   GetGraphics() const noexcept { return m_graphics; }
@@ -143,6 +201,8 @@ private:
 	uint64_t            m_debug_arg4      = 0;
 	mutable RenderState m_render_state;
 	mutable bool        m_rendering   = false;
+	mutable vk::PipelineStageFlags m_pending_shader_writes;
+	mutable GraphicsState          m_graphics_state;
 	HW::Context*        m_registers   = nullptr;
 	HW::UserConfig*     m_user_config = nullptr;
 	HW::Shader*         m_shaders     = nullptr;
@@ -152,7 +212,8 @@ private:
 
 class RenderExecutor {
 public:
-	explicit RenderExecutor(RenderContext& context): m_context(context) {}
+	explicit RenderExecutor(RenderContext& context);
+	~RenderExecutor();
 	KYTY_CLASS_NO_COPY(RenderExecutor);
 
 	void DispatchDirect(uint64_t submit_id, CommandBuffer& buffer, uint32_t thread_group_x,
@@ -178,7 +239,13 @@ private:
 	};
 
 	[[nodiscard]] TextureBinding ResolveTexture(const ShaderRecompiler::IR::ImageResource& resource,
-	                                            const ShaderRecompiler::IR::DescriptorValue& value);
+	                                            const ShaderRecompiler::IR::DescriptorValue& value,
+	                                            PreparedBindings::ImageSource* source = nullptr);
+	// ResolveTexture into `out`, keeping its mip view storage: bindings resolve into the draw's own
+	// slots without copying the image description around.
+	void ResolveTextureInto(const ShaderRecompiler::IR::ImageResource&   resource,
+	                        const ShaderRecompiler::IR::DescriptorValue& value,
+	                        PreparedBindings::ImageSource* source, TextureBinding& out);
 	void PrepareGraphicsBindings(std::span<PreparedBindings* const> stages,
 	                             std::span<RenderColorInfo> colors);
 	void ResolveRenderColorTarget(CommandBuffer& buffer, RenderColorInfo& target,
@@ -208,8 +275,59 @@ private:
 	[[nodiscard]] bool TryConsumeComputeImageClear(const ShaderComputeInputInfo& input,
 	                                              CommandBuffer& command, uint32_t group_x,
 	                                              uint32_t group_y, uint32_t group_z, uint32_t mode);
+	[[nodiscard]] bool ReadsPendingWrites(std::span<PreparedBindings* const> stages,
+	                                      const ShaderVertexInputInfo&       vertex_input,
+	                                      const DrawIndexBufferSource&       index_source,
+	                                      const DrawCallInfo&                draw) const;
+	void RecordPendingWrites(std::span<PreparedBindings* const> stages);
+
+	// Buffer ranges that draws wrote while their barrier is still pending (see
+	// CommandBuffer::DeferShaderWriteBarrier), and whether only atomics wrote each one.
+	struct PendingWrite {
+		uint64_t begin       = 0;
+		uint64_t end         = 0;
+		bool     atomic_only = false;
+	};
+
+	// What ResolveRenderColorTarget resolved for each target slot, so that a draw with the same
+	// target registers keeps it (see TextureCache::RefindImage).
+	struct ColorTargetSource {
+		HW::RenderTarget registers;
+		uint32_t         mask                = 0;
+		uint32_t         slice_offset        = 0;
+		bool             ignore_target_mask  = false;
+		bool             exact_format        = false;
+		uint64_t         generation          = 0; // 0: not reusable.
+		uint32_t         metadata_base_layer = 0;
+		RenderColorInfo  target;
+		// The view FindRenderTarget last returned for this slot (see
+		// TextureCache::IsRenderTargetCurrent); view_generation 0: none.
+		vk::ImageView    view;
+		ImageId          view_image;
+		ImageViewInfo    view_info;
+		uint64_t         view_generation = 0;
+	};
+	[[nodiscard]] static bool TargetReuseEnabled();
+	// The same for the depth target: its description and image, keyed by its registers.
+	struct DepthTargetSource {
+		HW::DepthRenderTarget   registers;
+		uint64_t                generation          = 0; // 0: not reusable.
+		uint32_t                metadata_base_layer = 0;
+		TextureCache::ImageDesc desc;
+		ImageId                 image_id;
+		// The view FindDepthTarget last returned (see TextureCache::IsDepthTargetCurrent);
+		// view_generation 0: none.
+		vk::ImageView           view;
+		ImageId                 view_image;
+		ImageViewInfo           view_info;
+		uint64_t                view_generation      = 0;
+		uint64_t                view_meta_generation = 0;
+	};
 
 	RenderContext&                        m_context;
+	std::array<ColorTargetSource, RENDER_COLOR_ATTACHMENTS_MAX> m_color_target_sources;
+	DepthTargetSource                     m_depth_target_source;
+	std::vector<PendingWrite>             m_pending_writes;
 	GraphicsBindings                     m_graphics_bindings;
 	PreparedBindings                     m_compute_bindings;
 	std::vector<ImageId>                  m_bound_images;
@@ -217,6 +335,7 @@ private:
 	std::vector<vk::DescriptorImageInfo>  m_descriptor_images;
 	std::vector<vk::WriteDescriptorSet>   m_descriptor_writes;
 	std::vector<uint32_t>                 m_image_occurrences;
+	std::unique_ptr<MeshIndirectArgs>     m_mesh_indirect; // Created on first GPU-args draw.
 
 	friend class CommandProcessor;
 	friend struct RenderExecutorTestAccess;

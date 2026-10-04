@@ -6,15 +6,31 @@
 #include "graphics/host_gpu/renderer/render.h"
 #include "graphics/host_gpu/renderer/renderContext.h"
 
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <vector>
 
 namespace Libs::Graphics {
 
+class DrawSpeculator;
+
 bool TestWaitRegMemValue(uint64_t value, uint64_t ref, uint64_t mask, uint32_t func);
 
 enum class Pm4ProcessResult { Complete, Blocked };
+
+enum class PredicateSync { None, Download, Drain };
+
+[[nodiscard]] constexpr PredicateSync ClassifyPredicateSync(bool image_gpu_modified,
+                                                            bool pending_image_writeback,
+                                                            bool buffer_gpu_dirty) {
+	if (image_gpu_modified || pending_image_writeback) {
+		return PredicateSync::Drain;
+	}
+	return buffer_gpu_dirty ? PredicateSync::Download : PredicateSync::None;
+}
 
 enum class ContextStateOperation : uint32_t {
 	Clear     = 0,
@@ -26,6 +42,14 @@ enum class ContextStateOperation : uint32_t {
 class Pm4Execution {
 public:
 	[[nodiscard]] bool MadeProgress() const noexcept { return m_made_progress; }
+	// The innermost buffer's commands from the packet the execution stopped at (for debugging).
+	[[nodiscard]] std::span<const uint32_t> RemainingCommands() const noexcept {
+		if (m_buffer_stack.empty()) {
+			return {};
+		}
+		const auto& cursor = m_buffer_stack.back();
+		return cursor.commands.subspan(std::min<size_t>(cursor.offset_dw, cursor.commands.size()));
+	}
 
 private:
 	friend class CommandProcessor;
@@ -51,9 +75,8 @@ public:
 		int64_t flip_arg  = 0;
 	};
 
-	CommandProcessor(RenderContext& renderer, int interrupt_event_id)
-	    : m_renderer(renderer), m_interrupt_event_id(interrupt_event_id) {}
-	~CommandProcessor() = default;
+	CommandProcessor(RenderContext& renderer, int interrupt_event_id);
+	~CommandProcessor();
 
 	KYTY_CLASS_NO_COPY(CommandProcessor);
 
@@ -62,6 +85,11 @@ public:
 
 	void            BufferInit();
 	void            BufferFlush();
+	// Submits only when the GPU has retired every earlier submission.
+	void            BufferFlushIfGpuIdle();
+	// Submits for a queued interrupt, batching within the label flush interval.
+	void            BufferFlushForInterrupt();
+	void            BufferFlushAndWait();
 	void            BufferWait();
 	HW::Context&    GetCtx() { return m_ctx; }
 	HW::UserConfig& GetUcfg() { return m_ucfg; }
@@ -76,6 +104,8 @@ public:
 		return m_dispatch_indirect_args_base_addr;
 	}
 	void SetNumInstances(uint32_t num_instances);
+	// The NUM_INSTANCES state, reading it from guest memory if a GPU-args draw left it there.
+	[[nodiscard]] uint32_t NumInstances();
 	void DrawIndex(DrawIndexArgs args);
 	void DrawIndexOffset(uint32_t index_offset, uint32_t index_count);
 	void DrawIndexAuto(DrawAutoArgs args);
@@ -121,6 +151,11 @@ public:
 
 	template <typename T>
 	void WaitRegMem(uint32_t func, const T* addr, T ref, T mask, uint32_t poll, uint32_t wait_op);
+	// A packet decides on guest memory the CPU may have just written: later draws reading memory
+	// through addresses must see the CPU's writes (RenderContext::PrepareBda).
+	void AdvanceBdaEpoch();
+	// GET_LOD_STATS: see RenderContext::ReportMipStats.
+	void ReportMipStats(void* dst, uint32_t size, bool reset);
 	void WriteData(uint32_t* dst, const uint32_t* src, uint32_t dw_num, uint32_t write_control);
 	void WriteReferenceClock(uint64_t dst_address, uint32_t num_bytes);
 	void DmaData(uint8_t engine, uint8_t dst_sel, uint8_t dst_cache_policy,
@@ -139,15 +174,33 @@ public:
 	[[nodiscard]] uint64_t GetSubmitId() const { return m_submit_id; }
 	void                   SetSubmitId(uint64_t submit_id) { m_submit_id = submit_id; }
 	[[nodiscard]] bool     IsAsyncComputeQueue() const { return m_interrupt_event_id >= 0x20; }
+	// Process is about to run the constant engine's stream (no draws to speculate) or not.
+	void SetConstantStream(bool constant) { m_constant_stream = constant; }
 
 private:
+	friend class DrawSpeculator;
+
 	template <typename T>
 	void WriteAtEndOfPipe(uint32_t cache_policy, uint32_t event_write_dest, uint32_t eop_event_type,
 	                      uint32_t cache_action, uint32_t event_index, uint32_t event_write_source,
 	                      void* dst_gpu_addr, T value, uint32_t interrupt_selector,
 	                      uint32_t interrupt_context_id);
 	void ProcessPm4(Pm4Execution& execution);
+	// After a draw that created a pipeline: walks the rest of the command stream without
+	// executing it, replaying only register writes into a copy of the register state, and asks
+	// the pipeline cache to prefetch the shader library parts of the draws it finds, so a loading
+	// burst's pipelines compile in parallel instead of one after another.
+	void RunPipelineLookahead(const Pm4Execution& execution);
+	// Whether the background work a Prefetch-mode look-ahead left pending has progressed enough
+	// to walk again (see m_lookahead_rewalk).
+	[[nodiscard]] bool LookaheadWorkFinished() const;
+	// One walk of the look-ahead; `pending` is set when a shader it met is still translating.
+	void LookaheadPass(const Pm4Execution& execution, ProgramWait wait, uint32_t& draws,
+	                   uint32_t& parts, bool& pending);
 	void SuspendPm4();
+	// Starts the draw speculation walk at the current packet (see DrawSpeculator).
+	void RestartSpeculation(const Pm4Execution& execution);
+	void SynchronizePredicate(uint64_t address, uint64_t size);
 	CommandScheduler&   GetScheduler() const { return m_renderer.GetCommandScheduler(); }
 	CommandBuffer&      CurrentBuffer() { return GetScheduler().Current(); }
 
@@ -165,6 +218,8 @@ private:
 	uint64_t         m_dispatch_indirect_args_base_addr = 0;
 	// Persistent draw state: indirect draws update it for subsequent draws.
 	uint32_t m_num_instances = 1;
+	// A GPU-args indirect draw leaves the instance count in guest memory; read on demand.
+	uint64_t m_num_instances_address = 0;
 
 	uint32_t m_de_count    = 0;
 	uint32_t m_ce_count    = 0;
@@ -177,6 +232,20 @@ private:
 	uint64_t  m_submit_id                   = 0;
 	uint64_t  m_synthetic_occlusion_counter = 0;
 	bool      m_predicate_skip              = false;
+	// Draws the last look-ahead already covered; no new look-ahead runs until they are processed.
+	uint32_t  m_lookahead_draws_left        = 0;
+	// With asynchronous pipelines, the last look-ahead left shaders translating or compiling on
+	// worker threads; the walk repeats as they finish, to take each prediction a step further.
+	bool      m_lookahead_rewalk            = false;
+	uint64_t  m_lookahead_jobs_finished     = 0;
+	std::chrono::steady_clock::time_point m_lookahead_time {};
+	// Pipelines created while processing the current and the previous submission.
+	uint64_t  m_submission_created_start    = 0;
+	uint64_t  m_last_submission_created     = 0;
+	// Speculates the resources of this queue's draws ahead of it (KYTY_SPECULATE_DRAWS=1).
+	std::unique_ptr<DrawSpeculator> m_speculator;
+	// Process is running the constant engine's stream, which has no draws to speculate.
+	bool                            m_constant_stream = false;
 };
 
 } // namespace Libs::Graphics

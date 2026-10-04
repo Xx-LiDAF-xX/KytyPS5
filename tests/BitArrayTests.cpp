@@ -66,6 +66,17 @@ void TestMaskedConstructionAndBitwiseOperations() {
   Check(Bits(source, 12, 12).None(), "empty masked constructor produced bits");
   Check(Bits(source, 0, 129).None(),
         "invalid masked constructor produced bits");
+  Check(source.AnyInRange(31, 97) && source.AnyInRange(0, 128) &&
+            source.AnyInRange(127, 128),
+        "AnyInRange missed set bits");
+  Check(!source.AnyInRange(12, 12) && !source.AnyInRange(0, 129) &&
+            !source.AnyInRange(64, 63),
+        "AnyInRange accepted an empty or invalid range");
+  Bits single;
+  single.Set(64);
+  Check(single.AnyInRange(64, 65) && single.AnyInRange(0, 128) &&
+            !single.AnyInRange(0, 64) && !single.AnyInRange(65, 128),
+        "AnyInRange read bits outside its range");
 
   Bits left;
   left.SetRange(0, 80);
@@ -192,11 +203,16 @@ void TestRandomizedDifferential() {
         masked_start +
         static_cast<size_t>(next_random() % (129 - masked_start));
     const Bits masked(bits, masked_start, masked_end);
+    bool masked_any = false;
     for (size_t index = 0; index < reference.size(); index++) {
       Check(masked.Get(index) == (index >= masked_start && index < masked_end &&
                                   reference[index]),
             "randomized masked constructor diverged");
+      masked_any |= masked.Get(index);
     }
+    Check(bits.AnyInRange(masked_start, masked_end) == masked_any &&
+              masked.Any() == masked_any,
+          "randomized AnyInRange diverged from the masked copy");
 
     size_t first_begin = 0;
     while (first_begin < reference.size() && !reference[first_begin]) {
@@ -278,6 +294,23 @@ void TestTrackerSizedRandomizedDifferential() {
             "tracker-sized randomized bit state diverged");
     }
 
+    // AnyInRange against the reference, including ranges spanning several words, a single
+    // word's boundaries, and invalid ranges.
+    for (size_t probe = 0; probe < 8; probe++) {
+      const auto begin = static_cast<size_t>(next_random() % (reference.size() + 1));
+      const auto end =
+          begin + static_cast<size_t>(next_random() % (reference.size() + 2 - begin));
+      bool any = false;
+      for (auto index = begin; index < end && index < reference.size(); index++) {
+        any |= reference[index];
+      }
+      const bool valid = begin < end && end <= reference.size();
+      Check(bits.AnyInRange(begin, end) == (valid && any),
+            "tracker-sized AnyInRange diverged");
+      Check(bits.AnyInRange(begin, end) == TrackerBits(bits, begin, end).Any(),
+            "tracker-sized AnyInRange diverged from the masked copy");
+    }
+
     size_t expected = 0;
     for (const auto [begin, end] : bits) {
       while (expected < reference.size() && !reference[expected]) {
@@ -297,6 +330,49 @@ void TestTrackerSizedRandomizedDifferential() {
   }
 }
 
+// SliceSummary against a bit-by-bit reference: slices narrower than a word (1024 bits, the
+// tracker's size, has 16-bit slices), a word wide (4096) and single bits (64).
+template <size_t N> void TestSliceSummary() {
+  using SummaryBits = Common::BitArray<N>;
+  constexpr size_t slice_bits = N / 64;
+  SummaryBits bits;
+  Check(bits.SliceSummary() == 0, "empty array has a nonzero slice summary");
+  bits.Fill();
+  Check(bits.SliceSummary() == ~uint64_t{0},
+        "full array's slice summary is not all ones");
+  bits.Clear();
+  bits.Set(0);
+  bits.Set(N - 1);
+  Check(bits.SliceSummary() == ((uint64_t{1} << 63) | 1u),
+        "boundary bits map to the wrong slices");
+
+  uint64_t random = 0x2545'f491'4f6c'dd1dull;
+  const auto next_random = [&random] {
+    random ^= random << 13;
+    random ^= random >> 7;
+    random ^= random << 17;
+    return random;
+  };
+  for (size_t operation = 0; operation < 2048; operation++) {
+    const auto first = static_cast<size_t>(next_random() % N);
+    const auto last =
+        first + 1 + static_cast<size_t>(next_random() % (N - first) % 40);
+    if ((next_random() & 1) != 0) {
+      bits.SetRange(first, last);
+    } else {
+      bits.UnsetRange(first, last);
+    }
+    uint64_t expected = 0;
+    for (size_t index = 0; index < N; index++) {
+      if (bits.Get(index)) {
+        expected |= uint64_t{1} << (index / slice_bits);
+      }
+    }
+    Check(bits.SliceSummary() == expected,
+          "randomized slice summary diverged from its bits");
+  }
+}
+
 } // namespace
 
 int main() {
@@ -305,6 +381,9 @@ int main() {
   TestRangeDiscoveryAndIteration();
   TestRandomizedDifferential();
   TestTrackerSizedRandomizedDifferential();
+  TestSliceSummary<64>();
+  TestSliceSummary<1024>();
+  TestSliceSummary<4096>();
   std::puts("BitArrayTests: all cases passed");
   return 0;
 }

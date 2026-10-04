@@ -1070,13 +1070,10 @@ int KYTY_SYSV_ABI KernelStat(const char* path, FileStat* sb) {
 		return KERNEL_ERROR_EINVAL;
 	}
 
-	LOGF("\t KernelStat: %s\n", path);
-
 	auto real_file_name = g_mount_points->ResolvePath(path);
 
 	const auto info = Common::File::GetInfo(real_file_name);
 	if (!info) {
-		LOGF("\t file not found\n");
 		return KERNEL_ERROR_ENOENT;
 	}
 

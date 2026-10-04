@@ -21,6 +21,7 @@
 #include <bit>
 #include <cstdio>
 #include <cstring>
+#include <span>
 #include <vector>
 
 #define KYTY_HW_CTX_PARSER_ARGS                                                                    \
@@ -1350,14 +1351,11 @@ KYTY_CP_OP_PARSER(CpOpGetLodStats) {
 	const auto buffer_size = buffer[0];
 	auto*      dst         = reinterpret_cast<void*>((buffer[1] & 0xffffffc0u) |
 	                                                 (static_cast<uint64_t>(buffer[2]) << 32u));
+	// REPORT_AND_RESET or FORCE_RESET: the counting starts anew after this report.
+	const bool reset = (buffer[3] & 0x000c0000u) != 0;
 
 	if (dst != nullptr && buffer_size != 0) {
-		memset(dst, 0, buffer_size);
-		// Hack?
-		if (buffer_size >= sizeof(uint32_t)) {
-			auto* label = static_cast<uint32_t*>(dst);
-			*label      = 1;
-		}
+		cp.ReportMipStats(dst, buffer_size, reset);
 	}
 
 	return 4;
@@ -1387,6 +1385,8 @@ KYTY_CP_OP_PARSER(CpOpRewind) {
 	EXIT_NOT_IMPLEMENTED(cmd_id != 0xc0005900);
 	EXIT_NOT_IMPLEMENTED((buffer[0] & ~0x81000000u) != 0);
 
+	// The CPU appends the commands that follow, and their data, after the submission.
+	cp.AdvanceBdaEpoch();
 	cp.WaitForRewind((buffer[0] & 0x80000000u) != 0);
 
 	return 1;
@@ -1442,6 +1442,7 @@ KYTY_CP_OP_PARSER(CpOpCondExec) {
 	EXIT_NOT_IMPLEMENTED(addr == 0);
 	EXIT_NOT_IMPLEMENTED(payload_dw + exec_count >= dw);
 
+	cp.AdvanceBdaEpoch();
 	if (*reinterpret_cast<const volatile uint32_t*>(addr) == 0) {
 		return payload_dw + exec_count;
 	}
@@ -1476,6 +1477,7 @@ KYTY_CP_OP_PARSER(CpOpBranch) {
 	EXIT_NOT_IMPLEMENTED(function > 6);
 	EXIT_NOT_IMPLEMENTED(then_buffer == nullptr || then_num_dw == 0);
 
+	cp.AdvanceBdaEpoch();
 	const bool take_then = TestWaitRegMemValue(*compare_addr, reference, mask, function);
 	LOGF("\t branch: take=%u then=0x%016" PRIx64 "/%" PRIu32 " else=0x%016" PRIx64 "/%" PRIu32 "\n",
 	     take_then ? 1u : 0u, reinterpret_cast<uint64_t>(then_buffer), then_num_dw,
@@ -2138,6 +2140,46 @@ KYTY_CP_OP_PARSER(CpOpIndirectUcRegs) {
 	return KYTY_PM4_LEN(cmd_id) - 1u;
 }
 
+bool IndirectRegistersKnown(uint32_t opcode, std::span<const uint32_t> pairs) {
+	// As CpOpIndirectCxRegs, CpOpIndirectShRegs and CpOpIndirectUcRegs skip or dispatch each pair.
+	for (size_t i = 0; i + 1 < pairs.size(); i += 2) {
+		const auto raw_cmd_offset = pairs[i];
+		const auto cmd_offset     = NormalizeRegisterOffset(raw_cmd_offset);
+		const auto value          = pairs[i + 1];
+		switch (opcode) {
+			case Pm4::IT_SET_CONTEXT_REG_INDIRECT:
+				if (HwCtxIsFakeRegister(cmd_offset) || raw_cmd_offset == 0xffffffffu ||
+				    cmd_offset >= Pm4::CX_NUM) {
+					continue;
+				}
+				if (g_hw_ctx_indirect_func[cmd_offset & (Pm4::CX_NUM - 1)] == nullptr &&
+				    !(raw_cmd_offset == 0x24au && value == 0u)) {
+					return false;
+				}
+				break;
+			case Pm4::IT_SET_SH_REG_INDIRECT:
+				if (cmd_offset == Pm4::SH_NOP || raw_cmd_offset == 0xffffffffu) {
+					continue;
+				}
+				if (cmd_offset >= Pm4::SH_NUM || g_hw_sh_indirect_func[cmd_offset] == nullptr) {
+					return false;
+				}
+				break;
+			case Pm4::IT_SET_UCONFIG_REG_INDIRECT:
+				if (cmd_offset == Pm4::UC_NOP) {
+					continue;
+				}
+				if (cmd_offset >= Pm4::UC_NUM ||
+				    g_hw_uc_indirect_func[cmd_offset & (Pm4::UC_NUM - 1)] == nullptr) {
+					return false;
+				}
+				break;
+			default: return false;
+		}
+	}
+	return true;
+}
+
 KYTY_CP_OP_PARSER(CpOpMarker) {
 	KYTY_PROFILER_FUNCTION();
 
@@ -2273,7 +2315,7 @@ KYTY_CP_OP_PARSER(CpOpReleaseMem) {
 			case 0x02:
 			case 0x04:
 				cp.TriggerEopEventAtEndOfPipe(interrupt_context_id);
-				cp.BufferFlush();
+				cp.BufferFlushForInterrupt();
 				break;
 			default: EXIT("unknown release_mem interrupt selector\n");
 		}
@@ -2314,8 +2356,13 @@ KYTY_CP_OP_PARSER(CpOpReleaseMem) {
 		cp.WriteAtEndOfPipe32(cache_policy, event_write_dest, eop_event_type, cache_action,
 		                      event_index, event_source, dst_gpu_addr, static_cast<uint32_t>(value),
 		                      interrupt_selector, interrupt_context_id);
+		// The label reached guest memory at parse time, so submitting here only paces the GPU.
+		// A queued interrupt needs its tick submitted. A plain label submits only once the GPU
+		// has finished all earlier work; while it is busy, labels batch into fewer submits.
 		if (interrupt_selector == 0x01 || interrupt_selector == 0x02) {
-			cp.BufferFlush();
+			cp.BufferFlushForInterrupt();
+		} else {
+			cp.BufferFlushIfGpuIdle();
 		}
 
 		return 7;
@@ -2334,7 +2381,7 @@ KYTY_CP_OP_PARSER(CpOpReleaseMem) {
 		                      event_index, event_source, dst_gpu_addr, static_cast<uint32_t>(value),
 		                      interrupt_selector, interrupt_context_id);
 		if (interrupt_selector == 0x01) {
-			cp.BufferFlush();
+			cp.BufferFlushForInterrupt();
 		}
 
 		return 7;

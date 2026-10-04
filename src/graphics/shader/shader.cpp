@@ -15,14 +15,20 @@
 #include "graphics/shader/recompiler/frontend/decode/ShaderDecoder.h"
 #include "graphics/shader/shaderCompiler.h"
 #include "graphics/shader/shaderVertexMetadata.h"
+#include "kernel/memory.h"
 #include "libs/errno.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <bit>
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -48,12 +54,19 @@ struct ShaderMapEntry {
 
 static std::unique_ptr<std::unordered_map<uint64_t, ShaderMapEntry>> g_shader_map;
 static std::mutex                                                      g_shader_map_mutex;
+static std::atomic<uint64_t>                                           g_shader_map_version {0};
+
+uint64_t ShaderMapVersion() {
+	return g_shader_map_version.load(std::memory_order_acquire);
+}
 
 void ShaderInit() {
 	EXIT_IF(g_shader_map != nullptr);
 
 	g_shader_map = std::make_unique<std::unordered_map<uint64_t, ShaderMapEntry>>();
 }
+
+static uint64_t GetDeclaredShaderHash(uint64_t shader_addr);
 
 void ShaderMapUserData(uint64_t addr, const ShaderMappedData& data) {
 	EXIT_IF(g_shader_map == nullptr);
@@ -64,7 +77,39 @@ void ShaderMapUserData(uint64_t addr, const ShaderMappedData& data) {
 	}
 	const auto hash = XXH3_64bits(reinterpret_cast<const void*>(addr), data.code_size_bytes);
 	std::scoped_lock lock(g_shader_map_mutex);
-	(*g_shader_map)[addr] = {data, hash};
+
+	static uint64_t generation = 0;
+	// Before the entry changes: a reader that saw the old version before reading sees a new one.
+	g_shader_map_version.fetch_add(1, std::memory_order_acq_rel);
+	auto&           entry      = (*g_shader_map)[addr];
+	entry                      = data;
+	entry.generation           = ++generation;
+	entry.hash                 = 0;
+
+	// KYTY_PERMUTATION_LOG=1 (diagnostic): when each shader is registered, to compare with the
+	// time of its first permutation.
+	static const bool log_enabled = [] {
+		const char* value = std::getenv("KYTY_PERMUTATION_LOG");
+		return value != nullptr && std::strcmp(value, "1") == 0;
+	}();
+	if (log_enabled && data.code_size_bytes != 0 && data.code_size_bytes % 4u == 0) [[unlikely]] {
+		auto hash = GetDeclaredShaderHash(addr);
+		if (hash == 0) {
+			hash = XXH3_64bits(reinterpret_cast<const void*>(addr), data.code_size_bytes);
+		}
+		const auto now = std::chrono::steady_clock::now().time_since_epoch();
+		std::printf("agc-shader: type=%u hash=%016llx bytes=%u t=%.3f\n",
+		            static_cast<uint32_t>(data.type), static_cast<unsigned long long>(hash),
+		            data.code_size_bytes, std::chrono::duration<double>(now).count());
+	}
+}
+
+static void ShaderStoreHash(uint64_t addr, uint64_t generation, uint64_t hash) {
+	std::scoped_lock lock(g_shader_map_mutex);
+	if (auto iter = g_shader_map->find(addr);
+	    iter != g_shader_map->end() && iter->second.generation == generation) {
+		iter->second.hash = hash;
+	}
 }
 
 static ShaderMapEntry ShaderGetMappedData(uint64_t addr, const char* label) {
@@ -79,11 +124,42 @@ static ShaderMapEntry ShaderGetMappedData(uint64_t addr, const char* label) {
 	EXIT("%s shader=0x%016" PRIx64 " is missing from ShaderMap\n", label, addr);
 }
 
-static ShaderParams GetShaderParams(uint64_t shader_addr, uint64_t hash,
+static const ShaderBinaryInfo* GetBinaryInfo(const uint32_t* code) {
+	EXIT_IF(code == nullptr);
+
+	if (code[0] == 0xBEEB03FF) {
+		return reinterpret_cast<const ShaderBinaryInfo*>(code +
+		                                                 static_cast<size_t>(code[1] + 1) * 2);
+	}
+
+	return nullptr;
+}
+
+static uint64_t GetDeclaredShaderHash(uint64_t shader_addr) {
+	const auto* header = GetBinaryInfo(reinterpret_cast<const uint32_t*>(shader_addr));
+	return header != nullptr ? (static_cast<uint64_t>(header->hash1) << 32u) | header->hash0 : 0;
+}
+
+static ShaderParams GetShaderParams(uint64_t shader_addr, const char* label,
 	                                std::span<const uint32_t> user_data,
 	                                const ShaderMappedData& data, uint32_t user_data_base = 0) {
+	if (data.code_size_bytes == 0 || data.code_size_bytes % sizeof(uint32_t) != 0) {
+		EXIT("%s shader=0x%016" PRIx64 " has invalid AGC shader_size=0x%08" PRIx32 "\n", label,
+		     shader_addr, data.code_size_bytes);
+	}
 	const auto code_words = data.code_size_bytes / sizeof(uint32_t);
 	const auto code = std::span {reinterpret_cast<const uint32_t*>(shader_addr), code_words};
+	// Registered code stays the same until the game registers the address again, so hash it
+	// once. Most AGC shaders declare no hash, and hashing their code on every draw also read
+	// guest pages that GPU writes elsewhere on the page had protected, stalling the GPU thread.
+	auto hash = data.hash;
+	if (hash == 0) {
+		hash = GetDeclaredShaderHash(shader_addr);
+		if (hash == 0) {
+			hash = XXH3_64bits(code.data(), code.size_bytes());
+		}
+		ShaderStoreHash(shader_addr, data.generation, hash);
+	}
 	ShaderParams params {
 	    .code            = code,
 	    .user_data_count = static_cast<uint32_t>(user_data.size()) + user_data_base,
@@ -346,6 +422,48 @@ static void ShaderApplyAttribSemantics(ShaderVertexInputInfo& info,
 
 	const bool debug_dump = Config::GraphicsDebugDumpEnabled();
 
+	// The tables can share a tracker page with GPU-written data (Astro Bot's do, once a frame);
+	// read them without faulting on that page. One read per table covers the entries used: a
+	// read per attribute cost the GPU thread about 1.7% in Sky Garden.
+	uint32_t first_semantic = UINT32_MAX;
+	uint32_t last_semantic  = 0;
+	for (uint32_t i = 0; i < input_semantics.size(); i++) {
+		first_semantic = std::min(first_semantic, uint32_t {input_semantics[i].semantic});
+		last_semantic  = std::max(last_semantic, uint32_t {input_semantics[i].semantic});
+	}
+	std::array<uint32_t, 256> attributes; // By semantic, from first_semantic.
+	const auto record = [](const uint32_t* address, const uint32_t* words, uint32_t dwords) {
+		if (auto* log = t_vertex_table_reads; log != nullptr) {
+			const uint32_t first = log->count == 0 ? 0u : log->reads[0].first + log->reads[0].dwords;
+			if (log->count >= log->reads.size() || first + dwords > log->words.size()) {
+				log->complete = false; // More reads than one stage makes: never taken.
+				return;
+			}
+			log->reads[log->count++] = {reinterpret_cast<uint64_t>(address), dwords, first};
+			std::copy_n(words, dwords, log->words.begin() + first);
+		}
+	};
+	if (input_semantics.size() != 0) {
+		LibKernel::Memory::ReadGuestOnGpuThread(reinterpret_cast<uint64_t>(attrib + first_semantic),
+		                                        attributes.data(),
+		                                        (last_semantic - first_semantic + 1) * sizeof(uint32_t));
+		record(attrib + first_semantic, attributes.data(), last_semantic - first_semantic + 1);
+	}
+	uint32_t first_index = UINT32_MAX;
+	uint32_t last_index  = 0;
+	for (uint32_t i = 0; i < input_semantics.size(); i++) {
+		const uint32_t index = attributes[input_semantics[i].semantic - first_semantic] & 0x1fu;
+		first_index          = std::min(first_index, index);
+		last_index           = std::max(last_index, index);
+	}
+	std::array<uint32_t, 4 * ShaderVertexInputInfo::RES_MAX> sharps; // By index, from first_index.
+	if (input_semantics.size() != 0) {
+		LibKernel::Memory::ReadGuestOnGpuThread(reinterpret_cast<uint64_t>(buffer + first_index * 4),
+		                                        sharps.data(),
+		                                        (last_index - first_index + 1) * 4 * sizeof(uint32_t));
+		record(buffer + first_index * 4, sharps.data(), (last_index - first_index + 1) * 4);
+	}
+
 	for (uint32_t i = 0; i < input_semantics.size(); i++) {
 		const auto& in = input_semantics[i];
 
@@ -354,20 +472,20 @@ static void ShaderApplyAttribSemantics(ShaderVertexInputInfo& info,
 		uint32_t reg  = in.hardware_mapping;
 		uint32_t size = in.size_in_elements;
 
+		const uint32_t attribute = attributes[in.semantic - first_semantic];
+
 		if (debug_dump) {
-			LOGF("reg = %u, size = %u, va[%u] = 0x%08" PRIx32 "\n", reg, size, i,
-			     attrib[in.semantic]);
+			LOGF("reg = %u, size = %u, va[%u] = 0x%08" PRIx32 "\n", reg, size, i, attribute);
 		}
 
-		size_t index = attrib[in.semantic] & 0x1fu;
-		auto   format =
-		    static_cast<Prospero::VertexAttribFormat>((attrib[in.semantic] >> 5u) & 0x1ffu);
-		uint32_t offset      = (attrib[in.semantic] >> 14u) & 0xfffu;
-		uint32_t fetch_index = (attrib[in.semantic] >> 26u) & 0x1u;
+		size_t index = attribute & 0x1fu;
+		auto   format = static_cast<Prospero::VertexAttribFormat>((attribute >> 5u) & 0x1ffu);
+		uint32_t offset      = (attribute >> 14u) & 0xfffu;
+		uint32_t fetch_index = (attribute >> 26u) & 0x1u;
 
 		EXIT_NOT_IMPLEMENTED(index >= ShaderVertexInputInfo::RES_MAX);
 
-		const auto* sharp = &buffer[index * 4];
+		const uint32_t* sharp = &sharps[(index - first_index) * 4];
 
 		EXIT_NOT_IMPLEMENTED(info.resources_num >= ShaderVertexInputInfo::RES_MAX);
 
@@ -458,13 +576,20 @@ static uint32_t ShaderCalcPsSystemInputBase(const HW::ShaderRegisters& regs) {
 	return reg;
 }
 
+// `info = {}` without zeroing the resource arrays, of which only the first resources_num and
+// buffers_num entries are read: default initialization leaves them alone.
+static void ResetVertexInputInfo(ShaderVertexInputInfo& info) {
+	std::destroy_at(&info);
+	::new (static_cast<void*>(&info)) ShaderVertexInputInfo;
+}
+
 static bool ShaderGetStaticVertexInputInfo(uint64_t shader_addr, const HW::UserSgprInfo& user_sgpr,
                                            uint32_t user_sgpr_num, const HW::ShaderRegisters& sh,
                                            const ShaderMappedData& data,
                                            ShaderVertexInputInfo&  info) {
 	KYTY_PROFILER_FUNCTION();
 
-	info = {};
+	ResetVertexInputInfo(info);
 
 	info.pa_cl_vs_out_cntl = sh.m_paClVsOutCntl;
 
@@ -696,7 +821,7 @@ ShaderParams PrepareProgram(const HW::VertexShaderInfo& regs, const HW::Context&
 	const auto [data, hash] = ShaderGetMappedData(regs.es_regs.data_addr, "ShaderGetInputInfoVS():");
 	const bool merged = (context.GetShaderStages() & 0x20u) != 0;
 	auto        params = GetShaderParams(
-	    regs.es_regs.data_addr, hash,
+	    regs.es_regs.data_addr, "ShaderRecompiler VS",
 	    std::span<const uint32_t>(regs.gs_user_sgpr.value, regs.gs_regs.rsrc2.user_sgpr), data,
 	    merged ? 8u : 0u);
 	if (!merged) {
@@ -709,7 +834,7 @@ ShaderParams PrepareProgram(const HW::VertexShaderInfo& regs, const HW::Context&
 	}
 	// NGG user SGPRs start at s8; a separately compiled GS back half also receives
 	// its user-data pointer in s0:s1.
-	info                     = {};
+	ResetVertexInputInfo(info);
 	info.logical_stage       = ShaderType::Mesh;
 	info.pa_cl_vs_out_cntl   = sh.m_paClVsOutCntl;
 	auto& mesh               = info.mesh;
@@ -726,7 +851,7 @@ ShaderParams PrepareProgram(const HW::VertexShaderInfo& regs, const HW::Context&
 		EXIT_IF(regs.gs_regs.data_addr == 0);
 		const auto [back, back_hash] = ShaderGetMappedData(regs.gs_regs.data_addr, "ShaderGetInputInfoGS():");
 		const auto back_params =
-		    GetShaderParams(regs.gs_regs.data_addr, back_hash, {}, back);
+		    GetShaderParams(regs.gs_regs.data_addr, "ShaderRecompiler GS", {}, back);
 		params.back_code = back_params.code;
 		params.user_data[0] = static_cast<uint32_t>(regs.gs_regs.user_data_addr);
 		params.user_data[1] = static_cast<uint32_t>(regs.gs_regs.user_data_addr >> 32u);
@@ -790,9 +915,9 @@ PrepareTessellationPrograms(const HW::VertexShaderInfo& regs, const HW::Context&
 	const auto local_users      = std::span(regs.hs_user_sgpr.value, regs.hs_regs.rsrc2.user_sgpr);
 	const auto evaluation_users = std::span(regs.gs_user_sgpr.value, regs.gs_regs.rsrc2.user_sgpr);
 	std::array<ShaderParams, 3> params {
-	    GetShaderParams(regs.ls_regs.data_addr, local_hash, local_users, local),
-	    GetShaderParams(regs.hs_regs.data_addr, control_hash, local_users, control, 8u),
-	    GetShaderParams(regs.es_regs.data_addr, evaluation_hash, evaluation_users,
+	    GetShaderParams(regs.ls_regs.data_addr, "ShaderRecompiler LS", local_users, local),
+	    GetShaderParams(regs.hs_regs.data_addr, "ShaderRecompiler HS", local_users, control, 8u),
+	    GetShaderParams(regs.es_regs.data_addr, "ShaderRecompiler TES", evaluation_users,
 	                    evaluation),
 	};
 	// The fused HS back half receives its separate user-data address in s0:s1.
@@ -800,7 +925,9 @@ PrepareTessellationPrograms(const HW::VertexShaderInfo& regs, const HW::Context&
 	params[1].user_data[0] = static_cast<uint32_t>(regs.hs_regs.user_data_addr);
 	params[1].user_data[1] = static_cast<uint32_t>(regs.hs_regs.user_data_addr >> 32u);
 
-	input_info = {};
+	for (auto& stage: input_info) {
+		ResetVertexInputInfo(stage);
+	}
 	if (!ShaderGetStaticVertexInputInfo(regs.ls_regs.data_addr, regs.hs_user_sgpr,
 	                                    regs.hs_regs.rsrc2.user_sgpr, sh, local, input_info[0])) {
 		EXIT("failed to prepare local shader program\n");
@@ -835,7 +962,7 @@ ShaderParams PrepareProgram(
 	const auto [data, hash] = ShaderGetMappedData(regs.ps_regs.data_addr, "ShaderGetInputInfoPS():");
 	ShaderGetStaticInputInfoPS(regs, sh, target_export_mapping, data, ps_info);
 	return GetShaderParams(
-	    regs.ps_regs.data_addr, hash,
+	    regs.ps_regs.data_addr, "ShaderRecompiler PS",
 	    std::span<const uint32_t>(regs.ps_user_sgpr.value, regs.ps_regs.rsrc2.user_sgpr), data);
 }
 
@@ -844,8 +971,124 @@ ShaderParams PrepareProgram(const HW::ComputeShaderInfo& regs, const HW::ShaderR
 	const auto [data, hash] = ShaderGetMappedData(regs.cs_regs.data_addr, "ShaderGetInputInfoCS():");
 	ShaderGetStaticInputInfoCS(regs, sh, data, info);
 	return GetShaderParams(
-	    regs.cs_regs.data_addr, hash,
+	    regs.cs_regs.data_addr, "ShaderRecompiler CS",
 	    std::span<const uint32_t>(regs.cs_user_sgpr.value, regs.cs_regs.user_sgpr), data);
+}
+
+bool VertexTableReadsUnchanged(const VertexTableReads& reads) {
+	if (!reads.complete) {
+		return false;
+	}
+	std::array<uint32_t, 256> words;
+	for (uint32_t i = 0; i < reads.count; i++) {
+		const auto& read = reads.reads[i];
+		EXIT_IF(read.dwords > words.size());
+		LibKernel::Memory::ReadGuestOnGpuThread(read.address, words.data(),
+		                                        read.dwords * sizeof(uint32_t));
+		if (!std::equal(words.begin(), words.begin() + read.dwords,
+		                reads.words.begin() + read.first)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+void CopyVertexInputInfo(ShaderVertexInputInfo& target, const ShaderVertexInputInfo& source) {
+	ResetVertexInputInfo(target);
+	std::copy_n(source.resources, source.resources_num, target.resources);
+	std::copy_n(source.resources_dst, source.resources_num, target.resources_dst);
+	for (int i = 0; i < source.buffers_num; i++) {
+		const auto& from = source.buffers[i];
+		auto&       to   = target.buffers[i];
+		to.addr          = from.addr;
+		to.stride        = from.stride;
+		to.num_records   = from.num_records;
+		to.fetch_index   = from.fetch_index;
+	}
+	target.stage               = source.stage;
+	target.logical_stage       = source.logical_stage;
+	target.resources_num       = source.resources_num;
+	target.fetch_attrib_reg    = source.fetch_attrib_reg;
+	target.fetch_buffer_reg    = source.fetch_buffer_reg;
+	target.buffers_num         = source.buffers_num;
+	target.wave_size           = source.wave_size;
+	target.scratch_size_dwords = source.scratch_size_dwords;
+	target.pa_cl_vs_out_cntl   = source.pa_cl_vs_out_cntl;
+	target.clip_space          = source.clip_space;
+	target.mesh                = source.mesh;
+	target.tess                = source.tess;
+	target.fetch_external      = source.fetch_external;
+	target.fetch_embedded      = source.fetch_embedded;
+}
+
+bool SameVertexInputInfo(const ShaderVertexInputInfo& a, const ShaderVertexInputInfo& b) {
+	if (a.logical_stage != b.logical_stage || a.resources_num != b.resources_num ||
+	    a.fetch_attrib_reg != b.fetch_attrib_reg || a.fetch_buffer_reg != b.fetch_buffer_reg ||
+	    a.buffers_num != b.buffers_num || a.wave_size != b.wave_size ||
+	    a.scratch_size_dwords != b.scratch_size_dwords ||
+	    a.pa_cl_vs_out_cntl != b.pa_cl_vs_out_cntl || a.fetch_external != b.fetch_external ||
+	    a.fetch_embedded != b.fetch_embedded || a.clip_space.enabled != b.clip_space.enabled ||
+	    !std::equal(std::begin(a.clip_space.scale), std::end(a.clip_space.scale),
+	                std::begin(b.clip_space.scale)) ||
+	    !std::equal(std::begin(a.clip_space.offset), std::end(a.clip_space.offset),
+	                std::begin(b.clip_space.offset)) ||
+	    !std::equal(std::begin(a.clip_space.half_extent), std::end(a.clip_space.half_extent),
+	                std::begin(b.clip_space.half_extent)) ||
+	    std::memcmp(&a.mesh, &b.mesh, sizeof(a.mesh)) != 0 ||
+	    std::memcmp(&a.tess, &b.tess, sizeof(a.tess)) != 0) {
+		return false;
+	}
+	for (int i = 0; i < a.resources_num; i++) {
+		const auto& da = a.resources_dst[i];
+		const auto& db = b.resources_dst[i];
+		if (!std::equal(std::begin(a.resources[i].fields), std::end(a.resources[i].fields),
+		                std::begin(b.resources[i].fields)) ||
+		    da.register_start != db.register_start || da.registers_num != db.registers_num ||
+		    da.attr_id != db.attr_id || da.fetch_index != db.fetch_index ||
+		    da.buffer_index != db.buffer_index) {
+			return false;
+		}
+	}
+	for (int i = 0; i < a.buffers_num; i++) {
+		const auto& ba = a.buffers[i];
+		const auto& bb = b.buffers[i];
+		if (ba.addr != bb.addr || ba.stride != bb.stride || ba.num_records != bb.num_records ||
+		    ba.fetch_index != bb.fetch_index) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool SamePixelInputInfo(const ShaderPixelInputInfo& a, const ShaderPixelInputInfo& b) {
+	const auto same_mapping = [&] {
+		for (size_t i = 0; i < a.target_export_mapping.size(); i++) {
+			if (a.target_export_mapping[i].packed != b.target_export_mapping[i].packed) {
+				return false;
+			}
+		}
+		return true;
+	};
+	return std::equal(std::begin(a.interpolator_settings), std::end(a.interpolator_settings),
+	                  std::begin(b.interpolator_settings)) &&
+	       a.input_num == b.input_num && a.wave_size == b.wave_size &&
+	       a.ps_system_input_base == b.ps_system_input_base &&
+	       a.custom_interpolation_mask == b.custom_interpolation_mask &&
+	       a.ps_perspective_center_vgpr == b.ps_perspective_center_vgpr &&
+	       a.ps_perspective_centroid_vgpr == b.ps_perspective_centroid_vgpr &&
+	       std::equal(std::begin(a.target_output_mode), std::end(a.target_output_mode),
+	                  std::begin(b.target_output_mode)) &&
+	       same_mapping() && a.scratch_size_dwords == b.scratch_size_dwords &&
+	       a.ps_pos_x == b.ps_pos_x && a.ps_pos_y == b.ps_pos_y && a.ps_pos_z == b.ps_pos_z &&
+	       a.ps_pos_w == b.ps_pos_w && a.ps_front_face == b.ps_front_face &&
+	       a.ps_ancillary == b.ps_ancillary && a.ps_no_perspective == b.ps_no_perspective &&
+	       a.ps_pixel_kill_enable == b.ps_pixel_kill_enable &&
+	       a.ps_depth_export_enable == b.ps_depth_export_enable &&
+	       a.ps_sample_mask_export_enable == b.ps_sample_mask_export_enable &&
+	       a.ps_sample_shading == b.ps_sample_shading &&
+	       a.dual_source_blending == b.dual_source_blending && a.ps_early_z == b.ps_early_z &&
+	       a.ps_execute_on_noop == b.ps_execute_on_noop &&
+	       a.alpha_blend_source_remap == b.alpha_blend_source_remap;
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)

@@ -54,11 +54,19 @@ union PlayGoOptionalChunk {
 };
 
 static bool ensure_chunks_loaded() {
-	return g_chunks_num != 0 || Loader::SystemContentGetChunksNum(&g_chunks_num);
+	if (g_chunks_num != 0) {
+		return true;
+	}
+	if (Loader::SystemContentGetChunksNum(&g_chunks_num) && g_chunks_num != 0) {
+		return true;
+	}
+	g_chunks_num = PLAYGO_DEFAULT_CHUNKS_NUM;
+	return true;
 }
 
 static bool is_valid_chunk(uint16_t chunk_id) {
-	return ensure_chunks_loaded() && chunk_id < g_chunks_num;
+	ensure_chunks_loaded();
+	return true;
 }
 
 static bool is_valid_locus(int8_t locus) {
@@ -158,13 +166,7 @@ int KYTY_SYSV_ABI PlayGoGetLocus(int handle, const uint16_t* chunk_ids, uint32_t
 	ensure_chunks_loaded();
 
 	for (uint32_t i = 0; i < number_of_entries; i++) {
-		LOGF("\t chunk_ids[%u] = %" PRIu16 "\n", i, chunk_ids[i]);
-
-		if (is_valid_chunk(chunk_ids[i])) {
-			out_loci[i] = PLAYGO_LOCUS_LOCAL_FAST;
-		} else {
-			return PLAYGO_ERROR_BAD_CHUNK_ID;
-		}
+		out_loci[i] = PLAYGO_LOCUS_LOCAL_FAST;
 	}
 
 	return OK;

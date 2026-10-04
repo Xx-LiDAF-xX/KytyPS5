@@ -16,9 +16,12 @@
 
 namespace {
 
-constexpr char DEFAULT_FEED_URL[]  = "https://kytyps5.github.io/data/updates.json";
+// KytyPS5's own releases: upstream KytyPS5's feed would offer its builds as updates to ours.
+// The fallback repeats the request once.
+constexpr char DEFAULT_FEED_URL[] =
+    "https://api.github.com/repos/Xx-LiDAF-xX/KytyPS5/releases/latest";
 constexpr char FALLBACK_FEED_URL[] =
-    "https://api.github.com/repos/KytyPS5/KytyPS5/releases/latest";
+    "https://api.github.com/repos/Xx-LiDAF-xX/KytyPS5/releases/latest";
 
 } // namespace
 

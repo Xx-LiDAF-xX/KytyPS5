@@ -5,6 +5,8 @@
 #include "common/profiler.h"
 #include "graphics/host_gpu/renderer/cache/streamBuffer.h"
 #include "graphics/host_gpu/renderer/commandScheduler.h"
+#include "graphics/host_gpu/renderer/debug.h"
+#include "graphics/host_gpu/renderer/gpuZones.h"
 #include "graphics/host_gpu/renderer/image/imageView.h"
 #include "graphics/host_gpu/renderer/renderTarget.h"
 #include "kernel/memory.h"
@@ -13,6 +15,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <fmt/format.h>
 #include <xxhash.h>
 
@@ -225,10 +228,25 @@ void Image::Transit(vk::ImageLayout destination_layout, vk::AccessFlags2 destina
 		destination_stage |=
 		    vk::PipelineStageFlagBits2::eAllGraphics | vk::PipelineStageFlagBits2::eComputeShader;
 	}
+	const auto old_state = backing.state;
 	const auto barriers =
 	    GetBarriers(destination_layout, destination_access, destination_stage, range);
 	if (barriers.empty()) {
 		return;
+	}
+	if (g_render_debug_counters.counting.load(std::memory_order_relaxed)) [[unlikely]] {
+		g_render_debug_counters.image_barriers.fetch_add(1, std::memory_order_relaxed);
+	}
+	if (g_render_debug_counters.log_barriers.load(std::memory_order_relaxed)) [[unlikely]] {
+		std::printf("draw-log barrier: image=%ux%u format=%d depth=%u layout %d->%d "
+		            "access 0x%llx->0x%llx\n",
+		            info.extent.width, info.extent.height, static_cast<int>(backing.format),
+		            static_cast<uint32_t>(info.IsDepth()), static_cast<int>(old_state.layout),
+		            static_cast<int>(destination_layout),
+		            static_cast<unsigned long long>(
+		                static_cast<vk::AccessFlags2::MaskType>(old_state.access_mask)),
+		            static_cast<unsigned long long>(
+		                static_cast<vk::AccessFlags2::MaskType>(destination_access)));
 	}
 	m_scheduler.EndRendering();
 	vk::DependencyInfo dependency {};
@@ -261,6 +279,7 @@ void Image::Upload(std::span<const vk::BufferImageCopy> copies, vk::Buffer buffe
 	dependency.imageMemoryBarrierCount  = static_cast<uint32_t>(image_barriers.size());
 	dependency.pImageMemoryBarriers     = image_barriers.data();
 	auto command                        = m_scheduler.Current().Handle();
+	GpuZones::Mark(command, DrainStats::Zone::ImageCopy);
 	command.pipelineBarrier2(dependency);
 	command.copyBufferToImage(buffer, backing.image, vk::ImageLayout::eTransferDstOptimal,
 	                          static_cast<uint32_t>(copies.size()), copies.data());
@@ -301,6 +320,7 @@ void Image::Download(std::span<const vk::BufferImageCopy> copies, vk::Buffer buf
 	dependency.imageMemoryBarrierCount  = static_cast<uint32_t>(image_barriers.size());
 	dependency.pImageMemoryBarriers     = image_barriers.data();
 	auto command                        = m_scheduler.Current().Handle();
+	GpuZones::Mark(command, DrainStats::Zone::ImageCopy);
 	command.pipelineBarrier2(dependency);
 	command.copyImageToBuffer(backing.image, vk::ImageLayout::eTransferSrcOptimal, buffer,
 	                          static_cast<uint32_t>(copies.size()), copies.data());
@@ -380,6 +400,7 @@ void Image::CopyImage(Image& source) {
 		return;
 	}
 	auto command = m_scheduler.Current().Handle();
+	GpuZones::Mark(command, DrainStats::Zone::ImageCopy);
 	source.Transit(vk::ImageLayout::eTransferSrcOptimal, vk::AccessFlagBits2::eTransferRead, {},
 	               command);
 	Transit(vk::ImageLayout::eTransferDstOptimal, vk::AccessFlagBits2::eTransferWrite, {}, command);
@@ -422,6 +443,7 @@ void Image::Resolve(Image& source, const ImageSubresourceRange& source_range,
 
 	m_scheduler.EndRendering();
 	auto command = m_scheduler.Current().Handle();
+	GpuZones::Mark(command, DrainStats::Zone::ImageCopy);
 	source.Transit(vk::ImageLayout::eTransferSrcOptimal, vk::AccessFlagBits2::eTransferRead,
 	               resolved_source_range, command);
 	Transit(vk::ImageLayout::eTransferDstOptimal, vk::AccessFlagBits2::eTransferWrite,
@@ -489,6 +511,7 @@ void Image::CopyImageWithBuffer(Image& source, Buffer& buffer) {
 	dependency.bufferMemoryBarrierCount = 1;
 	dependency.pBufferMemoryBarriers    = &barrier;
 	auto command                        = m_scheduler.Current().Handle();
+	GpuZones::Mark(command, DrainStats::Zone::ImageCopy);
 	source.Transit(vk::ImageLayout::eTransferSrcOptimal, vk::AccessFlagBits2::eTransferRead, {},
 	               command);
 	Transit(vk::ImageLayout::eTransferDstOptimal, vk::AccessFlagBits2::eTransferWrite, {}, command);
@@ -571,6 +594,7 @@ void Image::CopyMip(Image& source, uint32_t mip, uint32_t layer) {
 		copy.extent         = {width, height, depth};
 	}
 	auto command = m_scheduler.Current().Handle();
+	GpuZones::Mark(command, DrainStats::Zone::ImageCopy);
 	Transit(vk::ImageLayout::eTransferDstOptimal, vk::AccessFlagBits2::eTransferWrite, {}, command);
 	source.Transit(vk::ImageLayout::eTransferSrcOptimal, vk::AccessFlagBits2::eTransferRead, {},
 	               command);
@@ -675,6 +699,7 @@ Prospero::BufferFormat RenderTargetTransferFormat(uint32_t bytes_per_element) {
 Image::Image(GraphicContext& graphics, CommandScheduler& scheduler, const ImageInfo& image_info)
     : info(image_info), m_graphics(graphics), m_scheduler(scheduler) {
 	KYTY_PROFILER_FUNCTION();
+	g_allocation_counters.images_created.fetch_add(1, std::memory_order_relaxed);
 	ImageOps::Validate(info);
 	m_cpu_dirty =
 	    !info.data.Empty() && info.metadata.compression == VideoOutCompression::Uncompressed;
@@ -740,6 +765,7 @@ uint64_t Image::HashGuestEdges() const {
 
 Image::~Image() {
 	KYTY_PROFILER_FUNCTION();
+	g_allocation_counters.images_destroyed.fetch_add(1, std::memory_order_relaxed);
 	for (const auto& cached: views) {
 		if (cached.view != nullptr) {
 			m_graphics.device.destroyImageView(cached.view, nullptr);

@@ -31,9 +31,22 @@ struct GraphicContext {
 	bool                               sample_rate_shading_enabled           = false;
 	bool                               shader_image_int64_atomics_enabled    = false;
 	// bool fp64_denorm_preserve = false; // Temporarily disabled.
+	// Layout support is sufficient for static pipeline feedback flags. Dynamic state is optional.
 	bool                               attachment_feedback_loop_enabled      = false;
+	bool                                      attachment_feedback_loop_dynamic_enabled = false;
 	bool                               provoking_vertex_last_enabled         = false;
+	// VK_EXT_conditional_rendering: lets GPU-written DCC clear keys be applied without readback.
+	bool                               conditional_rendering_enabled         = false;
+	// VK_EXT_graphics_pipeline_library: compile pipeline stages as libraries and link them.
+	bool                               pipeline_library_enabled              = false;
+	bool                               pipeline_library_fast_linking         = false;
+	// VK_KHR_pipeline_executable_properties, enabled only for KYTY_DEBUG_PIPELINE_STATS.
+	bool                               pipeline_executable_info_enabled      = false;
 	bool                               supports_block_texel_view              = false;
+	// Storage buffer word accesses leave their range check to robustBufferAccess2, and storage
+	// buffer ranges are rounded down to whole dwords (see
+	// ShaderRecompiler::SetHardwareStorageBufferBounds).
+	bool                               hardware_storage_buffer_bounds         = false;
 	bool                                      mesh_shader_enabled                   = false;
 	vk::PhysicalDeviceMeshShaderPropertiesEXT mesh_shader_properties                = {};
 	uint32_t                           subgroup_size                         = 0;

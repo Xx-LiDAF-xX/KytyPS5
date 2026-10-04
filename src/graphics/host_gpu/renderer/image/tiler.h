@@ -106,6 +106,14 @@ private:
 		uint32_t pipeline_slot = 0;
 		uint64_t params_offset = 0;
 	};
+	struct Scratch {
+		vk::Buffer    buffer     = nullptr;
+		VmaAllocation allocation = nullptr;
+		uint64_t      size       = 0; // Bytes requested.
+		uint64_t      capacity   = 0; // Bytes allocated.
+	};
+	// Scratch buffers the GPU is done with, for reuse (see AllocateScratch).
+	struct ScratchPool;
 	struct StorageBinding {
 		vk::DescriptorBufferInfo info;
 		uint32_t                 base = 0;
@@ -116,6 +124,7 @@ private:
 	                                             uint64_t active, uint32_t remaining,
 	                                             uint64_t alignment, uint64_t max_range,
 	                                             uint32_t max_groups) noexcept;
+	void                          DeferRelease(Scratch scratch);
 	void Prepare(bool tile, uint64_t tiled_capacity, uint64_t linear_capacity,
 	             std::span<const GpuTileInfo> infos, uint64_t source_base, uint64_t target_base,
 	             std::vector<Dispatch>& dispatches);
@@ -137,6 +146,8 @@ private:
 	vk::Pipeline                            m_d24_to_d16  = nullptr;
 	vk::Pipeline                            m_d32_to_d16  = nullptr;
 	vk::Pipeline                            m_swap_bgra16 = nullptr;
+	// Shared with the deferred operations that return buffers, which may outlive this manager.
+	std::shared_ptr<ScratchPool>            m_scratch_pool;
 };
 
 } // namespace Libs::Graphics

@@ -29,6 +29,14 @@
 #include <filesystem>
 #include <thread>
 
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#undef DeleteFile
+#undef CreateDirectory
+#undef CopyFile
+#endif
+
 namespace Emulator {
 
 static void PrintSystemInfo() {
@@ -130,6 +138,9 @@ static void Init(const Config::ConfigOptions& cfg, const std::filesystem::path& 
 	subsystems.Initialize<Config::Lifecycle>();
 	Config::Load(cfg);
 	subsystems.Initialize<Log::Lifecycle>();
+	if (Config::AutoSpecOptimizationEnabled()) {
+		Config::ApplyAutoOptimization(true);
+	}
 
 	if (Common::File::IsFileExisting(param_json)) {
 		Loader::SystemContentLoadParamSfo(param_json);
@@ -163,19 +174,19 @@ static void LoadElf(const std::filesystem::path& elf, bool dbg_print_reloc = fal
 	}
 
 	if (!save_name.empty()) {
-		rt->SaveProgram(program, Libs::LibKernel::FileSystem::GetRealFilename(
-		                             Common::PathToGenericString(save_name)));
+		rt->SaveProgram(program, save_name);
 	}
 }
 
 static void Execute(const std::filesystem::path& game_patch) {
-	auto           patch_path = game_patch;
+	static std::filesystem::path s_patch_path;
+	s_patch_path = game_patch;
 	Common::Thread guest_thread(
 	    [](void* param) {
 		    auto* rt = Common::Singleton<Loader::RuntimeLinker>::Instance();
 		    rt->Execute(*static_cast<const std::filesystem::path*>(param));
 	    },
-	    &patch_path);
+	    &s_patch_path);
 	Libs::Graphics::WindowRun();
 	std::quick_exit(0);
 }
@@ -199,6 +210,12 @@ void Run(const RunOptions& options) {
 	std::string title_id;
 	if (Loader::SystemContentParamSfoGetString("TITLE_ID", &title_id) && !title_id.empty()) {
 		Log::WriteToConsoleAndLog(fmt::format("Title ID: {}\n", title_id));
+	} else {
+		std::string dir_name = options.app0_dir.filename().string();
+		if (dir_name.size() == 9 && (dir_name.starts_with("PPSA") || dir_name.starts_with("CUSA"))) {
+			title_id = dir_name;
+			Log::WriteToConsoleAndLog(fmt::format("Title ID (from directory): {}\n", title_id));
+		}
 	}
 
 	int ok = atexit(KytyClose);
@@ -216,9 +233,48 @@ void Run(const RunOptions& options) {
 	auto* rt = Common::Singleton<Loader::RuntimeLinker>::Instance();
 	Libs::InitAll(rt->Symbols());
 
-	LoadElf(options.elf);
+	// KYTY_DEBUG_SAVE_ELF=<host path> also writes the executable as a plain ELF, to disassemble the
+	// guest code that KYTY_DEBUG_CALL_COUNTS traces point at.
+	const char* save_elf = std::getenv("KYTY_DEBUG_SAVE_ELF");
+	LoadElf(options.elf, false,
+	        save_elf != nullptr ? std::filesystem::path(save_elf) : std::filesystem::path());
 
-	Execute(options.game_patch);
+	std::filesystem::path patch_path = options.game_patch;
+	if (patch_path.empty() && !title_id.empty()) {
+		const std::string patch_filename = title_id + ".json";
+		std::vector<std::filesystem::path> candidates;
+
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+		wchar_t exe_buf[MAX_PATH] = {};
+		if (GetModuleFileNameW(nullptr, exe_buf, MAX_PATH) > 0) {
+			const auto exe_dir = std::filesystem::path(exe_buf).parent_path();
+			candidates.push_back(exe_dir / "_Patches" / patch_filename);
+			candidates.push_back(exe_dir / patch_filename);
+		}
+#endif
+		candidates.push_back(std::filesystem::current_path() / "_Patches" / patch_filename);
+		candidates.push_back(std::filesystem::current_path() / patch_filename);
+		candidates.push_back(options.app0_dir / "_Patches" / patch_filename);
+		candidates.push_back(options.app0_dir / patch_filename);
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+		candidates.push_back(std::filesystem::path("C:/Users/TAPIOCA/Desktop/_Patches") / patch_filename);
+		candidates.push_back(std::filesystem::path("C:/Users/TAPIOCA/Desktop") / patch_filename);
+#endif
+
+		for (const auto& candidate : candidates) {
+			if (Common::File::IsFileExisting(candidate)) {
+				patch_path = candidate;
+				Log::WriteToConsoleAndLog(
+				    fmt::format("Auto-detected and applying game patch: {}\n", Common::PathToString(candidate)));
+				break;
+			}
+		}
+	} else if (!patch_path.empty()) {
+		Log::WriteToConsoleAndLog(
+		    fmt::format("Applying game patch: {}\n", Common::PathToString(patch_path)));
+	}
+
+	Execute(patch_path);
 }
 
 } // namespace Emulator

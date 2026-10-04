@@ -19,12 +19,14 @@
 #include "graphics/presentation/videoOut.h"
 #include "graphics/presentation/window.h"
 #include "graphics/presentation/window/windowInternal.h"
+#include "graphics/shader/recompiler/ShaderRecompiler.h"
 #include "kernel/memory.h"
 #include "libs/controller.h"
 #include "loader/systemContent.h"
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fmt/format.h>
 #include <memory>
@@ -443,14 +445,20 @@ static vk::Device VulkanCreateDevice(GraphicContext& graphics,
 	vk::PhysicalDeviceFeatures2 supported_features2 {};
 	supported_features2.pNext = mesh_extension ? static_cast<void*>(&supported_mesh)
 	                                           : static_cast<void*>(&supported_features13);
-	const bool feedback_extensions =
-	    HasExtension(device_extensions, VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME) &&
-	    HasExtension(device_extensions, VK_EXT_ATTACHMENT_FEEDBACK_LOOP_DYNAMIC_STATE_EXTENSION_NAME);
+	const bool feedback_layout_extension =
+	    HasExtension(device_extensions, VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME);
+	const bool feedback_dynamic_extension =
+	    feedback_layout_extension &&
+	    HasExtension(device_extensions,
+		             VK_EXT_ATTACHMENT_FEEDBACK_LOOP_DYNAMIC_STATE_EXTENSION_NAME);
 	vk::PhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT feedback_layout {};
 	vk::PhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT feedback_dynamic {};
-	if (feedback_extensions) {
+	if (feedback_dynamic_extension) {
 		feedback_dynamic.pNext = supported_features2.pNext;
-		feedback_layout.pNext  = &feedback_dynamic;
+		supported_features2.pNext = &feedback_dynamic;
+	}
+	if (feedback_layout_extension) {
+		feedback_layout.pNext     = supported_features2.pNext;
 		supported_features2.pNext = &feedback_layout;
 	}
 	const bool provoking_extension =
@@ -460,12 +468,27 @@ static vk::Device VulkanCreateDevice(GraphicContext& graphics,
 		provoking_vertex.pNext = supported_features2.pNext;
 		supported_features2.pNext = &provoking_vertex;
 	}
-	const bool image_atomic_int64_extension =
-	    HasExtension(device_extensions, VK_EXT_SHADER_IMAGE_ATOMIC_INT64_EXTENSION_NAME);
-	vk::PhysicalDeviceShaderImageAtomicInt64FeaturesEXT image_atomic_int64 {};
-	if (image_atomic_int64_extension) {
-		image_atomic_int64.pNext = supported_features2.pNext;
-		supported_features2.pNext = &image_atomic_int64;
+	const bool conditional_rendering_extension =
+	    HasExtension(device_extensions, VK_EXT_CONDITIONAL_RENDERING_EXTENSION_NAME);
+	vk::PhysicalDeviceConditionalRenderingFeaturesEXT conditional_rendering {};
+	if (conditional_rendering_extension) {
+		conditional_rendering.pNext = supported_features2.pNext;
+		supported_features2.pNext   = &conditional_rendering;
+	}
+	const bool executable_properties_extension =
+	    HasExtension(device_extensions, VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
+	vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR executable_properties {};
+	if (executable_properties_extension) {
+		executable_properties.pNext = supported_features2.pNext;
+		supported_features2.pNext    = &executable_properties;
+	}
+	const bool pipeline_library_extension =
+	    HasExtension(device_extensions, VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME) &&
+	    HasExtension(device_extensions, VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME);
+	vk::PhysicalDeviceGraphicsPipelineLibraryFeaturesEXT pipeline_library {};
+	if (pipeline_library_extension) {
+		pipeline_library.pNext    = supported_features2.pNext;
+		supported_features2.pNext = &pipeline_library;
 	}
 	physical_device.getFeatures2(&supported_features2);
 	graphics.shader_image_int64_atomics_enabled = image_atomic_int64.shaderImageInt64Atomics;
@@ -500,6 +523,11 @@ static vk::Device VulkanCreateDevice(GraphicContext& graphics,
 	if (graphics.mesh_shader_enabled) {
 		subgroup_size_control.pNext = &graphics.mesh_shader_properties;
 	}
+	vk::PhysicalDeviceRobustness2PropertiesEXT robustness2_properties {};
+	if (robustness2_ext_enabled) {
+		robustness2_properties.pNext = properties2.pNext;
+		properties2.pNext            = &robustness2_properties;
+	}
 	physical_device.getProperties2(&properties2);
 
 	graphics.subgroup_size                 = properties11.subgroupSize;
@@ -518,11 +546,31 @@ static vk::Device VulkanCreateDevice(GraphicContext& graphics,
 	     graphics.compute_subgroup_size_control_enabled ? "true" : "false",
 	     graphics.SupportsComputeWave64() ? "true" : "false");
 	graphics.provoking_vertex_last_enabled = provoking_extension && provoking_vertex.provokingVertexLast;
+	graphics.conditional_rendering_enabled =
+	    conditional_rendering_extension && conditional_rendering.conditionalRendering;
+	graphics.pipeline_library_enabled =
+	    pipeline_library_extension && pipeline_library.graphicsPipelineLibrary;
+	if (graphics.pipeline_library_enabled) {
+		vk::PhysicalDeviceGraphicsPipelineLibraryPropertiesEXT library_properties {};
+		vk::PhysicalDeviceProperties2                          library_properties2 {};
+		library_properties2.pNext = &library_properties;
+		physical_device.getProperties2(&library_properties2);
+		graphics.pipeline_library_fast_linking =
+		    library_properties.graphicsPipelineLibraryFastLinking == VK_TRUE;
+	}
+	LOGF("Vulkan graphics pipeline library: %s fast_linking=%s\n",
+	     graphics.pipeline_library_enabled ? "true" : "false",
+	     graphics.pipeline_library_fast_linking ? "true" : "false");
+	LOGF("Vulkan conditional rendering: %s\n",
+	     graphics.conditional_rendering_enabled ? "true" : "false");
 	graphics.attachment_feedback_loop_enabled =
-	    feedback_extensions && feedback_layout.attachmentFeedbackLoopLayout &&
+	    feedback_layout_extension && feedback_layout.attachmentFeedbackLoopLayout;
+	graphics.attachment_feedback_loop_dynamic_enabled =
+	    graphics.attachment_feedback_loop_enabled && feedback_dynamic_extension &&
 	    feedback_dynamic.attachmentFeedbackLoopDynamicState;
-	LOGF("Vulkan depth feedback support: %s\n",
-	     graphics.attachment_feedback_loop_enabled ? "true" : "false");
+	LOGF("Vulkan depth feedback support: layout=%s dynamic=%s\n",
+	     graphics.attachment_feedback_loop_enabled ? "true" : "false",
+	     graphics.attachment_feedback_loop_dynamic_enabled ? "true" : "false");
 	if (graphics.mesh_shader_enabled) {
 		LOGF("Vulkan MeshEXT: invocations=%u vertices=%u primitives=%u shared=%u\n",
 		     graphics.mesh_shader_properties.maxMeshWorkGroupInvocations,
@@ -595,28 +643,61 @@ static vk::Device VulkanCreateDevice(GraphicContext& graphics,
 	features13.subgroupSizeControl =
 	    graphics.compute_subgroup_size_control_enabled ? VK_TRUE : VK_FALSE;
 
-	LOGF("Vulkan robustness: robustImageAccess=%s robustImageAccess2=%s\n",
+	// Storage buffer range checks can be left to the device when out-of-range dword accesses are
+	// defined (robustBufferAccess2, checked in units of at most a dword) and a range too short for
+	// one dword can be bound as a null descriptor. The hardware-buffer-bounds setting (on by
+	// default) enables it; KYTY_DEBUG_HW_BUFFER_BOUNDS=0/1 overrides it for A/B runs.
+	const char* hardware_bounds = std::getenv("KYTY_DEBUG_HW_BUFFER_BOUNDS");
+	graphics.hardware_storage_buffer_bounds =
+	    (hardware_bounds != nullptr ? std::strcmp(hardware_bounds, "0") != 0
+	                                : Config::HardwareBufferBoundsEnabled()) &&
+	    robustness2_ext_enabled && robustness2.robustBufferAccess2 == VK_TRUE &&
+	    robustness2.nullDescriptor == VK_TRUE &&
+	    robustness2_properties.robustStorageBufferAccessSizeAlignment <= sizeof(uint32_t);
+	ShaderRecompiler::SetHardwareStorageBufferBounds(graphics.hardware_storage_buffer_bounds);
+
+	LOGF("Vulkan robustness: robustImageAccess=%s robustImageAccess2=%s robustBufferAccess2=%s "
+	     "nullDescriptor=%s storage alignment=%u hardware storage buffer bounds=%s\n",
 	     features13.robustImageAccess == VK_TRUE ? "true" : "false",
-	     robustness2_ext_enabled && robustness2.robustImageAccess2 == VK_TRUE ? "true" : "false");
+	     robustness2_ext_enabled && robustness2.robustImageAccess2 == VK_TRUE ? "true" : "false",
+	     robustness2_ext_enabled && robustness2.robustBufferAccess2 == VK_TRUE ? "true" : "false",
+	     robustness2_ext_enabled && robustness2.nullDescriptor == VK_TRUE ? "true" : "false",
+	     static_cast<uint32_t>(robustness2_properties.robustStorageBufferAccessSizeAlignment),
+	     graphics.hardware_storage_buffer_bounds ? "on" : "off");
 
 	vk::DeviceCreateInfo create_info {};
 	vk::PhysicalDeviceMeshShaderFeaturesEXT mesh_features {};
 	mesh_features.pNext                 = &features13;
 	mesh_features.meshShader            = graphics.mesh_shader_enabled;
-	feedback_dynamic.pNext =
+	create_info.pNext =
 	    mesh_extension ? static_cast<void*>(&mesh_features) : static_cast<void*>(&features13);
-	create_info.pNext = graphics.attachment_feedback_loop_enabled
-	                        ? static_cast<void*>(&feedback_layout)
-	                        : feedback_dynamic.pNext;
+	if (graphics.attachment_feedback_loop_dynamic_enabled) {
+		feedback_dynamic.pNext = const_cast<void*>(create_info.pNext);
+		create_info.pNext      = &feedback_dynamic;
+	}
+	if (graphics.attachment_feedback_loop_enabled) {
+		feedback_layout.pNext = const_cast<void*>(create_info.pNext);
+		create_info.pNext     = &feedback_layout;
+	}
 	if (graphics.provoking_vertex_last_enabled) {
 		provoking_vertex.pNext = const_cast<void*>(create_info.pNext);
 		provoking_vertex.transformFeedbackPreservesProvokingVertex = VK_FALSE;
 		create_info.pNext = &provoking_vertex;
 	}
-	if (graphics.shader_image_int64_atomics_enabled) {
-		image_atomic_int64.pNext = const_cast<void*>(create_info.pNext);
-		image_atomic_int64.sparseImageInt64Atomics = VK_FALSE;
-		create_info.pNext = &image_atomic_int64;
+	if (graphics.conditional_rendering_enabled) {
+		conditional_rendering.pNext                         = const_cast<void*>(create_info.pNext);
+		conditional_rendering.inheritedConditionalRendering = VK_FALSE;
+		create_info.pNext                                   = &conditional_rendering;
+	}
+	if (graphics.pipeline_library_enabled) {
+		pipeline_library.pNext = const_cast<void*>(create_info.pNext);
+		create_info.pNext      = &pipeline_library;
+	}
+	graphics.pipeline_executable_info_enabled =
+	    executable_properties_extension && executable_properties.pipelineExecutableInfo;
+	if (graphics.pipeline_executable_info_enabled) {
+		executable_properties.pNext = const_cast<void*>(create_info.pNext);
+		create_info.pNext           = &executable_properties;
 	}
 	create_info.pQueueCreateInfos       = &queue_create_info;
 	create_info.queueCreateInfoCount    = 1;
@@ -826,9 +907,11 @@ void WindowContext::CreateVulkan() {
 	VulkanCheckInstanceVersion();
 
 	vk::ApplicationInfo app_info {};
-	app_info.pApplicationName   = "Kyty";
+	// The product name (KYTY_PRODUCT_NAME), spelled out here so this file does not rebuild with
+	// every commit's version header.
+	app_info.pApplicationName   = "KytyPS5";
 	app_info.applicationVersion = 1;
-	app_info.pEngineName        = "Kyty";
+	app_info.pEngineName        = "KytyPS5";
 	app_info.engineVersion      = 1;
 	app_info.apiVersion         = VULKAN_TARGET_API_VERSION; // NOLINT
 
@@ -986,15 +1069,28 @@ void WindowContext::CreateVulkan() {
 		                             VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME,
 		                             VK_EXT_MESH_SHADER_EXTENSION_NAME,
 		                             VK_KHR_WORKGROUP_MEMORY_EXPLICIT_LAYOUT_EXTENSION_NAME,
-		                             VK_EXT_DEPTH_RANGE_UNRESTRICTED_EXTENSION_NAME}) {
+		                             VK_EXT_DEPTH_RANGE_UNRESTRICTED_EXTENSION_NAME,
+		                             VK_EXT_CONDITIONAL_RENDERING_EXTENSION_NAME,
+		                             VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME,
+		                             VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME}) {
 			if (HasExtension(available_extensions, extension)) {
 				device_extensions.push_back(extension);
 			}
 		}
-		if (HasExtension(available_extensions, VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME) &&
-		    HasExtension(available_extensions, VK_EXT_ATTACHMENT_FEEDBACK_LOOP_DYNAMIC_STATE_EXTENSION_NAME)) {
+		// Debugging aid: the driver's statistics and ISA for chosen pipelines (see shaders.cpp).
+		if (std::getenv("KYTY_DEBUG_PIPELINE_STATS") != nullptr &&
+		    HasExtension(available_extensions,
+		                 VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME)) {
+			device_extensions.push_back(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
+		}
+		if (HasExtension(available_extensions,
+		                 VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME)) {
 			device_extensions.push_back(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME);
-			device_extensions.push_back(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_DYNAMIC_STATE_EXTENSION_NAME);
+			if (HasExtension(available_extensions,
+			                 VK_EXT_ATTACHMENT_FEEDBACK_LOOP_DYNAMIC_STATE_EXTENSION_NAME)) {
+				device_extensions.push_back(
+				    VK_EXT_ATTACHMENT_FEEDBACK_LOOP_DYNAMIC_STATE_EXTENSION_NAME);
+			}
 		}
 	}
 

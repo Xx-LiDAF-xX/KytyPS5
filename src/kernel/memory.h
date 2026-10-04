@@ -115,7 +115,13 @@ int MapAutomaticMemory(uint64_t vaddr, size_t size, int type, int prot);
 bool                   TryWriteBacking(uint64_t vaddr, const void* data, uint64_t size);
 bool                   TryReadBacking(uint64_t vaddr, void* data, uint64_t size);
 bool                   TryReadGpuCleanBacking(uint64_t vaddr, void* data, uint64_t size);
-bool                   TryReadSparseBacking(uint64_t vaddr, void* data, uint64_t size);
+// Reads guest memory for Thread_Gpu's own use. Bytes the GPU has not written are read without
+// faulting even when GPU writes elsewhere protect their page; GPU-written bytes still read back.
+void                   ReadGuestOnGpuThread(uint64_t vaddr, void* data, uint64_t size);
+// Copies a range within one page when ReadGuestOnGpuThread would read it as a plain copy (no
+// GPU-dirty hint on the page); false otherwise, and nothing is read.
+bool                   TryReadGuestPlainOnGpuThread(uint64_t vaddr, void* data, uint64_t size);
+bool                   TryReadPrtBacking(uint64_t vaddr, void* data, uint64_t size);
 [[nodiscard]] uint64_t ClampRangeSize(uint64_t vaddr, uint64_t size);
 void                   WriteBacking(uint64_t vaddr, const void* data, uint64_t size) noexcept;
 void                   InvalidateMemory(uint64_t vaddr, uint64_t size);

@@ -229,7 +229,8 @@ void DefineDescriptors(EmitterState& state) {
 			const auto variable =
 			    state.builder.DefineGlobalVariable(TypePointer(state, storage, type), storage);
 			state.builder.AddName(variable, name);
-			state.builder.AddAnnotation(spv::OpDecorate, variable, spv::DecorationDescriptorSet, 0);
+			state.builder.AddAnnotation(spv::OpDecorate, variable, spv::DecorationDescriptorSet,
+			                            IR::NativeDescriptorSet(state.program.stage));
 			state.builder.AddAnnotation(spv::OpDecorate, variable, spv::DecorationBinding,
 			                            IR::NativeBinding(state.program.stage, binding.kind));
 			return variable;
@@ -526,6 +527,13 @@ void DefineInputs(EmitterState& state) {
 			state.builder.AddAnnotation(spv::OpDecorate, variable, spv::DecorationFlat);
 		}
 	}
+	if (state.program.stage == ShaderType::Pixel && state.requirements.subgroup_ballot) {
+		const auto variable = DefineInterfaceVariable(
+		    state, TypeBool(state), spv::StorageClassInput, "gl_HelperInvocation");
+		state.helper_invocation_variable = variable;
+		state.builder.AddAnnotation(spv::OpDecorate, variable, spv::DecorationBuiltIn,
+		                            spv::BuiltInHelperInvocation);
+	}
 }
 
 void DefineOutputs(EmitterState& state) {
@@ -544,10 +552,13 @@ void DefineOutputs(EmitterState& state) {
 		DefineMeshOutputs(state);
 		return;
 	}
-	if (state.program.stage == ShaderType::Vertex && clip_distance_count + cull_distance_count < 8u &&
-	    std::ranges::any_of(state.outputs, [](const OutputBinding& output) {
-		    return output.kind == IR::StageOutputKind::Position;
-	    })) {
+	if (state.program.stage == ShaderType::Vertex &&
+	    clip_distance_count + cull_distance_count < 8u &&
+	    std::ranges::any_of(
+	        state.outputs,
+	        [](const OutputBinding& output) {
+		        return output.kind == IR::StageOutputKind::Position;
+	        })) {
 		// Reserve one plane for the enabled PA_CL_CLIP_CNTL clipping-error cull.
 		state.invalid_position_clip_distance = clip_distance_count++;
 		state.outputs.push_back({{IR::StageOutputKind::ClipDistance,
@@ -667,7 +678,10 @@ void DefineModule(EmitterState& state) {
 
 	state.builder.RequireCapability(spv::CapabilityShader);
 	state.builder.RequireCapability(spv::CapabilitySignedZeroInfNanPreserve);
-	if (state.program.info.uses_dma) {
+	// Mesh shaders load their draw parameter record through a device address.
+	const bool physical_addresses =
+	    state.program.info.uses_dma || state.program.stage == ShaderType::Mesh;
+	if (physical_addresses) {
 		state.builder.RequireCapability(spv::CapabilityInt64);
 		state.builder.RequireCapability(spv::CapabilityPhysicalStorageBufferAddresses);
 		state.builder.RequireExtension("SPV_KHR_physical_storage_buffer");
@@ -726,7 +740,7 @@ void DefineModule(EmitterState& state) {
 		state.builder.RequireExtension("SPV_KHR_fragment_shader_barycentric");
 	}
 	state.builder.RequireExtension("SPV_KHR_float_controls");
-	state.builder.AddMemoryModel(state.program.info.uses_dma
+	state.builder.AddMemoryModel(physical_addresses
 	                                 ? spv::AddressingModelPhysicalStorageBuffer64
 	                                 : spv::AddressingModelLogical,
 	                             spv::MemoryModelGLSL450);
@@ -748,12 +762,12 @@ void DefineModule(EmitterState& state) {
 		state.builder.AddExecutionMode(state.main_func, spv::ExecutionModeRoundingModeRTE, 32u);
 	}
 	if (const auto* cs = ShaderWorkgroupInput(state.program.stage, state.input_info)) {
-		uint32_t    local_x = state.requirements.compute_derivatives ? 2u : 1u;
-		uint32_t    local_y = state.requirements.compute_derivatives ? 2u : 1u;
-		uint32_t    local_z = 1u;
-		local_x             = cs->threads_num[0] != 0u ? cs->threads_num[0] : local_x;
-		local_y             = cs->threads_num[1] != 0u ? cs->threads_num[1] : local_y;
-		local_z             = cs->threads_num[2] != 0u ? cs->threads_num[2] : local_z;
+		uint32_t local_x = state.requirements.compute_derivatives ? 2u : 1u;
+		uint32_t local_y = state.requirements.compute_derivatives ? 2u : 1u;
+		uint32_t local_z = 1u;
+		local_x          = cs->threads_num[0] != 0u ? cs->threads_num[0] : local_x;
+		local_y          = cs->threads_num[1] != 0u ? cs->threads_num[1] : local_y;
+		local_z          = cs->threads_num[2] != 0u ? cs->threads_num[2] : local_z;
 		if (state.lane_count == 2) {
 			local_x = ((local_x * local_y * local_z + 63u) / 64u) * 32u;
 			local_y = local_z = 1u;

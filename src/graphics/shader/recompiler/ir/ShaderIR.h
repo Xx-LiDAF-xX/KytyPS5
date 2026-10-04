@@ -105,8 +105,10 @@ struct BufferResource {
 	Prospero::BufferFormat descriptor_format  = Prospero::BufferFormat::kInvalid;
 	uint32_t               descriptor_swizzle = DstSel(4, 5, 6, 7);
 	uint32_t               image_alias        = NoImageAlias;
-	bool                   read               = false;
-	bool                   written            = false;
+	bool                   read               = false; // Loads or atomics.
+	bool                   written            = false; // Stores or atomics.
+	bool                   stored             = false; // Plain (non-atomic) stores.
+	bool                   loaded             = false; // Plain (non-atomic) loads.
 	bool                   atomic             = false;
 	bool                   formatted          = false;
 	bool                   scalar             = false;
@@ -300,7 +302,9 @@ static_assert(static_cast<uint32_t>(DescriptorBindingKind::Count) == 55u);
 
 struct PushData {
 	static constexpr uint32_t DwordCount = 32;
-	static constexpr uint32_t MeshDrawDwordCount = 6;
+	// Mesh draws reserve seven dwords: index_count, vertex offset, first
+	// instance, index element size, index address, and the slice base group.
+	static constexpr uint32_t        MeshDrawDwordCount = 7;
 	static constexpr uint32_t NoStart    = UINT32_MAX;
 	std::array<uint32_t, DwordCount> dwords {};
 
@@ -314,6 +318,12 @@ struct PushData {
 
 static_assert(sizeof(PushData) == 128);
 constexpr uint32_t NativePushConstantSize = sizeof(PushData);
+
+// Pixel shaders use descriptor set 1 and every other stage set 0, so a graphics pipeline's
+// vertex-side and pixel descriptor layouts are independent of each other.
+[[nodiscard]] constexpr uint32_t NativeDescriptorSet(ShaderType stage) {
+	return stage == ShaderType::Pixel ? 1u : 0u;
+}
 
 [[nodiscard]] constexpr uint32_t NativeBinding(ShaderType stage, DescriptorBindingKind kind) {
 	const uint32_t group = stage == ShaderType::Pixel                    ? 1u
@@ -526,6 +536,119 @@ struct UniformFillPlan {
 	std::array<Value, 4> values;
 };
 
+// One ResourcePlan value with identities, invariant phis, extract sources and immediates resolved.
+// Operands are node indices. Evaluation matches SrtWalker, including its failure cases.
+struct ResourceNode {
+	enum class Op : uint8_t {
+		Fail, // Unsupported instruction or immediate type.
+		Const,
+		UserData,   // aux: user-data index relative to ResourcePlan::user_data_base.
+		ShaderBase,
+		Forward,    // Phi invariant, bit cast, or extract of a two-word composite.
+		ReadConst,  // args[0]: SRT slot value; aux: slot.
+		ReadFirstLane, // args[0]: value; args[1]: EXEC mask node or NoNode.
+		RawAddress, // args: low, high, offset; imm: signed immediate offset.
+		RawBuffer,  // args: low, high, offset, records, word3 (NoNode for a malformed handle).
+		ExtractU64, // aux: component.
+		AddCarry,   // args: IAddCarry32 operands; aux: component (sum or carry).
+		ConstructU64,
+		IAdd32,
+		IAdd64,
+		ISub32,
+		ISub64,
+		IMul32,
+		IMul64,
+		UMin32,
+		ConvertF32U32,
+		ConvertU32F32,
+		FPMul32,
+		FPTrunc32,
+		FPIsNan32,
+		FPOrdLessThanEqual32,
+		FPOrdGreaterThanEqual32,
+		BitwiseAnd32,
+		BitwiseAnd64,
+		BitwiseOr32,
+		BitwiseXor32,
+		BitwiseNot32,
+		ShiftLeftLogical32,
+		ShiftLeftLogical64,
+		ShiftRightLogical32,
+		ShiftRightLogical64,
+		ShiftRightArithmetic32,
+		ShiftRightArithmetic64,
+		BitFieldUExtract,
+		BitFieldSExtract,
+		BitFieldInsert,
+		Select,
+		IEqual32,
+		INotEqual32,
+		ULessThan32,
+		UGreaterThan32,
+		SGreaterThanEqual32,
+		LogicalAnd,
+		LogicalOr,
+		LogicalXor,
+		LogicalNot,
+	};
+	static constexpr uint32_t NoNode   = UINT32_MAX;
+	static constexpr uint8_t  CleanSlot = 1u;
+
+	Op                      op    = Op::Fail;
+	uint8_t                 flags = 0;
+	uint32_t                aux   = 0;
+	std::array<uint32_t, 5> args {NoNode, NoNode, NoNode, NoNode, NoNode};
+	uint64_t                imm   = 0;
+};
+
+// Index-based form of a ResourcePlan, built once on the GPU thread before its first refresh.
+struct CompiledResourcePlan {
+	// Ordinary slots whose RawAddress nodes differ only in their immediate offset, at
+	// consecutive dwords: a refresh reads the run with one call per 64-byte block.
+	struct FlatRun {
+		uint32_t first  = 0; // Into run_entries; the first entry reads dword 0.
+		uint32_t count  = 0; // Entries.
+		uint32_t dwords = 0;
+	};
+	struct FlatRunEntry {
+		uint32_t slot        = 0; // srt_reads index.
+		uint32_t dword       = 0; // Within the run.
+		uint32_t flat_offset = 0; // srt_reads[slot].flat_offset.
+	};
+	static constexpr uint32_t MaxRunDwords = 64;
+
+	std::vector<ResourceNode>            nodes;
+	std::vector<uint32_t>                slots;       // Node per srt_reads entry.
+	std::vector<uint8_t>                 clean_slots; // Copy of ResourcePlan::clean_flat_slots.
+	std::vector<FlatRun>                 flat_runs;
+	std::vector<FlatRunEntry>            run_entries;
+	std::vector<uint8_t>                 in_run; // Per srt_reads entry; empty without runs.
+	std::vector<std::array<uint32_t, 8>> descriptors; // Nodes per descriptor source dword.
+	// Per descriptor source dword: the flat SRT offset when the dword is exactly a slot that the
+	// ordinary walker reads (so its value is already in the refreshed flat buffer), else NoNode.
+	std::vector<std::array<uint32_t, 8>> descriptor_slots;
+	std::vector<uint32_t>                key_counts;     // Indirect images, per descriptor source.
+	std::vector<uint32_t>                selector_masks; // Indirect images, per descriptor source.
+	std::vector<uint32_t>                conditions;     // Per control_flow block.
+	// Per control_flow block: the condition reads only flat SRT slots (besides user data, the
+	// shader base and pure operations). Every refresh reads those slots directly anyway, so the
+	// condition uses the direct values instead of strict reads.
+	std::vector<uint8_t>                 direct_conditions;
+	// Sources not guarded by any control_flow block start active; empty if a block is invalid.
+	std::vector<uint8_t>                 initial_active;
+	// Per control_flow block: no block reachable from its successors guards a source, so its
+	// condition and successors cannot change the active sources.
+	std::vector<uint8_t>                 inert_successors;
+	std::array<uint32_t, 4>              fill {ResourceNode::NoNode, ResourceNode::NoNode,
+	                                           ResourceNode::NoNode, ResourceNode::NoNode};
+	// Buffer, image and sampler descriptors are a pure function of these inputs and the active
+	// sources when the plan is memoizable (see MaterializationMemo).
+	bool                  memoizable = false;
+	bool                  memo_shader_base = false;
+	std::vector<uint32_t> memo_user_data; // User-data indices relative to user_data_base.
+	std::vector<uint32_t> memo_slots;     // Flat SRT slots.
+};
+
 // Resource analysis retained by the shader cache. It owns immutable descriptor/SRT,
 // condition and fill values without translated blocks, plus reusable evaluation scratch.
 struct ResourcePlan {
@@ -563,15 +686,48 @@ struct ResourcePlan {
 	bool                                resource_tracking_complete = false;
 	ShaderInfo                          info;
 	UniformFillPlan                     uniform_fill;
-	// GPU-thread scratch for nested clean/EXEC memos, activity and material keys.
-	mutable std::deque<EvaluationContext> evaluation_contexts;
+	// Reference walker instruction indices (GPU thread only; see Inst::EvaluationIndex).
 	mutable uint32_t                       evaluation_value_count = 0;
-	mutable uint32_t                       evaluation_depth       = 0;
-	mutable std::vector<uint8_t>            active_sources;
-	mutable std::vector<uint8_t>            visited_blocks;
-	mutable std::vector<uint32_t>           pending_blocks;
-	mutable std::vector<uint32_t>           material_keys;
+	mutable std::unique_ptr<CompiledResourcePlan> compiled;
+	// SrtEvaluator::FindActiveSources replay. A walk evaluates conditions in an order fixed by the
+	// outcomes so far, so the walks seen form a tree: a node names the block whose condition comes
+	// next and the node each outcome leads to; a leaf holds the sources that walk found active.
+	struct ActiveTraceStep {
+		uint32_t block   = 0;
+		uint8_t  outcome = 0; // 0 false, 1 true, 2 not evaluable (every successor followed).
+	};
+	struct ActiveTreeNode {
+		static constexpr uint32_t None = UINT32_MAX;
+		// A node with a block is a branch, one with sources a leaf, one with neither not filled in.
+		uint32_t                block   = None;
+		std::array<uint32_t, 3> next    = {None, None, None};
+		uint32_t                sources = None; // Offset in active_tree_sources.
+	};
+	// Evaluation scratch: nested clean/EXEC memos, activity, material keys and the learned walk
+	// tree. Each thread that refreshes plans uses its own slot (see ResourceScratchSlot).
+	struct Scratch {
+		std::deque<EvaluationContext>                 evaluation_contexts;
+		uint32_t                                      evaluation_depth = 0;
+		std::vector<uint8_t>                          active_sources;
+		std::vector<uint8_t>                          visited_blocks;
+		std::vector<uint32_t>                         pending_blocks;
+		std::vector<uint32_t>                         material_keys;
+		std::vector<std::pair<uint64_t, uint64_t>>    specialization_reads;
+		std::vector<ActiveTraceStep>                  active_trace;
+		std::vector<ActiveTreeNode>                   active_tree;
+		std::vector<uint8_t>                          active_tree_sources;
+	};
+	static constexpr uint32_t ScratchSlots = 2;
+	mutable std::array<Scratch, ScratchSlots> scratch;
+	[[nodiscard]] Scratch& ThreadScratch() const;
 };
+
+// The calling thread's ResourcePlan::Scratch slot: 0 for the GPU thread (and tests), others for
+// threads that refresh plans ahead of it. A slot must be used by one thread at a time.
+inline thread_local uint32_t t_resource_scratch_slot = 0;
+inline ResourcePlan::Scratch& ResourcePlan::ThreadScratch() const {
+	return scratch[t_resource_scratch_slot];
+}
 
 struct Program: ResourcePlan {
 	Program() = default;

@@ -14,7 +14,9 @@ namespace GamePatch {
 
 bool Apply(const std::filesystem::path& plan_path, Program* main_program,
            const std::vector<Program*>& programs);
+bool ApplyAutoFixes(Program* main_program, const std::vector<Program*>& programs);
 bool ApplyPending(Program* program);
+void ToggleRayTracingBypass(bool enable_raytracing);
 void Clear();
 
 } // namespace GamePatch

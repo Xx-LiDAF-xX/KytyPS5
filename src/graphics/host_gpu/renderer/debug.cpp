@@ -7,12 +7,32 @@
 #include "graphics/guest_gpu/gpu_defs.h"
 #include "graphics/guest_gpu/hardwareContext.h"
 #include "graphics/host_gpu/renderer/render.h"
+#include "kernel/memory.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
 #include <fmt/format.h>
+#include <mutex>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <unordered_map>
+#include <vector>
+#include <xxhash.h>
+
+// __rdtsc: <intrin.h> is MSVC's (and clang-cl's); GCC and Clang elsewhere declare it in
+// <x86intrin.h>.
+#if defined(_MSC_VER)
+#include <intrin.h>
+#else
+#include <x86intrin.h>
+#endif
 
 namespace Libs::Graphics {
 
@@ -601,6 +621,524 @@ static void AaCheck(const HW::AaSampleControl& c, const HW::AaConfig& cf) {
 			     cf.msaa_num_samples, cf.msaa_exposed_samples, cf.max_sample_dist);
 		}
 	}
+}
+
+uint64_t DrawPhaseTimer::Hash() {
+	static const uint64_t hash = [] {
+		const char* text = std::getenv("KYTY_DEBUG_DRAW_PHASES");
+		if (text == nullptr) {
+			return uint64_t {0};
+		}
+		return std::strcmp(text, "all") == 0 ? AllDraws : std::strtoull(text, nullptr, 16);
+	}();
+	return hash;
+}
+
+uint64_t DrawPhaseTimer::Now() {
+	return __rdtsc();
+}
+
+// KYTY_DEBUG_FULL_BARRIERS_FILE=<path> turns them on only while that file exists (checked twice a
+// second): a route that needs the normal frame rate to get somewhere creates it on arrival.
+bool DebugFullBarriers() noexcept {
+	static const bool  enabled = std::getenv("KYTY_DEBUG_FULL_BARRIERS") != nullptr;
+	static const char* file    = std::getenv("KYTY_DEBUG_FULL_BARRIERS_FILE");
+	if (enabled || file == nullptr) {
+		return enabled;
+	}
+	static std::atomic<int64_t> next_check {0};
+	static std::atomic<bool>    present {false};
+	const auto                  now = std::chrono::steady_clock::now().time_since_epoch();
+	if (now.count() >= next_check.load(std::memory_order_relaxed)) {
+		next_check.store((now + std::chrono::milliseconds(500)).count(), std::memory_order_relaxed);
+		std::error_code error;
+		present.store(std::filesystem::exists(file, error), std::memory_order_relaxed);
+	}
+	return present.load(std::memory_order_relaxed);
+}
+
+// KYTY_DEBUG_SKIP_SHADERS_FILE=<path> skips them only while that file exists (checked twice a
+// second), like KYTY_DEBUG_FULL_BARRIERS_FILE.
+// Each shader is printed the first time it is skipped ("skip-shader: ps <hash>"), so a bisection
+// ends with the list of the shaders in its last half.
+bool DebugSkipShader(uint64_t shader_hash, DebugShaderKind kind, bool bisect) noexcept {
+	struct Entry {
+		uint64_t value;
+		uint64_t mask;
+		bool     pixel;
+		bool     vertex;
+		bool     compute;
+	};
+	static const std::vector<Entry> entries = [] {
+		std::vector<Entry> list;
+		for (const char* text = std::getenv("KYTY_DEBUG_SKIP_SHADERS"); text != nullptr;) {
+			const bool only_pixel   = std::strncmp(text, "p:", 2) == 0;
+			const bool only_compute = std::strncmp(text, "c:", 2) == 0;
+			text += only_pixel || only_compute ? 2 : 0;
+			char*      end   = nullptr;
+			const auto value = std::strtoull(text, &end, 16);
+			if (end == text) {
+				break;
+			}
+			Entry entry {value, ~uint64_t {0}, true, true, true};
+			if (*end == '/') {
+				text       = end + 1;
+				entry.mask = std::strtoull(text, &end, 16);
+				entry.value &= entry.mask;
+				entry.pixel   = !only_compute;
+				entry.vertex  = false;
+				entry.compute = !only_pixel;
+			}
+			list.push_back(entry);
+			text = *end == ',' ? end + 1 : nullptr;
+		}
+		return list;
+	}();
+	if (entries.empty() || shader_hash == 0) {
+		return false;
+	}
+	const bool listed = std::ranges::any_of(entries, [&](const Entry& entry) {
+		const bool kind_match = kind == DebugShaderKind::Pixel    ? entry.pixel
+		                        : kind == DebugShaderKind::Vertex ? entry.vertex
+		                                                          : entry.compute;
+		return kind_match && (bisect || entry.mask == ~uint64_t {0}) &&
+		       (shader_hash & entry.mask) == entry.value;
+	});
+	if (!listed) {
+		return false;
+	}
+	static const char* file = std::getenv("KYTY_DEBUG_SKIP_SHADERS_FILE");
+	if (file != nullptr) {
+		static std::atomic<int64_t> next_check {0};
+		static std::atomic<bool>    present {false};
+		const auto                  now = std::chrono::steady_clock::now().time_since_epoch();
+		if (now.count() >= next_check.load(std::memory_order_relaxed)) {
+			next_check.store((now + std::chrono::milliseconds(500)).count(),
+			                 std::memory_order_relaxed);
+			std::error_code error;
+			present.store(std::filesystem::exists(file, error), std::memory_order_relaxed);
+		}
+		if (!present.load(std::memory_order_relaxed)) {
+			return false;
+		}
+	}
+	static std::mutex            mutex;
+	static std::vector<uint64_t> reported;
+	const std::lock_guard        lock(mutex);
+	if (std::ranges::find(reported, shader_hash) == reported.end()) {
+		reported.push_back(shader_hash);
+		std::printf("skip-shader: %s %016" PRIx64 "\n",
+		            kind == DebugShaderKind::Pixel    ? "ps"
+		            : kind == DebugShaderKind::Vertex ? "vs"
+		                                              : "cs",
+		            shader_hash);
+	}
+	return true;
+}
+
+// Outside rendering: all earlier commands finish, and their writes are visible to everything
+// later.
+void RecordFullBarrier(vk::CommandBuffer command) noexcept {
+	vk::MemoryBarrier barrier {};
+	barrier.srcAccessMask = vk::AccessFlagBits::eMemoryWrite;
+	barrier.dstAccessMask = vk::AccessFlagBits::eMemoryRead | vk::AccessFlagBits::eMemoryWrite;
+	command.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
+	                        vk::PipelineStageFlagBits::eAllCommands, {}, 1, &barrier, 0, nullptr,
+	                        0, nullptr);
+}
+
+static std::atomic<bool> g_ab_off {false};
+
+static bool AbEnabled() {
+	static const bool enabled =
+	    DrawPhaseTimer::Hash() != 0 && std::getenv("KYTY_DEBUG_AB") != nullptr;
+	return enabled;
+}
+
+bool AbSelected(const char* feature) noexcept {
+	if (!AbEnabled()) {
+		return false;
+	}
+	const std::string_view features = std::getenv("KYTY_DEBUG_AB");
+	if (features == "1") {
+		return std::string_view(feature) == "reuse";
+	}
+	for (size_t begin = 0; begin <= features.size();) {
+		const auto end = std::min(features.find(',', begin), features.size());
+		if (features.substr(begin, end - begin) == feature) {
+			return true;
+		}
+		begin = end + 1;
+	}
+	return false;
+}
+
+// KYTY_DEBUG_AB_OFF=1 keeps the selected features off for the whole run instead of alternating
+// (to see a scene without them, e.g. for visual bisection).
+bool AbFeatureOff() noexcept {
+	static const bool forced = std::getenv("KYTY_DEBUG_AB_OFF") != nullptr;
+	return forced || g_ab_off.load(std::memory_order_relaxed);
+}
+
+namespace {
+
+struct ImageUploadEntry {
+	uint64_t size            = 0;
+	uint32_t width           = 0;
+	uint32_t height          = 0;
+	uint32_t guest_format    = 0;
+	uint32_t tile_mode       = 0;
+	uint64_t count           = 0;
+	uint64_t buffer_modified = 0;
+	// Staged uploads compared with the image's previous staged upload (RecordImageChunks): bytes
+	// compared, bytes in changed chunks, and runs of consecutive changed chunks.
+	uint64_t compared        = 0;
+	uint64_t changed         = 0;
+	uint64_t changed_runs    = 0;
+};
+
+// The previous staged upload of an image address: its size and a hash per chunk.
+struct ImageChunkHashes {
+	uint64_t              size = 0;
+	std::vector<uint64_t> hashes;
+};
+
+struct UploadStats {
+	std::mutex                                      mutex;
+	std::array<uint64_t, size_t(UploadSource::Count)> calls {};
+	std::array<uint64_t, size_t(UploadSource::Count)> bytes {};
+	// Keyed by source << 56 | 4 MiB region.
+	std::unordered_map<uint64_t, uint64_t>         regions;
+	std::unordered_map<uint64_t, ImageUploadEntry> images;
+	// Write faults per 4 KiB page.
+	std::unordered_map<uint64_t, uint64_t>         fault_pages;
+	// Kept across windows.
+	std::unordered_map<uint64_t, ImageChunkHashes> chunk_hashes;
+	uint64_t                                       compared = 0;
+	uint64_t                                       changed  = 0;
+};
+
+UploadStats& GetUploadStats() {
+	static UploadStats stats;
+	return stats;
+}
+
+void PrintUploadStats(double seconds) {
+	static constexpr std::array<const char*, size_t(UploadSource::Count)> Names {
+	    "buffer", "bda", "stream", "image", "fault", "bda-pass", "bda-sync", "kernel"};
+	auto&            stats = GetUploadStats();
+	std::scoped_lock lock {stats.mutex};
+	std::string      line = "uploads:";
+	for (size_t i = 0; i < stats.calls.size(); i++) {
+		line += fmt::format(" {}={:.0f}/s,{:.0f}KiB/s", Names[i], stats.calls[i] / seconds,
+		                    stats.bytes[i] / 1024.0 / seconds);
+	}
+	std::vector<std::pair<uint64_t, uint64_t>> regions(stats.regions.begin(), stats.regions.end());
+	std::sort(regions.begin(), regions.end(),
+	          [](const auto& a, const auto& b) { return a.second > b.second; });
+	line += " | regions:";
+	for (size_t i = 0; i < std::min<size_t>(regions.size(), 12); i++) {
+		line += fmt::format(" {}@0x{:x}={:.0f}KiB/s", Names[regions[i].first >> 56u],
+		                    (regions[i].first & ((uint64_t {1} << 56u) - 1)) << 22u,
+		                    regions[i].second / 1024.0 / seconds);
+	}
+	// How often each faulting page faulted in the window (about 90 frames at 18 fps): pages with
+	// 1, 2-15, 16-63, 64-127, 128-255, 256-511 and 512+ faults.
+	static constexpr std::array<uint64_t, 6> Limits {2, 16, 64, 128, 256, 512};
+	std::array<uint64_t, Limits.size() + 1>  buckets {};
+	for (const auto& [page, count]: stats.fault_pages) {
+		size_t bucket = 0;
+		while (bucket < Limits.size() && count >= Limits[bucket]) {
+			bucket++;
+		}
+		buckets[bucket]++;
+	}
+	line += fmt::format(" | fault pages={} (x1={} x2-15={} x16-63={} x64-127={} x128-255={} "
+	                    "x256-511={} x512+={})",
+	                    stats.fault_pages.size(), buckets[0], buckets[1], buckets[2], buckets[3],
+	                    buckets[4], buckets[5], buckets[6]);
+	line += fmt::format(" | staged changed={:.0f}KiB/s of compared={:.0f}KiB/s",
+	                    stats.changed / 1024.0 / seconds, stats.compared / 1024.0 / seconds);
+	std::printf("%s\n", line.c_str());
+	std::vector<std::pair<uint64_t, ImageUploadEntry>> images(stats.images.begin(),
+	                                                          stats.images.end());
+	std::sort(images.begin(), images.end(), [](const auto& a, const auto& b) {
+		return a.second.count * a.second.size > b.second.count * b.second.size;
+	});
+	for (size_t i = 0; i < std::min<size_t>(images.size(), 10); i++) {
+		const auto& [address, image] = images[i];
+		std::printf("uploads: image 0x%" PRIx64 " size=0x%" PRIx64 " %ux%u fmt=%u tile=%u "
+		            "uploads/s=%.1f KiB/s=%.0f buffer-modified=%" PRIu64 " changed=%.1f%%"
+		            " runs/upload=%.1f\n",
+		            address, image.size, image.width, image.height, image.guest_format,
+		            image.tile_mode, image.count / seconds,
+		            image.count * image.size / 1024.0 / seconds, image.buffer_modified,
+		            image.compared != 0 ? 100.0 * image.changed / image.compared : 0.0,
+		            image.compared != 0 ? static_cast<double>(image.changed_runs) * image.size /
+		                                      image.compared
+		                                : 0.0);
+	}
+	stats.compared = 0;
+	stats.changed  = 0;
+	stats.calls.fill(0);
+	stats.bytes.fill(0);
+	stats.regions.clear();
+	stats.images.clear();
+	stats.fault_pages.clear();
+}
+
+} // namespace
+
+bool UploadStatsEnabled() noexcept {
+	static const bool enabled =
+	    DrawPhaseTimer::Hash() != 0 && std::getenv("KYTY_DEBUG_UPLOADS") != nullptr;
+	return enabled;
+}
+
+void RecordUpload(UploadSource source, uint64_t address, uint64_t bytes) noexcept {
+	if (!UploadStatsEnabled()) {
+		return;
+	}
+	auto&            stats = GetUploadStats();
+	const auto       index = static_cast<uint64_t>(source);
+	std::scoped_lock lock {stats.mutex};
+	stats.calls[index]++;
+	stats.bytes[index] += bytes;
+	if (bytes != 0) {
+		stats.regions[index << 56u | address >> 22u] += bytes;
+	}
+	if (source == UploadSource::Fault) {
+		stats.fault_pages[address >> 12u]++;
+	}
+}
+
+void RecordImageUpload(uint64_t address, uint64_t size, uint32_t width, uint32_t height,
+                       uint32_t guest_format, uint32_t tile_mode, bool buffer_modified) noexcept {
+	if (!UploadStatsEnabled()) {
+		return;
+	}
+	auto&            stats = GetUploadStats();
+	std::scoped_lock lock {stats.mutex};
+	auto&            entry = stats.images[address];
+	entry.size             = size;
+	entry.width            = width;
+	entry.height           = height;
+	entry.guest_format     = guest_format;
+	entry.tile_mode        = tile_mode;
+	entry.count++;
+	entry.buffer_modified += buffer_modified ? 1 : 0;
+}
+
+void RecordImageChunks(uint64_t address, uint64_t size) noexcept {
+	if (!UploadStatsEnabled() || size == 0) {
+		return;
+	}
+	static constexpr uint64_t                ChunkSize = 64 * 1024;
+	static thread_local std::vector<uint8_t> bytes;
+	bytes.resize(size);
+	if (!Libs::LibKernel::Memory::TryReadBacking(address, bytes.data(), size)) {
+		return;
+	}
+	const auto            chunks = (size + ChunkSize - 1) / ChunkSize;
+	std::vector<uint64_t> hashes(chunks);
+	for (uint64_t i = 0; i < chunks; i++) {
+		const auto begin = i * ChunkSize;
+		hashes[i]        = XXH3_64bits(bytes.data() + begin, std::min(ChunkSize, size - begin));
+	}
+	auto&            stats = GetUploadStats();
+	std::scoped_lock lock {stats.mutex};
+	auto&            previous = stats.chunk_hashes[address];
+	if (previous.size == size) {
+		uint64_t changed = 0;
+		uint64_t runs    = 0;
+		for (uint64_t i = 0; i < chunks; i++) {
+			if (hashes[i] != previous.hashes[i]) {
+				changed += std::min(ChunkSize, size - i * ChunkSize);
+				runs += (i == 0 || hashes[i - 1] == previous.hashes[i - 1]) ? 1 : 0;
+			}
+		}
+		auto& entry = stats.images[address];
+		entry.compared += size;
+		entry.changed += changed;
+		entry.changed_runs += runs;
+		stats.compared += size;
+		stats.changed += changed;
+	}
+	previous.size   = size;
+	previous.hashes = std::move(hashes);
+}
+
+void DrawPhaseTimer::End(uint64_t pixel_hash) {
+	if (!active) {
+		return;
+	}
+	Mark(Tail);
+	active = false;
+	static constexpr std::array<const char*, Count> Names {
+	    "setup",    "vs-params", "ps-params",  "ps-program", "vs-program", "targets",  "stage-tex",
+	    "stage-smp", "stage-bind", "find-buf", "rebind-img", "buf-views",  "gfx-bind", "rt-acquire",
+	    "pipeline", "records",   "commit",     "record",     "tail"};
+	static constexpr std::array<const char*, ProbeCount> ProbeNames {
+	    "rt-image", "tex-image", "tex-describe", "buf-written", "buf-read", "buf-invalidate",
+	    "upload",   "find-finish", "stream-copy", "pending-ops", "bda",       "spec-reads",
+	    "refresh",  "prog-match",  "inputs-check", "upload-copy"};
+	static std::array<uint64_t, Count>      totals {};
+	static std::array<uint64_t, ProbeCount> probe_totals {};
+	static uint64_t draws        = 0;
+	static uint64_t other_draws  = 0;
+	static uint64_t other_ticks  = 0;
+	static auto     window_start = std::chrono::steady_clock::now();
+	static uint64_t window_tsc   = Now();
+	static uint64_t window_gpu   = g_gpu_busy_ns.load(std::memory_order_relaxed);
+	static std::array<uint64_t, 8> window_allocations {};
+	static std::array<uint64_t, 5> window_repeats {};
+	uint64_t        sum          = 0;
+	for (const auto ticks: current) {
+		sum += ticks;
+	}
+	// DRAW_INDEX_AUTO draws, also on their own (see Begin).
+	static std::array<uint64_t, Count> auto_totals {};
+	static uint64_t                    auto_draws = 0;
+	if (pixel_hash == Hash() || Hash() == AllDraws) {
+		for (uint32_t i = 0; i < Count; i++) {
+			totals[i] += current[i];
+		}
+		for (uint32_t i = 0; i < ProbeCount; i++) {
+			probe_totals[i] += probes[i];
+		}
+		draws++;
+		if (auto_kind) {
+			for (uint32_t i = 0; i < Count; i++) {
+				auto_totals[i] += current[i];
+			}
+			auto_draws++;
+		}
+	} else {
+		other_draws++;
+		other_ticks += sum;
+	}
+	const auto now = std::chrono::steady_clock::now();
+	if (now - window_start < std::chrono::seconds(5)) {
+		return;
+	}
+	// The window calibrates the time stamp counter against the steady clock.
+	const auto   tsc     = Now();
+	const double seconds = std::chrono::duration<double>(now - window_start).count();
+	const double to_us   = seconds * 1e6 / static_cast<double>(tsc - window_tsc);
+	const auto   gpu_ns  = g_gpu_busy_ns.load(std::memory_order_relaxed);
+	const std::array<uint64_t, 8> allocations {
+	    g_allocation_counters.buffers_created.load(std::memory_order_relaxed),
+	    g_allocation_counters.buffers_destroyed.load(std::memory_order_relaxed),
+	    g_allocation_counters.images_created.load(std::memory_order_relaxed),
+	    g_allocation_counters.images_destroyed.load(std::memory_order_relaxed),
+	    g_allocation_counters.game_buffers_created.load(std::memory_order_relaxed),
+	    g_allocation_counters.game_buffers_joined.load(std::memory_order_relaxed),
+	    g_allocation_counters.game_buffers_collected.load(std::memory_order_relaxed),
+	    g_allocation_counters.buffer_create_ns.load(std::memory_order_relaxed)};
+	uint64_t     all     = 0;
+	for (const auto ticks: totals) {
+		all += ticks;
+	}
+	std::string line = fmt::format("draw-phases: {:.1f}s draws/s={:.0f} us/draw={:.2f} ms/s={:.1f} "
+	                               "other draws/s={:.0f} other ms/s={:.1f} gpu-ms/s={:.1f}{} |",
+	                               seconds, draws / seconds, draws != 0 ? all * to_us / draws : 0.0,
+	                               all * to_us / 1000.0 / seconds, other_draws / seconds,
+	                               other_ticks * to_us / 1000.0 / seconds,
+	                               static_cast<double>(gpu_ns - window_gpu) / 1e6 / seconds,
+	                               !AbEnabled() ? "" : (AbFeatureOff() ? " ab=off" : " ab=on"));
+	for (uint32_t i = 0; i < Count; i++) {
+		line += fmt::format(" {}={:.2f}", Names[i], draws != 0 ? totals[i] * to_us / draws : 0.0);
+	}
+	const std::array<uint64_t, 5> repeats {
+	    g_binding_repeats.stages.load(std::memory_order_relaxed),
+	    g_binding_repeats.same_program.load(std::memory_order_relaxed),
+	    g_binding_repeats.same_images.load(std::memory_order_relaxed),
+	    g_binding_repeats.same_buffers.load(std::memory_order_relaxed),
+	    g_binding_repeats.same_all.load(std::memory_order_relaxed)};
+	const auto stages = static_cast<double>(std::max<uint64_t>(repeats[0] - window_repeats[0], 1));
+	line += fmt::format(" rep-prog%={:.0f} rep-img%={:.0f} rep-buf%={:.0f} rep-all%={:.0f}",
+	                    100.0 * static_cast<double>(repeats[1] - window_repeats[1]) / stages,
+	                    100.0 * static_cast<double>(repeats[2] - window_repeats[2]) / stages,
+	                    100.0 * static_cast<double>(repeats[3] - window_repeats[3]) / stages,
+	                    100.0 * static_cast<double>(repeats[4] - window_repeats[4]) / stages);
+	window_repeats = repeats;
+	const auto per_second = [&](size_t i) {
+		return static_cast<double>(allocations[i] - window_allocations[i]) / seconds;
+	};
+	line += fmt::format(" | buf+/s={:.0f} buf-/s={:.0f} img+/s={:.0f} img-/s={:.0f} game-buf+/s={:.0f}"
+	                    " game-buf-join/s={:.0f} game-buf-gc/s={:.0f} buf-create-ms/s={:.2f}",
+	                    per_second(0), per_second(1), per_second(2), per_second(3), per_second(4),
+	                    per_second(5), per_second(6), per_second(7) / 1e6);
+	line += " | probes:";
+	for (uint32_t i = 0; i < ProbeCount; i++) {
+		line += fmt::format(" {}={:.2f}", ProbeNames[i],
+		                    draws != 0 ? probe_totals[i] * to_us / draws : 0.0);
+	}
+	std::printf("%s\n", line.c_str());
+	if (auto_draws != 0) {
+		uint64_t auto_all = 0;
+		for (const auto ticks: auto_totals) {
+			auto_all += ticks;
+		}
+		std::string auto_line = fmt::format("draw-phases auto: draws/s={:.0f} us/draw={:.2f} |",
+		                                    auto_draws / seconds, auto_all * to_us / auto_draws);
+		for (uint32_t i = 0; i < Count; i++) {
+			auto_line += fmt::format(" {}={:.2f}", Names[i], auto_totals[i] * to_us / auto_draws);
+		}
+		std::printf("%s\n", auto_line.c_str());
+		auto_totals.fill(0);
+		auto_draws = 0;
+	}
+	if (UploadStatsEnabled()) {
+		PrintUploadStats(seconds);
+	}
+	{
+		// The PM4 handlers that took the most time, as opcode:packets/s:ms/s.
+		auto&                                          ops = g_pm4_ops;
+		std::array<std::pair<uint64_t, uint32_t>, 256> ranked {};
+		uint64_t                                       handled = 0;
+		for (uint32_t op = 0; op < 256; op++) {
+			ranked[op] = {ops.ticks[op], op};
+			handled += ops.ticks[op];
+		}
+		std::ranges::sort(ranked, std::greater {});
+		std::string pm4 = fmt::format("pm4-ops: handlers ms/s={:.1f} between ms/s={:.1f} |",
+		                              handled * to_us / 1000.0 / seconds,
+		                              ops.between * to_us / 1000.0 / seconds);
+		for (uint32_t i = 0; i < 12 && ranked[i].first != 0; i++) {
+			const auto op = ranked[i].second;
+			pm4 += fmt::format(" {:02x}:{:.0f}:{:.2f}", op, ops.counts[op] / seconds,
+			                   ops.ticks[op] * to_us / 1000.0 / seconds);
+		}
+		// Draw packets by how their handler ended, as outcome:packets/s:ms/s.
+		static constexpr std::array<const char*, Pm4OpTimer::OutcomeCount> OutcomeNames {
+		    "drawn", "empty", "metadata", "depth-copy", "resolve", "no-shader", "not-prepared",
+		    "rect-skip"};
+		for (uint32_t kind = 0; kind < 2; kind++) {
+			pm4 += kind == 0 ? " | indexed:" : " | auto:";
+			for (uint32_t outcome = 0; outcome < Pm4OpTimer::OutcomeCount; outcome++) {
+				if (ops.outcome_counts[kind][outcome] != 0) {
+					pm4 += fmt::format(" {}:{:.0f}:{:.2f}", OutcomeNames[outcome],
+					                   ops.outcome_counts[kind][outcome] / seconds,
+					                   ops.outcome_ticks[kind][outcome] * to_us / 1000.0 / seconds);
+				}
+			}
+		}
+		std::printf("%s\n", pm4.c_str());
+		ops = {};
+	}
+	if (AbEnabled()) {
+		g_ab_off.store(!AbFeatureOff(), std::memory_order_relaxed);
+	}
+	totals.fill(0);
+	probe_totals.fill(0);
+	draws        = 0;
+	other_draws  = 0;
+	other_ticks  = 0;
+	window_start = now;
+	window_tsc   = tsc;
+	window_gpu   = gpu_ns;
+	window_allocations = allocations;
 }
 
 void LogDrawPhase(const char* draw_name, const char* phase) {

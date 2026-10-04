@@ -1,11 +1,16 @@
 #include "configurationEditDialog.h"
 
 #include "common/emulatorConfig.h"
+#include "common/systemInfo.h"
 #include "configuration.h"
 #include "mandatoryLineEdit.h"
 #include <SDL3/SDL.h>
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 #include <QAbstractItemView>
+#include <QThread>
 #include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
@@ -169,7 +174,7 @@ ConfigurationEditDialog::ConfigurationEditDialog(Configuration& info, QWidget* p
 	layout()->setSizeConstraint(QLayout::SetMinimumSize);
 	setSizeGripEnabled(true);
 
-	restoreGeometry(g_last_geometry);
+
 
 	Init(info);
 }
@@ -273,7 +278,9 @@ void ConfigurationEditDialog::Init(const Configuration& info) {
 	    info.gpu_index >= 0 && info.gpu_index < m_ui->comboBox_gpu->count() - 1 ? info.gpu_index + 1
 	                                                                            : 0);
 	m_ui->checkBox_fullscreen->setChecked(info.fullscreen_enabled);
-	m_ui->checkBox_hide_cursor->setChecked(info.hide_cursor_enabled);
+	m_ui->comboBox_osd->setCurrentIndex(info.osd_mode);
+	m_ui->comboBox_osd_alignment->setCurrentIndex(info.osd_alignment);
+	m_ui->comboBox_profile->setCurrentIndex(info.performance_profile);
 	m_ui->checkBox_readback->setChecked(info.readback_linear_images);
 	m_ui->checkBox_tessellation->setChecked(info.tessellation_enabled);
 	m_ui->spinBox_vblank_frequency->setValue(info.vblank_frequency);
@@ -307,6 +314,11 @@ void ConfigurationEditDialog::Init(const Configuration& info) {
 	m_ui->lineEdit_printf_file->setText(info.printf_output_file);
 	m_ui->lineEdit_printf_file->setEnabled(info.printf_direction ==
 	                                       Configuration::LogDirection::File);
+	m_ui->spinBox_master_volume->setValue(info.master_volume);
+	m_ui->checkBox_audio_muted->setChecked(info.audio_muted);
+
+	m_ui->checkBox_auto_fix_missing_files->setChecked(info.auto_fix_missing_files);
+
 	m_ui->checkBox_profiler->setChecked(info.profiler_enabled);
 }
 
@@ -426,7 +438,9 @@ static void UpdateInfo(Configuration& info, Ui::ConfigurationEditDialog& ui, boo
 	    TextToEnum<Configuration::PresentMode>(ui.comboBox_present_mode->currentText());
 	info.gpu_index                 = ui.comboBox_gpu->currentIndex() - 1;
 	info.fullscreen_enabled        = ui.checkBox_fullscreen->isChecked();
-	info.hide_cursor_enabled       = ui.checkBox_hide_cursor->isChecked();
+	info.osd_mode                  = ui.comboBox_osd->currentIndex();
+	info.osd_alignment             = ui.comboBox_osd_alignment->currentIndex();
+	info.performance_profile       = ui.comboBox_profile->currentIndex();
 	info.readback_linear_images    = ui.checkBox_readback->isChecked();
 	info.tessellation_enabled      = ui.checkBox_tessellation->isChecked();
 	info.vblank_frequency          = ui.spinBox_vblank_frequency->value();
@@ -449,6 +463,11 @@ static void UpdateInfo(Configuration& info, Ui::ConfigurationEditDialog& ui, boo
 	    TextToEnum<Configuration::LogDirection>(ui.comboBox_printf_direction->currentText());
 	info.printf_output_file = ui.lineEdit_printf_file->text();
 	info.profiler_enabled = ui.checkBox_profiler->isChecked();
+
+	info.master_volume = ui.spinBox_master_volume->value();
+	info.audio_muted   = ui.checkBox_audio_muted->isChecked();
+
+	info.auto_fix_missing_files = ui.checkBox_auto_fix_missing_files->isChecked();
 }
 
 void ConfigurationEditDialog::save() {

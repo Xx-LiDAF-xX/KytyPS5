@@ -2,6 +2,7 @@
 #include "graphics/shader/recompiler/Tessellation.h"
 
 #include "common/assert.h"
+#include "common/emulatorConfig.h"
 #include "common/logging/log.h"
 #include "graphics/shader/recompiler/backend/spirv/SpirvEmitter.h"
 #include "graphics/shader/recompiler/frontend/cfg/ShaderCFG.h"
@@ -481,6 +482,16 @@ Decoder::Program DecodeFusedProgram(std::span<const uint32_t> front, std::span<c
 
 } // namespace
 
+static std::atomic<bool> g_hardware_storage_buffer_bounds {false};
+
+void SetHardwareStorageBufferBounds(bool enabled) {
+	g_hardware_storage_buffer_bounds.store(enabled, std::memory_order_relaxed);
+}
+
+bool HardwareStorageBufferBounds() {
+	return g_hardware_storage_buffer_bounds.load(std::memory_order_relaxed);
+}
+
 TranslateResult TranslateProgram(std::span<const uint32_t> code, const CompileOptions& options) {
 	if (code.empty()) {
 		EXIT("shader recompiler input is empty\n");
@@ -521,6 +532,19 @@ TranslateResult TranslateProgram(std::span<const uint32_t> code, const CompileOp
 	     " elapsed_ms=%" PRIu64 "\n",
 	     GetDumpLabel(options), StageName(options.stage), options.shader_hash,
 	     static_cast<uint64_t>(decoded.instructions.size()), phase_ms());
+
+	// When Ray Tracing is disabled, bypass BVH intersection shaders across all games to eliminate bottlenecks
+	if (decoded.has_bvh && !Config::RayTracingEnabled()) {
+		static std::atomic_flag warned = ATOMIC_FLAG_INIT;
+		if (!warned.test_and_set(std::memory_order_relaxed)) {
+			const auto& bvh = decoded.instructions.back();
+			Log::WriteToConsoleAndLog(fmt::format(
+			    "Ray Tracing is disabled: bypassing BVH intersection shader "
+			    "(stage={}, shader=0x{:016x}, pc=0x{:08x}, opcode=0x{:02x}) for maximum FPS and stability.\n",
+			    StageName(options.stage), options.shader_hash, bvh.pc, bvh.opcode_id));
+		}
+		return {.skip_dispatch = true, .has_bvh = true};
+	}
 
 	std::string decoded_dump;
 	if (options.dump_ir) {
@@ -619,6 +643,7 @@ TranslateResult TranslateProgram(std::span<const uint32_t> code, const CompileOp
 	IR::TrackResources(ir, decoded, native_cfg);
 	TranslateResult result;
 	result.program = std::move(ir);
+	result.has_bvh = decoded.has_bvh;
 	if (options.dump_ir) {
 		result.decoded_dump = std::move(decoded_dump);
 		result.cfg_dump     = std::move(cfg_dump);

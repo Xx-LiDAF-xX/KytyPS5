@@ -18,6 +18,8 @@
 #include <array>
 #include <atomic>
 #include <bit>
+#include <cstdlib>
+#include <cstring>
 
 namespace Libs::Graphics {
 
@@ -39,6 +41,17 @@ static bool DccAlphaOnMsb(const HW::ColorInfo& info) {
 	       info.channel_order == Prospero::ChannelOrder::kAlt;
 }
 
+// KYTY_DEBUG_TARGET_REUSE=0 resolves and acquires every draw's targets from scratch, for A/B runs
+// (see also AbFeatureOff).
+bool RenderExecutor::TargetReuseEnabled() {
+	static const bool enabled = [] {
+		const char* text = std::getenv("KYTY_DEBUG_TARGET_REUSE");
+		return text == nullptr || std::strcmp(text, "0") != 0;
+	}();
+	static const bool ab = AbSelected("reuse");
+	return enabled && !(ab && AbFeatureOff());
+}
+
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void RenderExecutor::ResolveRenderColorTarget(CommandBuffer& buffer, RenderColorInfo& r,
                                               uint32_t         render_target_slice_offset,
@@ -52,6 +65,21 @@ void RenderExecutor::ResolveRenderColorTarget(CommandBuffer& buffer, RenderColor
 	if (ignore_target_mask && rt.base.addr != 0 && mask == 0) {
 		mask = 0x0f;
 	}
+
+	// Consecutive draws mostly keep their targets: the same registers resolve to the same image
+	// while the image set is unchanged.
+	auto& source = m_color_target_sources.at(rt_slot);
+	if (TargetReuseEnabled() && source.generation != 0 && source.mask == mask &&
+	    source.slice_offset == render_target_slice_offset &&
+	    source.ignore_target_mask == ignore_target_mask && source.exact_format == exact_format &&
+	    source.registers == rt &&
+	    m_context.GetTextureCache().RefindImage(source.target.image_id, source.generation,
+	                                            source.target.desc, source.metadata_base_layer)) {
+		r = source.target;
+		BindRenderTarget(r.image_id);
+		return;
+	}
+	source.generation = 0;
 
 	r             = {};
 	r.target_slot = rt_slot;
@@ -334,9 +362,24 @@ void RenderExecutor::ResolveRenderColorTarget(CommandBuffer& buffer, RenderColor
 	auto& texture_cache        = m_context.GetTextureCache();
 	r.guest_mip_level          = rt.view.current_mip_level;
 	r.guest_array_layer        = view.base_layer;
-	r.image_id                 = texture_cache.FindImage(r.desc, exact_format);
-	r.export_mapping           = target_format.export_mapping;
+	const auto metadata_base_layer = r.desc.view_info.base_layer;
+	uint64_t   generation          = 0;
+	{
+		DrawPhaseTimer::ProbeScope probe(g_draw_phases, DrawPhaseTimer::TargetImage);
+		r.image_id = texture_cache.FindImage(r.desc, exact_format, &generation);
+	}
+	r.export_mapping = target_format.export_mapping;
 	BindRenderTarget(r.image_id);
+	if (generation != 0) {
+		source.registers           = rt;
+		source.mask                = mask;
+		source.slice_offset        = render_target_slice_offset;
+		source.ignore_target_mask  = ignore_target_mask;
+		source.exact_format        = exact_format;
+		source.generation          = generation;
+		source.metadata_base_layer = metadata_base_layer;
+		source.target              = r;
+	}
 }
 
 } // namespace Libs::Graphics

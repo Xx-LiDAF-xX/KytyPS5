@@ -5,7 +5,11 @@
 #include "common/profiler.h"
 #include "graphics/host_gpu/graphicContext.h"
 #include "graphics/host_gpu/renderer/commandScheduler.h"
+#include "graphics/host_gpu/renderer/debug.h"
+#include "graphics/host_gpu/renderer/drainStats.h"
+#include "graphics/host_gpu/renderer/gpuZones.h"
 
+#include <chrono>
 #include <cstring>
 #include <numeric>
 #include <vk_mem_alloc.h>
@@ -56,32 +60,52 @@ constexpr size_t WATCHES_RESERVE_CHUNK   = 0x1000;
 } // namespace
 
 Buffer::Buffer(GraphicContext& graphics, CommandScheduler& scheduler, MemoryUsage usage,
-               uint64_t cpu_address, vk::BufferUsageFlags flags, uint64_t size)
+               uint64_t cpu_address, vk::BufferUsageFlags flags, uint64_t size, bool host_cached)
     : m_graphics(&graphics), m_scheduler(&scheduler), m_usage(usage), m_cpu_address(cpu_address),
       m_size(size) {
 	KYTY_PROFILER_FUNCTION();
 	EXIT_IF(graphics.allocator == nullptr || size == 0);
+	g_allocation_counters.buffers_created.fetch_add(1, std::memory_order_relaxed);
 
 	vk::BufferCreateInfo buffer_info {};
 	buffer_info.size        = size;
 	buffer_info.usage       = flags;
 
+	// Game buffers (the ones with device addresses) took dedicated memory, a kernel allocation
+	// each: ~0.3 ms per buffer, and Sky Garden creates ~35 a second. Up to SharedMax they share
+	// VMA's blocks instead; the BDA page table holds each page's own address, so any placement
+	// works. KYTY_DEBUG_AB=suballoc allocates them all dedicated in alternate windows.
+	static constexpr uint64_t SharedMax = 64ull * 1024 * 1024;
+	static const bool         ab        = AbSelected("suballoc");
 	const bool with_bda = bool(flags & vk::BufferUsageFlagBits::eShaderDeviceAddress);
 	const VmaAllocationCreateFlags bda_flag =
-	    with_bda ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;
+	    with_bda && (size > SharedMax || (ab && AbFeatureOff()))
+	        ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT
+	        : 0;
 	VmaAllocationCreateInfo allocation_info {};
+	// `host_cached`: cached host memory, where CPU writes stay in the CPU's caches and the GPU reads
+	// them over the bus, instead of write-combined device memory.
 	allocation_info.flags =
-	    VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT | bda_flag | AllocationFlags(usage);
-	allocation_info.usage = AllocationUsage(usage);
-	allocation_info.preferredFlags = usage == MemoryUsage::DeviceLocal
-	                                     ? VkMemoryPropertyFlags {}
-	                                     : VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+	    VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT | bda_flag |
+	    (host_cached ? VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT
+	                 : AllocationFlags(usage));
+	allocation_info.usage = host_cached ? VMA_MEMORY_USAGE_AUTO_PREFER_HOST : AllocationUsage(usage);
+	allocation_info.preferredFlags =
+	    usage == MemoryUsage::DeviceLocal ? VkMemoryPropertyFlags {}
+	    : host_cached ? VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT
+	                  : VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 
 	VmaAllocationInfo allocation_result {};
 	VkBuffer          native_buffer = VK_NULL_HANDLE;
+	const auto        create_start  = std::chrono::steady_clock::now();
 	const auto        result        = static_cast<vk::Result>(vmaCreateBuffer(
 	    graphics.allocator, static_cast<const VkBufferCreateInfo*>(buffer_info), &allocation_info,
 	    &native_buffer, &m_allocation, &allocation_result));
+	g_allocation_counters.buffer_create_ns.fetch_add(
+	    static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+	                              std::chrono::steady_clock::now() - create_start)
+	                              .count()),
+	    std::memory_order_relaxed);
 	if (result != vk::Result::eSuccess) {
 		graphics.LogMemoryBudget();
 	}
@@ -105,9 +129,18 @@ Buffer::Buffer(GraphicContext& graphics, CommandScheduler& scheduler, MemoryUsag
 }
 
 Buffer::~Buffer() {
+	g_allocation_counters.buffers_destroyed.fetch_add(1, std::memory_order_relaxed);
 	if (m_buffer != nullptr) {
 		vmaDestroyBuffer(m_graphics->allocator, m_buffer, m_allocation);
 	}
+}
+
+uint32_t Buffer::MemoryProperties() const noexcept {
+	VkMemoryPropertyFlags properties = 0;
+	if (m_allocation != nullptr) {
+		vmaGetAllocationMemoryProperties(m_graphics->allocator, m_allocation, &properties);
+	}
+	return properties;
 }
 
 vk::DeviceAddress Buffer::BufferDeviceAddress() const noexcept {
@@ -178,6 +211,7 @@ void Buffer::CopyFrom(CommandBuffer& command, const Buffer& source, uint64_t sou
 		before_stage |= vk::PipelineStageFlagBits::eHost;
 	}
 	const auto native = command.Handle();
+	GpuZones::Mark(native, DrainStats::Zone::BufferCopy);
 	native.pipelineBarrier(before_stage, vk::PipelineStageFlagBits::eTransfer,
 	                       vk::DependencyFlagBits::eByRegion, 0, nullptr, 2, before, 0, nullptr);
 	const vk::BufferCopy copy {source_offset, destination_offset, size};
@@ -204,6 +238,7 @@ void Buffer::Fill(uint64_t offset, uint64_t size, uint32_t value) {
 	    Barrier(offset, size, vk::AccessFlagBits::eMemoryRead | vk::AccessFlagBits::eMemoryWrite,
 	            vk::AccessFlagBits::eTransferWrite);
 	const auto native = command.Handle();
+	GpuZones::Mark(native, DrainStats::Zone::BufferCopy);
 	native.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
 	                       vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
 	                       0, nullptr, 1, &before, 0, nullptr);
@@ -216,8 +251,8 @@ void Buffer::Fill(uint64_t offset, uint64_t size, uint32_t value) {
 }
 
 StreamBuffer::StreamBuffer(GraphicContext& graphics, CommandScheduler& scheduler, MemoryUsage usage,
-                           uint64_t size)
-    : Buffer(graphics, scheduler, usage, 0, AllFlags, size),
+                           uint64_t size, vk::BufferUsageFlags extra_flags, bool host_cached)
+    : Buffer(graphics, scheduler, usage, 0, AllFlags | extra_flags, size, host_cached),
       m_current_watches(WATCHES_INITIAL_RESERVE), m_previous_watches(WATCHES_INITIAL_RESERVE) {}
 
 bool StreamBuffer::NormalizeReservation(bool coherent, uint64_t atom, uint64_t& size,
@@ -317,6 +352,10 @@ bool StreamBuffer::WaitPendingOperations(const std::vector<Watch>& watches,
 	if (!invalidation_mark.has_value()) {
 		return true;
 	}
+	using DrainStats::Reason;
+	DrainStats::ReasonScope reason(Usage() == MemoryUsage::Upload     ? Reason::UploadRingWrap
+	                               : Usage() == MemoryUsage::Download ? Reason::DownloadRingWrap
+	                                                                  : Reason::StreamRingWrap);
 	while (requested_upper_bound > wait_bound && wait_cursor < *invalidation_mark) {
 		const auto& watch = watches[wait_cursor];
 		if (!Scheduler().IsFree(watch.tick) && !allow_wait) {

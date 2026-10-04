@@ -4,6 +4,7 @@
 #include "graphics/host_gpu/rangeSet.h"
 
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -274,6 +275,13 @@ void TestRangeSet() {
   ranges.Add(0x1000, 0x80);
   ranges.Add(0x1080, 0x80);
   ranges.Add(0x1200, 0x40);
+  ranges.Add(0x1010, 0x20);
+  ranges.Add(0x1000, 0x100);
+  ranges.Add(0x1200, 0x40);
+  size_t range_count = 0;
+  ranges.ForEach([&](uint64_t, uint64_t) { range_count++; });
+  Check(range_count == 2 && ranges.Contains(0x1000, 0x100) && ranges.Contains(0x1200, 0x40),
+        "range set changed when adding already covered ranges");
   Check(ranges.Contains(0x1010, 0xe0) && !ranges.Contains(0x1010, 0x200),
         "range set containment did not require full coverage");
   Check(ranges.Intersects(0x0fff, 2) && ranges.Intersects(0x11ff, 2) &&
@@ -402,98 +410,85 @@ void TestCpuDirtyUpload() {
   Release(memory);
 }
 
-void TestCleanUploadPreservesOwnership() {
-  constexpr auto page_size = Libs::Graphics::TRACKER_PAGE_SIZE;
-  constexpr auto region_size = Libs::Graphics::TRACKER_REGION_SIZE;
+// IsRegionCpuCleanHint follows the CPU-dirty bits per 64 KiB slice: an untracked region is not
+// clean, an uploaded range is, and a CPU write only affects the slice it lands in.
+void TestCpuCleanHint() {
+  constexpr uintptr_t base = 0x0000000203000000ull;
+  constexpr uint64_t slice = uint64_t{64} * 1024;
   TrackerHarness harness;
   auto &tracker = harness.tracker;
-  auto *memory = AllocateFixedGuestRange(region_size * 2, region_size);
+  auto *memory = static_cast<uint8_t *>(
+      VirtualAlloc(reinterpret_cast<void *>(base), slice * 3,
+                   MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+  Check(memory == reinterpret_cast<void *>(base), "fixed VirtualAlloc failed");
   const auto address = reinterpret_cast<uint64_t>(memory);
-  tracker.ForEachUploadRange(address, region_size * 2, false,
-                             [](uint64_t, uint64_t) noexcept {},
-                             []() noexcept {});
-
-  for (const auto start : {address + 63 * page_size,
-                           address + region_size - page_size}) {
-    const auto before = start - page_size;
-    const auto after = start + 2 * page_size;
-    tracker.MarkRegionAsCpuModified(before, page_size);
-    tracker.MarkRegionAsCpuModified(after, page_size);
-    uint32_t ranges = 0;
-    uint32_t completions = 0;
-    ResetProtectionLog();
+  const auto upload = [&](uint64_t upload_address, uint64_t upload_size) {
     tracker.ForEachUploadRange(
-        start, 2 * page_size, false,
-        [&](uint64_t, uint64_t) noexcept { ranges++; },
-        [&]() noexcept { completions++; });
-    Check(ranges == 0 && completions == 1 && g_protection_calls == 0 &&
-              !tracker.IsRegionCpuModified(start, 2 * page_size),
-          "clean read-only upload changed dirty state or protection");
+        upload_address, upload_size, false,
+        [](uint64_t, uint64_t) noexcept {}, []() noexcept {});
+  };
 
-    tracker.ForEachUploadRange(
-        start, 2 * page_size, true,
-        [&](uint64_t, uint64_t) noexcept { ranges++; },
-        [&]() noexcept { completions++; });
-    Check(ranges == 0 && completions == 2 &&
-              tracker.IsRegionGpuModified(start, page_size) &&
-              tracker.IsRegionGpuModified(start + page_size, page_size) &&
-              Protection(reinterpret_cast<void *>(start)) == PAGE_NOACCESS &&
-              Protection(reinterpret_cast<void *>(start + page_size)) ==
-                  PAGE_NOACCESS &&
-              tracker.IsRegionCpuModified(before, page_size) &&
-              tracker.IsRegionCpuModified(after, page_size) &&
-              !tracker.IsRegionGpuModified(before, page_size) &&
-              !tracker.IsRegionGpuModified(after, page_size) &&
-              IsWritable(reinterpret_cast<void *>(before)) &&
-              IsWritable(reinterpret_cast<void *>(after)),
-          "clean written upload lost GPU ownership or changed dirty neighbors");
-    tracker.UnmarkRegionAsGpuModified(start, 2 * page_size);
-  }
-  tracker.UntrackMemory(address, region_size * 2);
-  Release(memory);
+  Check(!tracker.IsRegionCpuCleanHint(address, 64),
+        "an untracked region counted as CPU clean");
+  upload(address, slice * 3);
+  Check(tracker.IsRegionCpuCleanHint(address, slice * 3),
+        "an uploaded range was not CPU clean");
+  Check(!tracker.IsRegionCpuCleanHint(address + slice * 3, 64),
+        "a never-uploaded slice counted as CPU clean");
+
+  tracker.MarkRegionAsCpuModified(address + slice + 100, 4);
+  Check(tracker.IsRegionCpuCleanHint(address, slice) &&
+            tracker.IsRegionCpuCleanHint(address + slice * 2, slice),
+        "a CPU write dirtied another slice");
+  Check(!tracker.IsRegionCpuCleanHint(address + slice, 64) &&
+            !tracker.IsRegionCpuCleanHint(address, slice * 3),
+        "a written slice counted as CPU clean");
+  upload(address + slice, slice);
+  Check(tracker.IsRegionCpuCleanHint(address, slice * 3),
+        "uploading the written slice did not make it CPU clean");
+
+  tracker.UntrackMemory(address, slice * 3);
+  Check(VirtualFree(memory, 0, MEM_RELEASE) != 0, "VirtualFree failed");
 }
 
-void BenchmarkCleanUploads() {
-  constexpr uint64_t size = 256ull * 1024 * 1024;
+void TestOnlyCpuModified() {
+  constexpr uintptr_t base = 0x0000000205000000ull;
+  constexpr uint64_t region = Libs::Graphics::TRACKER_REGION_SIZE;
   TrackerHarness harness;
   auto &tracker = harness.tracker;
-  auto *memory = AllocateFixedGuestRange(size, 0);
+  auto *memory = static_cast<uint8_t *>(
+      VirtualAlloc(reinterpret_cast<void *>(base), region * 2,
+                   MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+  Check(memory == reinterpret_cast<void *>(base), "fixed VirtualAlloc failed");
   const auto address = reinterpret_cast<uint64_t>(memory);
-  tracker.ForEachUploadRange(address, size, false,
-                             [](uint64_t, uint64_t) noexcept {},
-                             []() noexcept {});
-  std::puts("chunk_bytes,sweeps,calls,elapsed_ns,ns_per_sweep,ns_per_call");
-  for (const uint64_t chunk : {size, Libs::Graphics::TRACKER_REGION_SIZE,
-                               uint64_t{64 * 1024}}) {
-    uint64_t ranges = 0;
-    uint64_t completions = 0;
-    uint64_t sweeps = 0;
-    ResetProtectionLog();
-    const auto start = std::chrono::steady_clock::now();
-    std::chrono::nanoseconds elapsed{};
-    do {
-      for (uint64_t offset = 0; offset < size; offset += chunk) {
-        tracker.ForEachUploadRange(
-            address + offset, chunk, false,
-            [&](uint64_t, uint64_t) noexcept { ranges++; },
-            [&]() noexcept { completions++; });
-      }
-      sweeps++;
-      elapsed = std::chrono::steady_clock::now() - start;
-    } while (elapsed < std::chrono::milliseconds(250));
-    Check(ranges == 0 && completions == sweeps * (size / chunk) &&
-              g_protection_calls == 0,
-          "clean upload benchmark changed ranges, completion, or protection");
-    std::printf("%llu,%llu,%llu,%lld,%.2f,%.2f\n",
-                static_cast<unsigned long long>(chunk),
-                static_cast<unsigned long long>(sweeps),
-                static_cast<unsigned long long>(completions),
-                static_cast<long long>(elapsed.count()),
-                static_cast<double>(elapsed.count()) / sweeps,
-                static_cast<double>(elapsed.count()) / completions);
-  }
-  tracker.UntrackMemory(address, size);
-  Release(memory);
+  const auto separate = [&](uint64_t query_address, uint64_t query_size) {
+    return !tracker.IsRegionGpuModified(query_address, query_size) &&
+           tracker.IsRegionCpuModified(query_address, query_size);
+  };
+
+  Check(tracker.IsRegionOnlyCpuModified(address, 256),
+        "an untracked range was not only CPU modified");
+  tracker.ForEachUploadRange(
+      address, region * 2, false, [](uint64_t, uint64_t) noexcept {},
+      []() noexcept {});
+  Check(!tracker.IsRegionOnlyCpuModified(address, 256),
+        "an uploaded range counted as CPU modified");
+  tracker.MarkRegionAsCpuModified(address + 4096, 4);
+  Check(tracker.IsRegionOnlyCpuModified(address, 8192) &&
+            !tracker.IsRegionOnlyCpuModified(address + 8192, 256),
+        "a CPU write was missed or dirtied another page");
+  tracker.MarkRegionAsGpuModified(address + 16384, 4096);
+  Check(!tracker.IsRegionOnlyCpuModified(address + 4096, 16384) &&
+            !separate(address + 4096, 16384),
+        "a GPU-modified page did not exclude the range");
+  tracker.MarkRegionAsCpuModified(address + region + 64, 4);
+  Check(tracker.IsRegionOnlyCpuModified(address + region - 4096, 8192) &&
+            separate(address + region - 4096, 8192),
+        "a range across two regions disagreed with the separate queries");
+
+  tracker.UnmarkRegionAsGpuModified(address + 16384, 4096);
+  tracker.UntrackMemory(address, region * 2);
+  Check(VirtualFree(memory, 0, MEM_RELEASE) != 0, "VirtualFree failed");
 }
 
 void TestRangeInvalidation() {
@@ -593,6 +588,134 @@ void TestGpuDirtyBits() {
             Protection(memory) == PAGE_READONLY,
         "GPU dirty state did not restore write-only tracking");
   tracker.MarkRegionAsCpuModified(address, page_size);
+  tracker.UntrackMemory(address, page_size * 2);
+  Release(memory);
+}
+
+void TestReadbackArming() {
+  TrackerHarness harness;
+  auto &tracker = harness.tracker;
+  auto &page_manager = harness.page_manager;
+  const auto page_size = page_manager.GetPageSize();
+  auto *memory = Allocate(page_manager, 3);
+  const auto address = reinterpret_cast<uint64_t>(memory);
+  const auto page = [&](uint64_t index) { return address + index * page_size; };
+
+  tracker.ForEachUploadRange(
+      address, page_size * 3, true, [](uint64_t, uint64_t) noexcept {},
+      []() noexcept {});
+  auto state = tracker.QueryReadback(address, page_size * 3);
+  Check(state.gpu_dirty && state.unarmed && state.tick == 0 &&
+            !tracker.HasArmedPages(address, page_size * 3),
+        "fresh GPU-dirty pages reported an armed readback");
+
+  tracker.ArmReadback(address, page_size * 2, 1, 5);
+  state = tracker.QueryReadback(address, page_size * 2);
+  Check(state.gpu_dirty && !state.unarmed && state.tick == 5 &&
+            tracker.HasArmedPages(page(1), page_size) &&
+            !tracker.HasArmedPages(page(2), page_size),
+        "arming did not cover exactly the requested pages");
+  std::vector<std::pair<uint64_t, uint64_t>> unarmed;
+  tracker.ForEachUnarmedDownloadRange(
+      address, page_size * 3, [&](uint64_t start, uint64_t bytes) noexcept {
+        unarmed.emplace_back(start, bytes);
+      });
+  Check(unarmed.size() == 1 && unarmed[0].first == page(2) &&
+            unarmed[0].second == page_size,
+        "armed pages were offered for a second download");
+
+  // A later download arms only what is still unarmed; earlier arms keep their token.
+  tracker.ArmReadback(address, page_size * 3, 2, 6);
+  state = tracker.QueryReadback(address, page_size);
+  Check(!state.unarmed && state.tick == 5 &&
+            tracker.QueryReadback(page(2), page_size).tick == 6,
+        "re-arming replaced an earlier download's token");
+
+  // A GPU write recorded after the download supersedes it.
+  tracker.MarkRegionAsGpuModified(page(1) + 16, 16);
+  state = tracker.QueryReadback(page(1), page_size);
+  Check(state.gpu_dirty && state.unarmed && !tracker.HasArmedPages(page(1), page_size),
+        "a new GPU write did not disarm its page");
+
+  tracker.FinalizeReadback(address, page_size * 3, 1);
+  Check(!tracker.IsRegionGpuModified(page(0), page_size) &&
+            Protection(memory) == PAGE_READONLY &&
+            tracker.IsRegionGpuModified(page(1), page_size) &&
+            Protection(memory + page_size) == PAGE_NOACCESS &&
+            tracker.IsRegionGpuModified(page(2), page_size) &&
+            tracker.HasArmedPages(page(2), page_size),
+        "finalizing published a re-dirtied page or another download's page");
+
+  tracker.FinalizeReadback(page(2), page_size, 2);
+  Check(!tracker.IsRegionGpuModified(page(2), page_size) &&
+            Protection(memory + page_size * 2) == PAGE_READONLY &&
+            !tracker.HasArmedPages(address, page_size * 3),
+        "finalizing the matching token did not publish its page");
+
+  // An explicit unmark also drops arms, so the armed-page count returns to zero.
+  tracker.ArmReadback(page(1), page_size, 3, 7);
+  tracker.UnmarkRegionAsGpuModified(page(1), page_size);
+  Check(!tracker.HasArmedPages(address, page_size * 3) &&
+            !tracker.QueryReadback(address, page_size * 3).gpu_dirty,
+        "unmarking left an armed page behind");
+  tracker.FinalizeReadback(page(1), page_size, 3);
+  Check(!tracker.IsRegionGpuModified(page(1), page_size) &&
+            Protection(memory + page_size) == PAGE_READONLY,
+        "a stale publication changed an unmarked page");
+
+  tracker.MarkRegionAsCpuModified(address, page_size * 3);
+  tracker.UntrackMemory(address, page_size * 3);
+  Release(memory);
+}
+
+void TestStaleReadGrant() {
+  TrackerHarness harness;
+  auto &tracker = harness.tracker;
+  auto &page_manager = harness.page_manager;
+  const auto page_size = page_manager.GetPageSize();
+  auto *memory = Allocate(page_manager, 2);
+  const auto address = reinterpret_cast<uint64_t>(memory);
+  const auto second = address + page_size;
+
+  tracker.ForEachUploadRange(
+      address, page_size * 2, true, [](uint64_t, uint64_t) noexcept {},
+      []() noexcept {});
+  // Only armed, hot pages open.
+  tracker.SetReadbackHot(address, page_size * 2, true);
+  Check(!tracker.GrantStaleRead(address, page_size) &&
+            Protection(memory) == PAGE_NOACCESS,
+        "an unarmed page was opened for stale reads");
+  tracker.ArmReadback(address, page_size * 2, 1, 5);
+  tracker.SetReadbackHot(second, page_size, false);
+  Check(!tracker.GrantStaleRead(second, page_size) &&
+            Protection(memory + page_size) == PAGE_NOACCESS,
+        "a page that is not hot was opened for stale reads");
+  Check(tracker.GrantStaleRead(address, page_size) &&
+            Protection(memory) == PAGE_READONLY &&
+            tracker.IsRegionGpuModified(address, page_size) &&
+            !tracker.QueryReadback(address, page_size).unarmed,
+        "an armed hot page did not open read-only, or lost its GPU state");
+
+  // The next GPU write closes it again and supersedes the download.
+  tracker.MarkRegionAsGpuModified(address + 16, 16);
+  Check(Protection(memory) == PAGE_NOACCESS &&
+            tracker.QueryReadback(address, page_size).unarmed,
+        "a GPU write left a stale-readable page open");
+  tracker.FinalizeReadback(address, page_size * 2, 1);
+  Check(Protection(memory) == PAGE_NOACCESS &&
+            tracker.IsRegionGpuModified(address, page_size),
+        "an old publication cleared a re-dirtied page");
+
+  // Publication of the current download leaves the page clean and readable.
+  tracker.ArmReadback(address, page_size, 2, 6);
+  Check(tracker.GrantStaleRead(address, page_size) && Protection(memory) == PAGE_READONLY,
+        "a re-armed hot page did not reopen");
+  tracker.FinalizeReadback(address, page_size, 2);
+  Check(!tracker.IsRegionGpuModified(address, page_size) &&
+            Protection(memory) == PAGE_READONLY,
+        "publication did not leave the page clean and readable");
+
+  tracker.MarkRegionAsCpuModified(address, page_size * 2);
   tracker.UntrackMemory(address, page_size * 2);
   Release(memory);
 }
@@ -954,6 +1077,239 @@ void TestFullRegionGpuUnmarkBatching() {
   Release(memory);
 }
 
+void TestBdaHintPublication() {
+  constexpr auto region_size = Libs::Graphics::TRACKER_REGION_SIZE;
+  TrackerHarness harness;
+  auto &tracker = harness.tracker;
+  tracker.PublishBdaHints(region_size * 64 - 1, 2);
+  Check(tracker.ConsumeBdaHintWord(0) == (uint64_t{1} << 63) &&
+            tracker.ConsumeBdaHintWord(1) == 1,
+        "cross-word publication lost one region");
+  tracker.PublishBdaHints(TRACKER_ADDRESS_SIZE - 1, UINT64_MAX);
+  Check(tracker.ConsumeBdaHintWord(MemoryTracker::BDA_HINT_WORDS - 1) ==
+            (uint64_t{1} << 63),
+        "last-address publication overflowed the hint index");
+
+  constexpr uint64_t address = 0x0000000203000000ull;
+  const auto region = address / region_size;
+  Check(tracker.FindRegion(region) == nullptr,
+        "hint publication unnecessarily allocated a tracker region");
+  tracker.PublishBdaHints(address, 1);
+  const auto claimed = tracker.ConsumeBdaHintWord(region / 64);
+  Check(claimed == (uint64_t{1} << (region % 64)),
+        "untracked registration did not publish its region");
+  Check(tracker.IsRegionCpuModified(address, 1) &&
+            tracker.FindRegion(region) != nullptr &&
+            tracker.IsBdaHintPending(region),
+        "new manager became visible without a CPU-dirty hint");
+
+  // A failed pass must merge its unfinished claim with a different concurrent
+  // publication.
+  (void)tracker.ConsumeBdaHintWord(region / 64);
+  tracker.PublishBdaHints(address + region_size, 1);
+  tracker.RestoreBdaHints(region / 64, claimed);
+  Check(tracker.IsBdaHintPending(region) &&
+            tracker.IsBdaHintPending(region + 1),
+        "restoring an unfinished claim overwrote a concurrent hint");
+}
+
+void TestBdaHintRaces() {
+  constexpr auto region_size = Libs::Graphics::TRACKER_REGION_SIZE;
+  TrackerHarness harness;
+  auto &tracker = harness.tracker;
+  const auto page_size = harness.page_manager.GetPageSize();
+  auto *memory = Allocate(harness.page_manager, 2);
+  const auto address = reinterpret_cast<uint64_t>(memory);
+  const auto region = address / region_size;
+  const auto page = (address % region_size) / Libs::Graphics::TRACKER_PAGE_SIZE;
+  const auto mask = uint64_t{1} << (region % 64);
+  memory[0] = 7;
+  tracker.ForEachUploadRange(
+      address, page_size * 2, false, [](uint64_t, uint64_t) noexcept {},
+      []() noexcept {});
+  (void)tracker.ConsumeBdaHintWord(region / 64);
+  auto *manager = tracker.FindRegion(region);
+  Check(manager != nullptr, "upload failed to create its tracker region");
+
+  // The consumer has already snapshotted a clean page when a later CPU write
+  // arrives.
+  const auto clean_snapshot = tracker.SnapshotCpuDirty(*manager);
+  Check(!clean_snapshot.Get(page),
+        "initial BDA snapshot was unexpectedly dirty");
+  std::binary_semaphore publish{0};
+  std::binary_semaphore published{0};
+  std::jthread writer([&] {
+    publish.acquire();
+    tracker.MarkRegionAsCpuModified(address, page_size);
+    memory[0] = 11;
+    published.release();
+  });
+  publish.release();
+  published.acquire();
+  writer.join();
+  Check(tracker.IsBdaHintPending(region) &&
+            tracker.BdaHintsCoverCpuDirty(address, page_size),
+        "write after a clean snapshot lost its next-pass hint");
+
+  Check((tracker.ConsumeBdaHintWord(region / 64) & mask) != 0,
+        "next BDA pass did not claim the racing write");
+  Check(tracker.SnapshotCpuDirty(*manager).Get(page),
+        "next BDA snapshot did not include the racing write");
+
+  // A second write after the upload copies must survive the current pass
+  // completing.
+  uint8_t uploaded_value = 0;
+  std::binary_semaphore copied{0};
+  std::binary_semaphore rewritten{0};
+  std::jthread rewriter([&] {
+    copied.acquire();
+    tracker.MarkRegionAsCpuModified(address, page_size);
+    memory[0] = 23;
+    rewritten.release();
+  });
+  tracker.ForEachUploadRange(
+      address, page_size, false, [](uint64_t, uint64_t) noexcept {},
+      [&]() noexcept {
+        uploaded_value = memory[0];
+        copied.release();
+        rewritten.acquire();
+      });
+  rewriter.join();
+  Check(uploaded_value == 11 &&
+            tracker.IsRegionCpuModified(address, page_size) &&
+            tracker.IsBdaHintPending(region),
+        "write after upload copy was cleared by the completed pass");
+
+  // Republishing an already-dirty page after exchange must also remain visible.
+  (void)tracker.ConsumeBdaHintWord(region / 64);
+  tracker.MarkRegionAsCpuModified(address, page_size);
+  Check(tracker.IsBdaHintPending(region),
+        "already-dirty write did not republish its consumed hint");
+  (void)tracker.ConsumeBdaHintWord(region / 64);
+  tracker.ForEachUploadRange(
+      address, page_size, false, [](uint64_t, uint64_t) noexcept {},
+      [&]() noexcept { uploaded_value = memory[0]; });
+  Check(uploaded_value == 23 &&
+            !tracker.IsRegionCpuModified(address, page_size) &&
+            tracker.BdaHintsCoverCpuDirty(address, page_size),
+        "subsequent upload did not observe the latest CPU bytes");
+
+  tracker.InvalidateRegion(address, page_size,
+                           [] { Check(false, "unexpected GPU producer"); });
+  Check(tracker.IsBdaHintPending(region),
+        "fault invalidation did not publish a CPU-dirty hint");
+  (void)tracker.ConsumeBdaHintWord(region / 64);
+  tracker.UntrackMemory(address, page_size * 2);
+  Check(tracker.IsBdaHintPending(region),
+        "untracking did not republish dirty pages");
+  Release(memory);
+}
+
+// Mirrors BufferCache::SynchronizeBdaSelective's claim order: summary word, then hint words.
+std::vector<uint64_t> ClaimSelectivePass(MemoryTracker &tracker) {
+  std::vector<uint64_t> claimed(MemoryTracker::BDA_HINT_WORDS);
+  for (size_t summary = 0; summary < MemoryTracker::BDA_SUMMARY_WORDS;
+       ++summary) {
+    for (auto words = tracker.ConsumeBdaSummaryWord(summary); words != 0;
+         words &= words - 1) {
+      const auto word = summary * 64 + std::countr_zero(words);
+      claimed[word] |= tracker.ConsumeBdaHintWord(word);
+    }
+  }
+  return claimed;
+}
+
+void TestBdaHintSummary() {
+  constexpr auto region_size = Libs::Graphics::TRACKER_REGION_SIZE;
+  constexpr auto word_span = region_size * 64;
+  TrackerHarness harness;
+  auto &tracker = harness.tracker;
+
+  // A range crossing both a hint-word and a summary-word boundary.
+  const uint64_t boundary = word_span * 64;
+  tracker.PublishBdaHints(boundary - 1, 2);
+  Check(tracker.ConsumeBdaSummaryWord(0) == (uint64_t{1} << 63) &&
+            tracker.ConsumeBdaSummaryWord(1) == 1,
+        "cross-summary publication lost one summary bit");
+  Check(tracker.ConsumeBdaHintWord(63) == (uint64_t{1} << 63) &&
+            tracker.ConsumeBdaHintWord(64) == 1,
+        "cross-summary publication lost one hint bit");
+  tracker.PublishBdaHints(TRACKER_ADDRESS_SIZE - 1, 1);
+  Check(tracker.ConsumeBdaSummaryWord(MemoryTracker::BDA_SUMMARY_WORDS - 1) ==
+            (uint64_t{1} << 63),
+        "last-address publication overflowed the summary index");
+  (void)tracker.ConsumeBdaHintWord(MemoryTracker::BDA_HINT_WORDS - 1);
+  Check(ClaimSelectivePass(tracker) ==
+            std::vector<uint64_t>(MemoryTracker::BDA_HINT_WORDS),
+        "consumed hints remained visible to a selective pass");
+
+  constexpr uint64_t address = 0x0000000203000000ull;
+  const auto region = address / region_size;
+  const auto word = region / 64;
+  const auto bit = uint64_t{1} << (region % 64);
+  tracker.PublishBdaHints(address, 1);
+  // A pass that claimed the summary but not yet the hint word: a republished
+  // hint must restore the summary bit so a later pass finds it.
+  (void)tracker.ConsumeBdaSummaryWord(word / 64);
+  Check(!tracker.IsBdaHintPending(region),
+        "claimed summary still reported the region pending");
+  tracker.PublishBdaHints(address, 1);
+  Check(tracker.IsBdaHintPending(region),
+        "republished hint did not restore its claimed summary bit");
+  auto claimed = ClaimSelectivePass(tracker);
+  Check(claimed[word] == bit, "selective pass did not claim the hint");
+
+  // Restoring an unfinished claim also re-publishes its summary bit.
+  tracker.RestoreBdaHints(word, bit);
+  Check(tracker.IsBdaHintPending(region),
+        "restored claim was not reachable from its summary");
+  (void)ClaimSelectivePass(tracker);
+  tracker.RestoreBdaSummary(word / 64, uint64_t{1} << (word % 64));
+  Check(ClaimSelectivePass(tracker)[word] == 0,
+        "restored summary bit reported a hint that was already claimed");
+
+  // No publication may be lost while passes run concurrently.
+  constexpr int publishers = 4;
+  constexpr int publications = 20000;
+  std::atomic<int> finished{0};
+  std::vector<std::vector<uint64_t>> published(
+      publishers, std::vector<uint64_t>(MemoryTracker::BDA_HINT_WORDS));
+  std::vector<uint64_t> total(MemoryTracker::BDA_HINT_WORDS);
+  {
+    std::vector<std::jthread> threads;
+    for (int thread = 0; thread < publishers; ++thread) {
+      threads.emplace_back([&, thread] {
+        uint64_t state = 0x9e3779b97f4a7c15ull * (thread + 1);
+        for (int index = 0; index < publications; ++index) {
+          state = state * 6364136223846793005ull + 1442695040888963407ull;
+          // Concentrate on a few summary words so publishers and the consumer
+          // contend on the same summary and hint words.
+          const auto target = (state >> 20) % (64 * 64 * 3);
+          tracker.PublishBdaHints(target * region_size, 1);
+          published[thread][target / 64] |= uint64_t{1} << (target % 64);
+        }
+        finished.fetch_add(1);
+      });
+    }
+    while (finished.load() != publishers) {
+      const auto pass = ClaimSelectivePass(tracker);
+      for (size_t index = 0; index < total.size(); ++index) {
+        total[index] |= pass[index];
+      }
+    }
+  }
+  const auto last = ClaimSelectivePass(tracker);
+  for (size_t index = 0; index < total.size(); ++index) {
+    total[index] |= last[index];
+    uint64_t expected = 0;
+    for (const auto &thread : published) {
+      expected |= thread[index];
+    }
+    Check((total[index] & expected) == expected,
+          "concurrent selective passes lost a published hint");
+  }
+}
+
 [[noreturn]] void RunDeathCase(const char *name) {
   TrackerHarness harness;
   auto &tracker = harness.tracker;
@@ -1130,10 +1486,13 @@ int main(int argc, char **argv) {
   TestQueriesDoNotRequireMappedOwnership();
   TestConcurrentRegionPublication();
   TestCpuDirtyUpload();
-  TestCleanUploadPreservesOwnership();
+  TestCpuCleanHint();
+  TestOnlyCpuModified();
   TestRangeInvalidation();
   TestGpuReacquisitionAfterInvalidation();
   TestGpuDirtyBits();
+  TestReadbackArming();
+  TestStaleReadGrant();
   TestExactDirtyIntervalsSharingTrackerPage();
   TestGpuDownloadProtectionMirrors();
   TestCrossRegionUpload();
@@ -1141,6 +1500,9 @@ int main(int argc, char **argv) {
   TestDownloadDoesNotSerializeDisjointRegion();
   TestGpuUnmarkUsesRegionMask();
   TestFullRegionGpuUnmarkBatching();
+  TestBdaHintPublication();
+  TestBdaHintRaces();
+  TestBdaHintSummary();
   TestFatalPaths();
 #if KYTY_PLATFORM == KYTY_PLATFORM_LINUX
   TestFaultOnProtectedStack();

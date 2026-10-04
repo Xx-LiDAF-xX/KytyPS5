@@ -3,6 +3,8 @@
 #include <SDL3/SDL.h>
 
 #include "common/assert.h"
+#include "common/emulatorConfig.h"
+#include "common/settingsFile.h"
 #include "common/stringUtils.h"
 #include "graphics/host_gpu/graphicContext.h"
 #include "imgui.h"
@@ -11,13 +13,17 @@
 #include "libs/dialog.h"
 #include "libs/ime.h"
 #include "libs/imeDialog.h"
-
+#include "common/systemInfo.h"
+#include "kytyGitVersion.h"
+#include "loader/systemContent.h"
+#include "loader/gamePatch.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <deque>
 #include <mutex>
 #include <span>
@@ -104,7 +110,12 @@ bool HostQueueExternalInput(uint64_t generation, ExternalInput input) {
 
 } // namespace Ime
 
-enum class OverlayKind : uint8_t { None, Ime, Dialog };
+enum class OverlayKind : uint8_t { None, Ime, Error, Settings };
+
+// The emulator settings panel, toggled with F2. The generation changes on every open and close,
+// so each opening is a new session and the presenter redraws when it closes.
+std::atomic<bool>     g_settings_open {false};
+std::atomic<uint64_t> g_settings_generation {0};
 
 struct OverlaySession {
 	OverlayKind kind       = OverlayKind::None;
@@ -128,6 +139,11 @@ bool GetOverlaySnapshot(OverlaySnapshot* snapshot) {
 		snapshot->session = {OverlayKind::Ime, snapshot->ime.generation};
 		return true;
 	}
+	if (g_settings_open.load(std::memory_order_acquire)) {
+		snapshot->session = {OverlayKind::Settings,
+		                     g_settings_generation.load(std::memory_order_acquire)};
+		return true;
+	}
 	snapshot->session = {};
 	return false;
 }
@@ -140,7 +156,8 @@ enum class InputKind : uint8_t {
 	MousePosition,
 	MouseButton,
 	MouseWheel,
-	ResetController
+	ResetController,
+	Key // A keyboard navigation key for the settings panel; id is the ImGuiKey.
 };
 
 struct InputEvent {
@@ -234,7 +251,8 @@ void RefreshVisibility() {
 	bool capture_keyboard   = false;
 	bool text_input         = false;
 	bool multiline          = false;
-	if (snapshot.session.kind == OverlayKind::Dialog) {
+	if (snapshot.session.kind == OverlayKind::Error ||
+	    snapshot.session.kind == OverlayKind::Settings) {
 		capture_controller = true;
 		capture_keyboard   = true;
 	} else if (snapshot.session.kind == OverlayKind::Ime) {
@@ -258,6 +276,21 @@ void RefreshVisibility() {
 			g_missing_visibility_wakeups++;
 		}
 	}
+}
+
+void SetSettingsOpen(bool open) {
+	if (g_settings_open.load(std::memory_order_acquire) == open) {
+		return;
+	}
+	if (!open) {
+		Config::SaveCurrentSettings();
+	}
+	g_settings_generation.fetch_add(1, std::memory_order_acq_rel);
+	g_settings_open.store(open, std::memory_order_release);
+	if (open) {
+		SDL_ShowCursor();
+	}
+	RefreshVisibility();
 }
 
 void OnCoreVisibilityChanged(bool, uint64_t) {
@@ -431,6 +464,7 @@ void InitializeSystemOverlayInput(SDL_Window* window) {
 	DialogIme::SetVisibilityCallback(OnDialogVisibilityChanged);
 	SystemDialog::SetVisibilityCallback(RefreshVisibility);
 	RefreshVisibility();
+	std::printf("Emulator settings: press F2 in the game window.\n");
 }
 
 void ShutdownSystemOverlayInput() {
@@ -463,12 +497,39 @@ void ShutdownSystemOverlayInput() {
 	g_input_window = nullptr;
 }
 
+std::atomic<int> g_osd_mode {0};
+std::atomic<int> g_osd_alignment {0};
+std::atomic<int> g_shaders_compiling {0};
+std::atomic<int> g_shaders_compiled {0};
+
+extern double g_game_fps;
+extern uint64_t g_game_frame_num;
+
+void OsdCycleMode() {
+	g_osd_mode.store((g_osd_mode.load() + 1) % 3, std::memory_order_relaxed);
+}
+
+void OsdSetMode(int mode) {
+	g_osd_mode.store(mode, std::memory_order_relaxed);
+}
+
+void OsdSetAlignment(int alignment) {
+	g_osd_alignment.store(alignment, std::memory_order_relaxed);
+}
+
 SystemOverlayVisualState GetSystemOverlayVisualState() noexcept {
 	const auto core   = CoreIme::GetVisualState();
 	const auto dialog = DialogIme::GetVisualState();
-	const auto system = SystemDialog::GetVisualState();
-	return {core.active || dialog.active || system.active,
-	        core.revision + dialog.revision + system.revision};
+	const auto error  = ErrorDialog::GetVisualState();
+	const int shaders_compiling = g_shaders_compiling.load(std::memory_order_relaxed);
+	return {core.active || dialog.active || error.active ||
+	            g_settings_open.load(std::memory_order_acquire) ||
+	            (g_osd_mode.load(std::memory_order_relaxed) != 0) || (shaders_compiling > 0),
+	        core.revision + dialog.revision + error.revision +
+	            g_settings_generation.load(std::memory_order_acquire) +
+	            g_osd_mode.load(std::memory_order_relaxed) +
+	            g_osd_alignment.load(std::memory_order_relaxed) +
+	            shaders_compiling + g_shaders_compiled.load(std::memory_order_relaxed)};
 }
 
 bool ProcessSystemOverlayInput(const SDL_Event& event) {
@@ -504,6 +565,28 @@ bool ProcessSystemOverlayInput(const SDL_Event& event) {
 		}
 		return false;
 	}
+	// Open/close emulator settings panel: F1, F2, F10, `~`, gamepad Touchpad, Guide, or L3+R3.
+	static std::atomic<bool> g_l3_pressed {false};
+	static std::atomic<bool> g_r3_pressed {false};
+	const bool is_toggle_key = (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
+	    (event.key.key == SDLK_F2 || event.key.key == SDLK_F1 || event.key.key == SDLK_F10 || event.key.key == SDLK_GRAVE));
+	bool is_toggle_button = false;
+	if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+		if (event.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_STICK) g_l3_pressed.store(true, std::memory_order_relaxed);
+		if (event.gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_STICK) g_r3_pressed.store(true, std::memory_order_relaxed);
+		if (event.gbutton.button == SDL_GAMEPAD_BUTTON_TOUCHPAD || event.gbutton.button == SDL_GAMEPAD_BUTTON_GUIDE ||
+		    (g_l3_pressed.load(std::memory_order_relaxed) && g_r3_pressed.load(std::memory_order_relaxed))) {
+			is_toggle_button = true;
+		}
+	} else if (event.type == SDL_EVENT_GAMEPAD_BUTTON_UP) {
+		if (event.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_STICK) g_l3_pressed.store(false, std::memory_order_relaxed);
+		if (event.gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_STICK) g_r3_pressed.store(false, std::memory_order_relaxed);
+	}
+	if ((is_toggle_key || is_toggle_button) &&
+	    g_input_session.kind != OverlayKind::Ime && g_input_session.kind != OverlayKind::Error) {
+		SetSettingsOpen(!g_settings_open.load(std::memory_order_acquire));
+		return true;
+	}
 	if (!g_input_active) {
 		return false;
 	}
@@ -521,7 +604,33 @@ bool ProcessSystemOverlayInput(const SDL_Event& event) {
 	if (keyboard_event && !g_input_keyboard) {
 		return false;
 	}
-	if (keyboard_event && session.kind == OverlayKind::Dialog) {
+	if (keyboard_event && session.kind == OverlayKind::Settings) {
+		if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
+		    event.key.key == SDLK_ESCAPE) {
+			SetSettingsOpen(false);
+			return true;
+		}
+		if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) {
+			ImGuiKey key = ImGuiKey_None;
+			switch (event.key.key) {
+				case SDLK_LEFT: key = ImGuiKey_LeftArrow; break;
+				case SDLK_RIGHT: key = ImGuiKey_RightArrow; break;
+				case SDLK_UP: key = ImGuiKey_UpArrow; break;
+				case SDLK_DOWN: key = ImGuiKey_DownArrow; break;
+				case SDLK_TAB: key = ImGuiKey_Tab; break;
+				case SDLK_SPACE: key = ImGuiKey_Space; break;
+				case SDLK_RETURN:
+				case SDLK_KP_ENTER: key = ImGuiKey_Enter; break;
+				default: break;
+			}
+			if (key != ImGuiKey_None) {
+				QueueInput({InputKind::Key, session, static_cast<int>(key),
+				            event.type == SDL_EVENT_KEY_DOWN ? 1.0f : 0.0f, 0.0f});
+			}
+		}
+		return true;
+	}
+	if (keyboard_event && session.kind == OverlayKind::Error) {
 		if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
 		    (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER ||
 		     event.key.key == SDLK_ESCAPE)) {
@@ -620,7 +729,7 @@ struct SystemOverlay::Impl {
 		auto& io       = ImGui::GetIO();
 		io.IniFilename = nullptr;
 		io.LogFilename = nullptr;
-		io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+		io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
 		io.ConfigNavCursorVisibleAlways = true;
 		io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
 		io.BackendPlatformName = "Kyty system overlay input";
@@ -690,6 +799,9 @@ struct SystemOverlay::Impl {
 						} else if (event.id == SDL_GAMEPAD_BUTTON_NORTH) {
 							Ime::HostBackspace(session.generation);
 						}
+					} else if (session.kind == OverlayKind::Settings && down &&
+					           event.id == SDL_GAMEPAD_BUTTON_EAST) {
+						SetSettingsOpen(false);
 					}
 					const ImGuiKey key = ControllerButtonToKey(event.id);
 					if (key != ImGuiKey_None) {
@@ -726,6 +838,9 @@ struct SystemOverlay::Impl {
 					break;
 				}
 				case InputKind::MouseWheel: io.AddMouseWheelEvent(event.x, event.y); break;
+				case InputKind::Key:
+					io.AddKeyEvent(static_cast<ImGuiKey>(event.id), event.x != 0.0f);
+					break;
 				case InputKind::ResetController:
 					io.ClearEventsQueue();
 					io.ClearInputKeys();
@@ -952,27 +1067,203 @@ struct SystemOverlay::Impl {
 		}
 	}
 
+	void DrawSettings(vk::Extent2D extent) {
+		const ImVec2 display(static_cast<float>(extent.width), static_cast<float>(extent.height));
+		const float  scale = std::max(std::min(display.x / 1280.0f, display.y / 720.0f), 0.75f);
+		ImGui::GetBackgroundDrawList()->AddRectFilled({0.0f, 0.0f}, display,
+		                                              IM_COL32(0, 0, 0, 120));
+		ImGui::SetNextWindowPos({display.x * 0.5f, display.y * 0.5f}, ImGuiCond_Always,
+		                        {0.5f, 0.5f});
+		const float win_width = std::max(std::min(620.0f * scale, display.x - 32.0f), 320.0f);
+		const float max_win_height = std::max(display.y - 48.0f, 240.0f);
+		ImGui::SetNextWindowSizeConstraints({win_width, 100.0f}, {win_width, max_win_height});
+		if (focus_pending) {
+			ImGui::SetNextWindowFocus();
+			settings_saved_percent = static_cast<int>(Config::GetGpuTimestampScalePercent());
+		}
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {24.0f * scale, 20.0f * scale});
+		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {12.0f * scale, 12.0f * scale});
+		ImGui::PushFont(nullptr, 18.0f * scale);
+		constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+		                                   ImGuiWindowFlags_NoSavedSettings;
+		ImGui::Begin("##KytySettings", nullptr, flags);
+		ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "Kyty Settings (Live Effective in Game)");
+		ImGui::Separator();
+
+		ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "Graphics Mode");
+		static int current_mode = 0; // 0 = Quality, 1 = Performance
+		const char* modes[] = { "Quality Mode (Max Fidelity)", "Performance Mode (Smooth Motion)" };
+		ImGui::SetNextItemWidth(-1.0f);
+		if (ImGui::Combo("##graphics_mode", &current_mode, modes, IM_ARRAYSIZE(modes))) {
+			if (current_mode == 0) {
+				// Quality Mode
+				Config::SetGpuTimestampScalePercent(115);
+				Config::SetAnisotropicFiltering(16);
+				Config::SetRayTracingEnabled(false);
+				Config::SetPipelineLibrariesEnabled(true);
+				Config::SetAsyncPipelinesEnabled(false);
+				Config::SetRelaxedReadbackEnabled(false);
+			} else {
+				// Performance Mode
+				Config::SetGpuTimestampScalePercent(135);
+				Config::SetAnisotropicFiltering(4);
+				Config::SetRayTracingEnabled(false);
+				Config::SetPipelineLibrariesEnabled(true);
+				Config::SetAsyncPipelinesEnabled(true);
+				Config::SetRelaxedReadbackEnabled(true);
+			}
+		}
+		ImGui::PushTextWrapPos(0.0f);
+		if (current_mode == 0) {
+			ImGui::TextDisabled("Quality Mode prioritizes maximum graphical fidelity and resolution.");
+		} else {
+			ImGui::TextDisabled("Performance Mode prioritizes smooth motion and frame rates.");
+		}
+		ImGui::PopTextWrapPos();
+		ImGui::Separator();
+		ImGui::TextDisabled("Changes apply immediately and are saved when closing.");
+		const float button_width = std::min(160.0f * scale, ImGui::GetContentRegionAvail().x);
+		ImGui::SetCursorPosX(ImGui::GetWindowSize().x - button_width -
+		                     ImGui::GetStyle().WindowPadding.x);
+		const bool close = ImGui::Button("Close (F2 / Esc / Touchpad)", {button_width, 36.0f * scale});
+		ImGui::End();
+		ImGui::PopFont();
+		ImGui::PopStyleVar(2);
+		if (close) {
+			SetSettingsOpen(false);
+		}
+	}
+
+	void DrawOsd(int mode, int alignment, int shaders_compiling) {
+		ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
+		const float PAD = 10.0f;
+		
+		const ImGuiViewport* viewport = ImGui::GetMainViewport();
+		ImVec2 work_pos = viewport->WorkPos;
+		ImVec2 work_size = viewport->WorkSize;
+
+		ImVec2 window_pos;
+		ImVec2 window_pos_pivot;
+
+		// 0: Top-Left, 1: Top-Right, 2: Bottom-Left, 3: Bottom-Right
+		if (alignment == 0) {
+			window_pos = ImVec2(work_pos.x + PAD, work_pos.y + PAD);
+			window_pos_pivot = ImVec2(0.0f, 0.0f);
+		} else if (alignment == 1) {
+			window_pos = ImVec2(work_pos.x + work_size.x - PAD, work_pos.y + PAD);
+			window_pos_pivot = ImVec2(1.0f, 0.0f);
+		} else if (alignment == 2) {
+			window_pos = ImVec2(work_pos.x + PAD, work_pos.y + work_size.y - PAD);
+			window_pos_pivot = ImVec2(0.0f, 1.0f);
+		} else {
+			window_pos = ImVec2(work_pos.x + work_size.x - PAD, work_pos.y + work_size.y - PAD);
+			window_pos_pivot = ImVec2(1.0f, 1.0f);
+		}
+		// Shader compilation UI removed from here. Moved to OSD metrics below.
+
+		static uint64_t g_hint_frames = 0;
+		if (mode == 0) {
+			if (++g_hint_frames < 900) {
+				ImGui::SetNextWindowPos(window_pos, ImGuiCond_Always, window_pos_pivot);
+				ImGui::SetNextWindowBgAlpha(0.50f);
+				if (ImGui::Begin("SettingsHint", nullptr, window_flags)) {
+					ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "[F2 / Touchpad]: Settings & Performance");
+				}
+				ImGui::End();
+			}
+			return;
+		}
+
+		ImGui::SetNextWindowPos(window_pos, ImGuiCond_Always, window_pos_pivot);
+		ImGui::SetNextWindowBgAlpha(0.75f);
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 16.0f));
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
+		if (ImGui::Begin("OSD", nullptr, window_flags)) {
+			ImVec4 fps_color = ImVec4(1.0f, 0.3f, 0.3f, 1.0f); // Red
+			if (g_game_fps >= 55.0) fps_color = ImVec4(0.2f, 1.0f, 0.4f, 1.0f); // Green
+			else if (g_game_fps >= 30.0) fps_color = ImVec4(1.0f, 0.8f, 0.2f, 1.0f); // Yellow
+			
+			ImGui::TextColored(fps_color, "FPS: %.1f", g_game_fps);
+			ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Frame Time: %.2f ms", g_game_fps > 0 ? 1000.0f / g_game_fps : 0.0f);
+			
+			// Shader Cache Metric
+			ImGui::Separator();
+			if (shaders_compiling > 0) {
+				ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.0f, 1.0f), "Shader Cache: Compiling (%d active)", shaders_compiling);
+			} else {
+				ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.4f, 1.0f), "Shader Cache: 100%%");
+			}
+			ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Total Compiled: %d", g_shaders_compiled.load(std::memory_order_relaxed));
+
+			ImGui::Separator();
+			ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "[F2 / Touchpad]: Settings");
+			if (mode == 2) {
+				ImGui::Separator();
+				ImGui::Text("Frame Number: %llu", g_game_frame_num);
+				ImGui::Separator();
+				static char title[128] = {0};
+				static char title_id[12] = {0};
+				static char app_ver[12] = {0};
+				static bool has_title = Loader::SystemContentParamSfoGetString("TITLE", title, sizeof(title));
+				static bool has_title_id = Loader::SystemContentParamSfoGetString("TITLE_ID", title_id, sizeof(title_id));
+				static bool has_app_ver = Loader::SystemContentParamSfoGetString("APP_VER", app_ver, sizeof(app_ver));
+				if (has_title) ImGui::Text("Game: %s", title);
+				if (has_title_id) ImGui::Text("Title ID: %s", title_id);
+				if (has_app_ver) ImGui::Text("App Version: %s", app_ver);
+				ImGui::Separator();
+				ImGui::Text("Build: %s", KYTY_BUILD_LABEL);
+				ImGui::Text("CPU: %s", Common::GetSystemInfo().ProcessorName.c_str());
+				ImGui::Text("GPU: %s", graphics.GetPhysicalDeviceProperties().deviceName.data());
+			}
+		}
+		ImGui::PopStyleVar(2);
+		ImGui::End();
+	}
+
 	bool PrepareFrame(vk::Extent2D frame_extent, vk::Format format, uint32_t image_count) {
+		static uint32_t g_settings_check_counter = 0;
+		static std::filesystem::file_time_type g_last_settings_write_time {};
+		if (++g_settings_check_counter % 30 == 0) {
+			std::error_code ec;
+			auto write_time = std::filesystem::last_write_time(Common::SettingsFile::FileName, ec);
+			if (!ec) {
+				if (g_last_settings_write_time != std::filesystem::file_time_type {} && write_time != g_last_settings_write_time) {
+					Config::ReloadFromSettingsFile();
+					Loader::GamePatch::ToggleRayTracingBypass(Config::RayTracingEnabled());
+				}
+				g_last_settings_write_time = write_time;
+			}
+		}
+
 		OverlaySnapshot snapshot;
-		if (!GetOverlaySnapshot(&snapshot)) {
+		bool has_overlay = GetOverlaySnapshot(&snapshot);
+		int osd_mode = g_osd_mode.load(std::memory_order_relaxed);
+		int shaders_compiling = g_shaders_compiling.load(std::memory_order_relaxed);
+
+		if (!has_overlay && osd_mode == 0 && shaders_compiling == 0) {
 			return false;
 		}
+		
 		const auto prepared_session = snapshot.session;
 		EnsureVulkan(format, image_count);
-		if (session != snapshot.session) {
-			session       = snapshot.session;
-			focus_pending = true;
-			shift         = session.kind == OverlayKind::Ime &&
-			                (snapshot.ime.option & Ime::OPTION_NO_AUTO_CAPITALIZE) == 0;
-			symbol_mode   = false;
-			panel_offset  = {};
-			right_stick   = {};
-			auto& io      = ImGui::GetIO();
-			io.ClearEventsQueue();
-			io.ClearInputKeys();
-			io.ClearInputMouse();
+		
+		if (has_overlay) {
+			if (session != snapshot.session) {
+				session       = snapshot.session;
+				focus_pending = true;
+				shift         = (snapshot.ime.option & Ime::OPTION_NO_AUTO_CAPITALIZE) == 0;
+				symbol_mode   = false;
+				panel_offset  = {};
+				right_stick   = {};
+				auto& io      = ImGui::GetIO();
+				io.ClearEventsQueue();
+				io.ClearInputKeys();
+				io.ClearInputMouse();
+			}
+			DrainInput(snapshot.session);
+		} else {
+			session = {};
 		}
-		DrainInput(snapshot.session);
 
 		auto& io       = ImGui::GetIO();
 		io.DisplaySize = {static_cast<float>(frame_extent.width),
@@ -985,15 +1276,31 @@ struct SystemOverlay::Impl {
 		last_frame     = now;
 		ImGui_ImplVulkan_NewFrame();
 		ImGui::NewFrame();
-		if (!GetOverlaySnapshot(&snapshot) || snapshot.session != prepared_session) {
+		
+		bool overlay_still_valid = has_overlay;
+		if (has_overlay) {
+			if (!GetOverlaySnapshot(&snapshot) || snapshot.session != prepared_session) {
+				overlay_still_valid = false;
+			}
+		}
+
+		if (overlay_still_valid) {
+			if (snapshot.session.kind == OverlayKind::Error) {
+				DrawError(snapshot.error, frame_extent);
+			} else if (snapshot.session.kind == OverlayKind::Settings) {
+				DrawSettings(frame_extent);
+			} else {
+				DrawIme(snapshot.ime, frame_extent);
+			}
+		}
+
+		DrawOsd(osd_mode, g_osd_alignment.load(std::memory_order_relaxed), shaders_compiling);
+
+		if (!overlay_still_valid && osd_mode == 0 && shaders_compiling == 0) {
 			ImGui::EndFrame();
 			return false;
 		}
-		if (snapshot.session.kind == OverlayKind::Dialog) {
-			DrawDialog(snapshot.dialog, frame_extent);
-		} else {
-			DrawIme(snapshot.ime, frame_extent);
-		}
+
 		ImGui::Render();
 		extent = frame_extent;
 		return true;
@@ -1038,6 +1345,9 @@ struct SystemOverlay::Impl {
 	bool                                  focus_pending      = true;
 	float                                 ui_scale           = 1.0f;
 	float                                 button_height      = 42.0f;
+	int                                   settings_saved_percent = 100;
+	int                                   record_thread_choice   = -1;
+	int                                   hardware_bounds_choice = -1;
 	ImVec2                                panel_offset {};
 	ImVec2                                right_stick {};
 	OverlaySession                        session;

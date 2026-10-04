@@ -8,6 +8,7 @@
 #include <deque>
 #include <list>
 #include <map>
+#include <ranges>
 #include <set>
 #include <span>
 
