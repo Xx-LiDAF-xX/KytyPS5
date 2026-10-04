@@ -10,8 +10,6 @@
 #include <span>
 #include <vector>
 
-VK_DEFINE_HANDLE(VmaAllocation)
-
 namespace Libs::Graphics {
 
 class CommandScheduler;
@@ -121,7 +119,6 @@ private:
 		uint32_t                 base = 0;
 	};
 
-	[[nodiscard]] Scratch         AllocateScratch(uint64_t size);
 	[[nodiscard]] StorageBinding  BindStorage(Result buffer, uint64_t size) const;
 	[[nodiscard]] static uint32_t ConversionRows(uint64_t offset, uint64_t row_stride,
 	                                             uint64_t active, uint32_t remaining,

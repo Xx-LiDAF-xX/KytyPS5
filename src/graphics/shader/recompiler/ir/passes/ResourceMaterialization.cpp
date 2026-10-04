@@ -259,6 +259,7 @@ bool MaterializeIndirectImage(const ResourcePlan& program, const Roots& roots, u
                               ResourceSnapshot& snapshot,
                               ResourceSpecialization& specialization) {
 	const auto& sources = indirect.sources;
+	auto& keys = program.material_keys;
 	uint64_t table_base = 0;
 	uint64_t table_size = UINT64_MAX; // Scalar addresses have no buffer descriptor bounds.
 	ShaderBufferResource table;
@@ -291,6 +292,25 @@ bool MaterializeIndirectImage(const ResourcePlan& program, const Roots& roots, u
 		    !clean.Evaluate(roots.KeyCount(source), count) || count == 0u || count > 32u) {
 			return false;
 		}
+		if (indirect.material_source == UINT32_MAX) {
+			uint32_t key_count = 0;
+			const bool evaluated = clean.Evaluate(indirect.key_count, key_count);
+			if (std::bit_cast<int32_t>(key_count) <= 0) key_count = 0;
+			if (table_value.dword_count != 2u || !evaluated ||
+			    key_count > MaxIndirectImageProbes ||
+			    uint64_t {indirect.table_offset} + uint64_t {key_count} * 32u > UINT32_MAX + 1ull) {
+				return false;
+			}
+			keys.resize(key_count);
+			std::iota(keys.begin(), keys.end(), 0u);
+		} else if (!indirect.selector_mask.IsEmpty()) {
+			uint32_t mask = 0;
+			uint32_t count = 0;
+			if (material_value.dword_count != 2u || table_value.dword_count != 2u ||
+			    !clean.Evaluate(indirect.selector_mask, mask) ||
+			    !clean.Evaluate(indirect.key_count, count) || count == 0u || count > 32u) {
+				return false;
+			}
 			if (count < 32u) mask &= (1u << count) - 1u;
 			const auto material_base =
 			    (static_cast<uint64_t>(material_value.dwords[1]) << 32u) | material_value.dwords[0];
@@ -336,6 +356,8 @@ bool MaterializeIndirectImage(const ResourcePlan& program, const Roots& roots, u
 			std::ranges::sort(keys);
 			keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
 		}
+	}
+
 	const auto children_begin = snapshot.images.size();
 	const auto mapping_offset = snapshot.flattened_srt.size();
 	const auto root_image = specialization.images[image_index];
@@ -1178,11 +1200,13 @@ bool Materialize(const ResourcePlan& program, const Roots& roots, const SrtRunti
                  const SrtRuntime& observed, bool capture_reads, typename Roots::Walker& clean,
                  typename Roots::Walker& walker, ResourceSnapshot& snapshot,
                  ResourceSpecialization& specialization, MaterializationMemo* memo) {
+	auto& reads = program.ThreadScratch().specialization_reads;
 	// The ordinary walker sends conditions that are not direct to its strict walker.
 	const auto active = walker.FindActiveSources();
 	if (!walker.RefreshFlatBuffer(snapshot.flattened_srt)) {
 		return false;
 	}
+	const auto active = std::span<const uint8_t>(program.active_sources);
 	snapshot.uniform_fill = {};
 	const auto& fill = program.uniform_fill;
 	const auto words = fill.fill.words;
@@ -1209,7 +1233,7 @@ bool Materialize(const ResourcePlan& program, const Roots& roots, const SrtRunti
 			memo->valid = false;
 		}
 	}
-	const auto evaluate = [&](uint32_t source, DescriptorValue& value, bool written = false) {
+	const auto evaluate = [&](uint32_t source, DescriptorValue& value) {
 		if (source >= program.descriptor_sources.size()) {
 			return false;
 		}

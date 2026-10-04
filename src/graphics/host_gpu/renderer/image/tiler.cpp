@@ -494,7 +494,7 @@ void TileManager::TileImage(Image& image, std::span<const vk::BufferImageCopy> r
 	       dispatches, false);
 }
 
-TileManager::Result TileManager::GetScratchBuffer(uint64_t size, vk::Buffer /*input*/) {
+TileManager::Result TileManager::GetScratchBuffer(uint64_t size) {
 	auto scratch = AllocateScratch(Common::AlignUp(size, 4));
 	DeferRelease(scratch);
 	return {scratch.buffer, 0, scratch.size};

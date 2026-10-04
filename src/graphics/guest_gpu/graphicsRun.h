@@ -71,6 +71,7 @@ private:
 	};
 
 	void              Enqueue(Submission submission);
+
 	// Waits until every submission enqueued before `sequence` has completed.
 	void              WaitForSubmissionsBefore(uint64_t sequence);
 	void              ProcessCommands();

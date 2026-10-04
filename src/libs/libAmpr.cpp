@@ -1273,91 +1273,10 @@ static void NoteRepeatedRead(uint32_t file_id, uint64_t offset, uint64_t size) {
 	}
 }
 
-static int ExecuteCommand(const CommandBufferState::Command& entry) {
-	if (const auto* payload = std::get_if<CommandBufferState::ReadFileCommand>(&entry.data)) {
-		const auto& command = *payload;
-		std::string host_path;
-		if (!AprShared::TryGetHostPath(command.file_id, &host_path)) {
-			LOGF("\tAPR submit failed for unknown file id: 0x%08" PRIx32 "\n", command.file_id);
-			return LibKernel::KERNEL_ERROR_ENOENT;
-		}
-
-		uint64_t bytes_read = 0;
-		auto     result = ReadHostFileToGuest(host_path, command.file_offset, command.destination,
-		                                      command.size, &bytes_read);
-		if (result != OK) {
-			LOGF("\tAPR submit read failed: id=0x%08" PRIx32 ", result=0x%08" PRIx32 ", path=%s\n",
-			     command.file_id, static_cast<uint32_t>(result), host_path.c_str());
-			return result;
-		}
-	} else if (const auto* payload =
-	               std::get_if<CommandBufferState::KernelEventCommand>(&entry.data)) {
-		const auto& command = *payload;
-		const auto  eq      = static_cast<LibKernel::EventQueue::KernelEqueue>(command.eq);
-		auto        result  = LibKernel::EventQueue::KernelTriggerUserEvent(
-		    eq, command.id, reinterpret_cast<void*>(command.data));
-		if (result != OK) {
-			LOGF("\tAPR submit event failed: eq=0x%016" PRIx64 ", id=%" PRId32
-			     ", result=0x%08" PRIx32 "\n",
-			     command.eq, command.id, static_cast<uint32_t>(result));
-			return result;
-		}
-	} else if (const auto* payload =
-	               std::get_if<CommandBufferState::WriteAddressCommand>(&entry.data)) {
-		const auto& command = *payload;
-		std::atomic_ref(*reinterpret_cast<uint64_t*>(command.address))
-		    .store(command.value, std::memory_order_release);
-	} else if (const auto* payload = std::get_if<CommandBufferState::AmmMapCommand>(&entry.data)) {
-		const auto& command = *payload;
-		int         result  = OK;
-		if (command.kind == AmmCommandKind::Unmap) {
-			result = LibKernel::Memory::KernelMunmap(command.va, command.size);
-		} else {
-			result = ExecuteAmmMapCommand(command);
-		}
-
-		if (result != OK) {
-			LOGF("\tAMM submit command failed: kind=%u va=0x%016" PRIx64 " dmem=0x%016" PRIx64
-			     " size=0x%016" PRIx64 " type=%" PRId32 " prot=0x%08" PRIx32 " result=0x%08" PRIx32
-			     "\n",
-			     static_cast<uint32_t>(command.kind), command.va, command.dmem_offset, command.size,
-			     command.type, static_cast<uint32_t>(command.prot), static_cast<uint32_t>(result));
-			return result;
-		}
-	}
-	return OK;
-}
-
-struct Submission {
-	std::vector<CommandBufferState::Command> commands;
-	size_t                                   cursor = 0;
-	void*                                    result = nullptr;
-	uint32_t                                 id     = 0;
-};
-
-static bool IsWaitSatisfied(const CommandBufferState::WaitAddressCommand& wait) {
-	const uint64_t value =
-	    std::atomic_ref(*reinterpret_cast<uint64_t*>(wait.address)).load(std::memory_order_acquire);
-	switch (wait.compare) {
-		case 0: return value == wait.value;
-		case 1: return value > wait.value;
-		case 2: return value < wait.value;
-		case 3: return value != wait.value;
-		case 4: return static_cast<int64_t>(value - wait.value) >= 0;
-		case 5: return static_cast<int64_t>(value) > static_cast<int64_t>(wait.value);
-		default: return static_cast<int64_t>(value) < static_cast<int64_t>(wait.value);
-	}
-}
-
-class CommandEngine {
-public:
-	explicit CommandEngine(size_t priorities)
-	    : m_queues(priorities), m_worker([this](std::stop_token stop) { Run(stop); }) {}
-
-	~CommandEngine() {
-		std::scoped_lock lock(m_mutex);
-		m_worker.request_stop();
-		m_cv.notify_all();
+static int ExecuteAprCommandBuffer(uint64_t command_buffer, int32_t* execution_result,
+                                   uint32_t* error_offset) {
+	if (execution_result == nullptr || error_offset == nullptr) {
+		return LibKernel::KERNEL_ERROR_EINVAL;
 	}
 
 	void Submit(uint32_t priority, Submission submission) {
@@ -1458,10 +1377,99 @@ static int QueueCommandBuffer(Engine engine, uint64_t command_buffer, uint32_t b
 	if (out_submission_id != nullptr) {
 		AprShared::WriteGuest(reinterpret_cast<uint64_t>(out_submission_id), id);
 	}
-	static CommandEngine apr_engine(7);
-	static CommandEngine amm_engine(3);
-	(amm ? amm_engine : apr_engine)
-	    .Submit(priority, {std::move(state.commands), 0, result, id});
+	for (size_t i = 0; i < state.write_address_commands.size(); i++) {
+		if (state.write_address_commands[i].record_offset < state.write_offset) {
+			ordered.push_back(
+			    {state.write_address_commands[i].record_offset, CommandKind::WriteAddress, i});
+		}
+	}
+	for (size_t i = 0; i < state.amm_map_commands.size(); i++) {
+		if (state.amm_map_commands[i].record_offset < state.write_offset) {
+			ordered.push_back({state.amm_map_commands[i].record_offset, CommandKind::AmmMap, i});
+		}
+	}
+
+	std::sort(ordered.begin(), ordered.end(), [](const OrderedCommand& a, const OrderedCommand& b) {
+		return a.record_offset < b.record_offset;
+	});
+
+	for (const auto& entry: ordered) {
+		switch (entry.kind) {
+			case CommandKind::ReadFile: {
+				const auto& command = state.read_file_commands[entry.index];
+				std::string host_path;
+				if (!AprShared::TryGetHostPath(command.file_id, &host_path)) {
+					LOGF("\tAPR submit failed for unknown file id: 0x%08" PRIx32 "\n",
+					     command.file_id);
+					*execution_result = LibKernel::KERNEL_ERROR_ENOENT;
+					*error_offset     = static_cast<uint32_t>(command.record_offset);
+					return OK;
+				}
+
+				uint64_t bytes_read = 0;
+				auto result = ReadHostFileToGuest(host_path, command.file_offset,
+				                                  command.destination, command.size, &bytes_read);
+				DebugAprRead(host_path, command.file_offset, command.size, command.destination,
+				             bytes_read, result);
+				if (result != OK) {
+					LOGF("\tAPR submit read failed: id=0x%08" PRIx32 ", result=0x%08" PRIx32
+					     ", path=%s\n",
+					     command.file_id, static_cast<uint32_t>(result), host_path.c_str());
+					*execution_result = result;
+					*error_offset     = static_cast<uint32_t>(command.record_offset);
+					return OK;
+				}
+				NoteRepeatedRead(command.file_id, command.file_offset, bytes_read);
+			} break;
+			case CommandKind::KernelEvent: {
+				const auto& command = state.kernel_event_commands[entry.index];
+				const auto  eq      = static_cast<LibKernel::EventQueue::KernelEqueue>(command.eq);
+				auto        result  = LibKernel::EventQueue::KernelTriggerUserEvent(
+				    eq, command.id, reinterpret_cast<void*>(command.data));
+				if (result != OK) {
+					LOGF("\tAPR submit event failed: eq=0x%016" PRIx64 ", id=%" PRId32
+					     ", result=0x%08" PRIx32 "\n",
+					     command.eq, command.id, static_cast<uint32_t>(result));
+					*execution_result = result;
+					*error_offset     = static_cast<uint32_t>(command.record_offset);
+					return OK;
+				}
+			} break;
+			case CommandKind::WriteAddress: {
+				const auto& command = state.write_address_commands[entry.index];
+				if (!AprShared::WriteGuest(command.address, command.value)) {
+					LOGF("\tAMPR submit write-address failed: address=0x%016" PRIx64
+					     " value=0x%016" PRIx64 "\n",
+					     command.address, command.value);
+					*execution_result = LibKernel::KERNEL_ERROR_EFAULT;
+					*error_offset     = static_cast<uint32_t>(command.record_offset);
+					return OK;
+				}
+			} break;
+			case CommandKind::AmmMap: {
+				const auto& command = state.amm_map_commands[entry.index];
+				int         result  = OK;
+				if (command.kind == AmmCommandKind::Unmap) {
+					result = LibKernel::Memory::KernelMunmap(command.va, command.size);
+				} else {
+					result = ExecuteAmmMapCommand(command);
+				}
+
+				if (result != OK) {
+					LOGF("\tAMM submit command failed: kind=%u va=0x%016" PRIx64
+					     " dmem=0x%016" PRIx64 " size=0x%016" PRIx64 " type=%" PRId32
+					     " prot=0x%08" PRIx32 " result=0x%08" PRIx32 "\n",
+					     static_cast<uint32_t>(command.kind), command.va, command.dmem_offset,
+					     command.size, command.type, static_cast<uint32_t>(command.prot),
+					     static_cast<uint32_t>(result));
+					*execution_result = result;
+					*error_offset     = static_cast<uint32_t>(command.record_offset);
+					return OK;
+				}
+			} break;
+		}
+	}
+
 	return OK;
 }
 

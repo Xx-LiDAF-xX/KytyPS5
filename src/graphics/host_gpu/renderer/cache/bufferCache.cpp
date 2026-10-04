@@ -126,6 +126,7 @@ void BufferCache::DeleteBuffer(BufferId id) {
 	}
 }
 
+template <bool async>
 bool BufferCache::DownloadBufferMemory(Buffer& buffer, uint64_t vaddr, uint64_t size) {
 	std::vector<vk::BufferCopy>                copies;
 	std::vector<std::pair<uint64_t, uint64_t>> pages;
