@@ -1,6 +1,7 @@
 #include "graphics/host_gpu/renderer/cache/samplerCache.h"
 
 #include "common/assert.h"
+#include "common/emulatorConfig.h"
 #include "common/logging/log.h"
 #include "graphics/guest_gpu/gpu_defs.h"
 #include "graphics/host_gpu/renderer/renderContext.h"
@@ -15,8 +16,9 @@ SamplerCache::~SamplerCache() {
 }
 
 vk::Sampler SamplerCache::GetSampler(const ShaderSamplerResource& r, bool integer_border) {
+	const uint32_t user_aniso = static_cast<uint32_t>(Config::GetAnisotropicFiltering());
 	const SamplerKey key {r.fields[0], r.fields[1], r.fields[2], r.fields[3],
-	                      static_cast<uint32_t>(integer_border)};
+	                      static_cast<uint32_t>(integer_border), user_aniso};
 	// Every draw looks up each of its samplers. Samplers live as long as the cache, so each thread
 	// keeps its recent lookups and repeats them without the lock and the map.
 	struct Recent {
@@ -69,7 +71,7 @@ vk::Sampler SamplerCache::FindOrCreateSampler(const ShaderSamplerResource& r,
 		return vk::Filter::eNearest;
 	};
 
-	const bool aniso = is_aniso_filter(mag_filter) || is_aniso_filter(min_filter);
+	bool aniso = is_aniso_filter(mag_filter) || is_aniso_filter(min_filter);
 	if (aniso) {
 		switch (static_cast<Prospero::SamplerAnisoRatio>(r.MaxAnisoRatio())) {
 			case Prospero::SamplerAnisoRatio::kOne: aniso_ratio = 1.0f; break;
@@ -82,7 +84,20 @@ vk::Sampler SamplerCache::FindOrCreateSampler(const ShaderSamplerResource& r,
 		}
 	}
 
+	const int32_t user_aniso = Config::GetAnisotropicFiltering();
 	const auto mip_filter = r.MipFilter();
+	if (user_aniso == 0) {
+		aniso       = false;
+		aniso_ratio = 1.0f;
+	} else if (user_aniso > 0) {
+		if (aniso || (to_vk_filter(mag_filter) == vk::Filter::eLinear && 
+		              to_vk_filter(min_filter) == vk::Filter::eLinear &&
+		              static_cast<Prospero::SamplerMipFilter>(mip_filter) != Prospero::SamplerMipFilter::kNone)) {
+			aniso       = true;
+			aniso_ratio = static_cast<float>(user_aniso);
+		}
+	}
+
 	float      min_lod    = 0.0f;
 	float      max_lod    = 0.0f;
 	if (static_cast<Prospero::SamplerMipFilter>(mip_filter) != Prospero::SamplerMipFilter::kNone) {

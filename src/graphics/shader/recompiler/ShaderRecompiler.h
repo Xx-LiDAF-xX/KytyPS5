@@ -29,6 +29,7 @@ struct TranslateResult {
 	std::string decoded_dump;
 	std::string cfg_dump;
 	bool        skip_dispatch = false;
+	bool        has_bvh       = false;
 };
 
 struct CompileResult {

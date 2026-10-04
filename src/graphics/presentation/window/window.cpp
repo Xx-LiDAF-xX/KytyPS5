@@ -312,14 +312,18 @@ static void GameEventController([[maybe_unused]] const EventController& f) {
 
 	if (f.added) {
 		auto* pad = SDL_OpenGamepad(f.id);
-		EXIT_NOT_IMPLEMENTED(pad == nullptr);
-		int id = SDL_GetJoystickID(SDL_GetGamepadJoystick(pad));
-		Controller::Connect(id);
+		if (pad != nullptr) {
+			int id = SDL_GetJoystickID(SDL_GetGamepadJoystick(pad));
+			Controller::Connect(id);
+		}
 	}
 
 	if (f.removed) {
 		Controller::Disconnect(f.id);
-		SDL_CloseGamepad(SDL_GetGamepadFromID(f.id));
+		auto* pad = SDL_GetGamepadFromID(f.id);
+		if (pad != nullptr) {
+			SDL_CloseGamepad(pad);
+		}
 	}
 
 	if (f.down || f.up) {
@@ -750,6 +754,15 @@ static void WindowCreate(WindowContext& context) {
 		SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11,wayland");
 	}
 #endif
+
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+	// Eliminate massive USB plug/unplug framerate drops and stalling:
+	// Disable legacy DirectInput enumeration and run joystick detection in a background thread
+	SDL_SetHint(SDL_HINT_JOYSTICK_THREAD, "1");
+	SDL_SetHint(SDL_HINT_JOYSTICK_DIRECTINPUT, "0");
+	SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT, "1");
+#endif
+
 	if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
 		EXIT("%s\n", SDL_GetError());
 	}

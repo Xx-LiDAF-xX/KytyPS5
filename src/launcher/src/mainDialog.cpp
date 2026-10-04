@@ -235,6 +235,27 @@ static QStringList CreateEmulatorArgs(const Configuration& info) {
 	} else if (info.performance_profile == 3) {
 		args << "--preset" << "performance";
 	}
+	args << "--master-volume" << QString::number(info.master_volume);
+	if (info.audio_muted) {
+		args << "--audio-mute";
+	}
+	if (info.anisotropic_filtering >= 0) {
+		args << "--aniso" << QString::number(info.anisotropic_filtering);
+	}
+	if (info.resolution_scale > 0 && info.resolution_scale != 100) {
+		args << "--res-scale" << QString::number(info.resolution_scale);
+	}
+	args << "--motion-blur" << BoolArg(info.motion_blur);
+	args << "--depth-of-field" << BoolArg(info.depth_of_field);
+	args << "--bloom" << BoolArg(info.bloom);
+	args << "--ambient-occlusion" << BoolArg(info.ambient_occlusion);
+	if (info.auto_fix_missing_files) {
+		args << "--playgo-hack";
+	}
+	args << "--ray-tracing" << BoolArg(info.ray_tracing);
+	if (info.auto_optimize) {
+		args << "--auto-optimize";
+	}
 	args << "--readback-linear-images" << BoolArg(info.readback_linear_images);
 	if (info.tessellation_enabled) {
 		args << "--tessellation";
@@ -389,11 +410,52 @@ static QString BuildWinCmdKCommand(const QString& interpreter, const QStringList
 }
 #endif
 
+static void WriteKytySettingsIni(const QDir& dir, const Configuration& info) {
+	QString path = dir.filePath(QStringLiteral("kyty_settings.ini"));
+	QFile file(path);
+	if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+		return;
+	}
+	QTextStream out(&file);
+	out << "# KytyPS5 Performance & Settings Configuration\n";
+	int headroom = 125;
+	if (info.performance_profile == 1) headroom = 115;
+	else if (info.performance_profile == 2) headroom = 125;
+	else if (info.performance_profile == 3) headroom = 135;
+	out << "gpu-timestamp-scale = " << headroom << "\n";
+	out << "ray-tracing = " << (info.ray_tracing ? "true" : "false") << "\n";
+	out << "master-volume = " << info.master_volume << "\n";
+	out << "audio-mute = " << (info.audio_muted ? "true" : "false") << "\n";
+	if (info.anisotropic_filtering >= 0) {
+		out << "aniso = " << info.anisotropic_filtering << "\n";
+	}
+	if (info.resolution_scale > 0) {
+		out << "res-scale = " << info.resolution_scale << "\n";
+	}
+	out << "motion-blur = " << (info.motion_blur ? "true" : "false") << "\n";
+	out << "depth-of-field = " << (info.depth_of_field ? "true" : "false") << "\n";
+	out << "bloom = " << (info.bloom ? "true" : "false") << "\n";
+	out << "ambient-occlusion = " << (info.ambient_occlusion ? "true" : "false") << "\n";
+	out << "async-submit = true\n";
+	out << "pipeline-libraries = true\n";
+	out << "async-pipelines = true\n";
+	out << "relaxed-readback = true\n";
+	out << "speculative-draws = true\n";
+	out << "record-thread = true\n";
+	out << "hardware-buffer-bounds = true\n";
+	out << "osd-mode = " << info.osd_mode << "\n";
+	out << "osd-alignment = " << info.osd_alignment << "\n";
+	file.close();
+}
+
 void MainDialog::RunInterpreter(QProcess* process, const Configuration& info) {
 	const auto& interpreter = m_p->GetInterpreter();
 
 	QFileInfo f(interpreter);
 	auto      dir = f.absoluteDir();
+
+	WriteKytySettingsIni(dir, info);
+	WriteKytySettingsIni(QDir(QStringLiteral(".")), info);
 
 	auto args = CreateEmulatorArgs(info);
 	if (args.isEmpty()) {

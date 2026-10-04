@@ -44,6 +44,7 @@ struct Plan {
 using Json = nlohmann::json;
 
 std::unique_ptr<Plan> g_pending_plan;
+std::unique_ptr<Plan> g_applied_plan;
 std::vector<uint64_t> g_applied_cave_pages;
 
 bool Fail(std::string* error, std::string message) {
@@ -70,29 +71,66 @@ bool LoadPlan(const std::filesystem::path& path, Plan* plan, std::string* error)
 	}
 
 	const auto root = Json::parse(file, nullptr, false);
-	if (!root.is_object() || !root.contains("id") || !root.contains("version") ||
-	    !root.contains("process") || !root.contains("mods")) {
-		return Fail(error, "expected a GoldHEN-style mods JSON file");
+	if (!root.is_object()) {
+		return Fail(error, "expected a JSON object");
 	}
-	plan->title_id = root["id"].get<std::string>();
-	plan->version  = root["version"].get<std::string>();
-	plan->process  = root["process"].get<std::string>();
+
+	if (root.contains("id")) {
+		plan->title_id = root["id"].get<std::string>();
+	} else if (root.contains("title_id")) {
+		plan->title_id = root["title_id"].get<std::string>();
+	}
+
+	if (root.contains("version")) {
+		plan->version = root["version"].get<std::string>();
+	} else if (root.contains("app_version")) {
+		plan->version = root["app_version"].get<std::string>();
+	}
+
+	if (root.contains("process")) {
+		plan->process = root["process"].get<std::string>();
+	} else {
+		plan->process = "eboot.bin";
+	}
+
+	if (!root.contains("mods") || !root["mods"].is_array()) {
+		return Fail(error, "expected a mods array in patch JSON");
+	}
 
 	for (const auto& mod: root["mods"]) {
 		if (!mod.value("enabled", true)) {
 			continue;
 		}
-		const auto name = mod["name"].get<std::string>();
+		const auto name = mod.value("name", "Patch Mod");
 		plan->mod_names.push_back(name);
-		for (const auto& entry: mod["memory"]) {
-			Write write;
-			write.source_address = std::stoull(entry["offset"].get<std::string>(), nullptr, 16);
-			if (!ParseBytes(entry["off"].get<std::string>(), &write.off) ||
-			    !ParseBytes(entry["on"].get<std::string>(), &write.on) ||
-			    write.off.size() != write.on.size()) {
-				return Fail(error, "invalid mod memory bytes");
+
+		if (mod.contains("memory") && mod["memory"].is_array()) {
+			for (const auto& entry: mod["memory"]) {
+				Write write;
+				std::string offset_str = entry.value("offset", "");
+				if (offset_str.empty()) offset_str = entry.value("address", "");
+				if (offset_str.empty()) continue;
+				write.source_address = std::stoull(offset_str, nullptr, 16);
+				std::string off_str = entry.value("off", "");
+				std::string on_str = entry.value("on", "");
+				if (on_str.empty()) on_str = entry.value("value", "");
+				if (off_str.empty() && !on_str.empty()) off_str = std::string(on_str.size(), '0');
+				if (ParseBytes(off_str, &write.off) && ParseBytes(on_str, &write.on)) {
+					plan->writes.push_back(std::move(write));
+				}
 			}
-			plan->writes.push_back(std::move(write));
+		} else if (mod.contains("address") || mod.contains("offset")) {
+			std::string offset_str = mod.value("offset", "");
+			if (offset_str.empty()) offset_str = mod.value("address", "");
+			std::string on_str = mod.value("value", "");
+			if (on_str.empty()) on_str = mod.value("on", "");
+			std::string off_str = mod.value("off", "");
+			if (off_str.empty() && !on_str.empty()) off_str = std::string(on_str.size(), '0');
+			Write write;
+			write.source_address = std::stoull(offset_str, nullptr, 16);
+			if (ParseBytes(off_str, &write.off) && ParseBytes(on_str, &write.on)) {
+				plan->writes.push_back(std::move(write));
+			}
 		}
 	}
 	return true;
@@ -275,6 +313,46 @@ bool Apply(const std::filesystem::path& plan_path, Program* main_program,
 	return true;
 }
 
+bool ApplyAutoFixes(Program* main_program, const std::vector<Program*>& programs) {
+	if (main_program == nullptr) return false;
+	
+	std::string title_id;
+	if (!SystemContentParamSfoGetString("TITLE_ID", &title_id) || title_id.empty()) {
+		return false;
+	}
+
+	if (title_id == "PPSA21567" || title_id == "PPSA21564") {
+		Log::WriteToConsoleAndLog(fmt::format("Applying built-in ASTRO BOT optimizations & stability fixes for {}...\n", title_id));
+		
+		Plan plan;
+		plan.title_id = title_id;
+		plan.process = main_program->file_name.filename().string();
+		plan.mod_names = {"Auto-Optimizer: Deferred Renderer, GI Bypass, Crash Fixes"};
+		
+		auto add_write = [&plan](uint64_t addr, const char* off, const char* on) {
+			Write w;
+			w.source_address = addr;
+			ParseBytes(off, &w.off);
+			ParseBytes(on, &w.on);
+			plan.writes.push_back(std::move(w));
+		};
+		
+		add_write(0x73eec3f, "4584f60f84f10800004531f64c8d3d8ec4a90141b430", "4584f6e9f2080000904531f64c8d3d8ec4a90141b430");
+		add_write(0x7108a40, "80bfe5050000000f857c1b0000", "e9841b00009090909090909090");
+		add_write(0x7108a33, "0fb682a00700008887e4050000", "b80000000090908887e4050000");
+		add_write(0x18f0552, "480f44f2", "480f46f2");
+		
+		g_pending_plan = std::make_unique<Plan>(std::move(plan));
+		for (auto* program: programs) {
+			ApplyPending(program);
+			if (g_pending_plan == nullptr) break;
+		}
+		return true;
+	}
+
+	return false;
+}
+
 bool ApplyPending(Program* program) {
 	uint64_t source_base = 0;
 	if (g_pending_plan == nullptr || program == nullptr || program->elf == nullptr ||
@@ -296,9 +374,24 @@ bool ApplyPending(Program* program) {
 	for (const auto& name: g_pending_plan->mod_names) {
 		Log::WriteToConsoleAndLog(fmt::format("Successfully applied cheat: {}\n", name));
 	}
-	g_applied_cave_pages = std::move(g_pending_plan->cave_pages);
-	g_pending_plan.reset();
+	g_applied_cave_pages = g_pending_plan->cave_pages;
+	g_applied_plan = std::move(g_pending_plan);
 	return true;
+}
+
+void ToggleRayTracingBypass(bool enable_raytracing) {
+	if (g_applied_plan == nullptr) return;
+	
+	if (g_applied_plan->title_id == "PPSA21567" || g_applied_plan->title_id == "PPSA21564") {
+		for (const auto& write: g_applied_plan->writes) {
+			// Don't revert the crash fix (0x18f0552)
+			if (write.source_address == 0x18f0552) continue;
+			
+			const auto& bytes = enable_raytracing ? write.off : write.on;
+			std::memcpy(reinterpret_cast<void*>(write.target_address), bytes.data(), bytes.size());
+			Common::VirtualMemory::FlushInstructionCache(write.target_address, bytes.size());
+		}
+	}
 }
 
 void Clear() {

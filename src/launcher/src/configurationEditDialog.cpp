@@ -1,11 +1,16 @@
 #include "configurationEditDialog.h"
 
 #include "common/emulatorConfig.h"
+#include "common/systemInfo.h"
 #include "configuration.h"
 #include "mandatoryLineEdit.h"
 #include <SDL3/SDL.h>
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 #include <QAbstractItemView>
+#include <QThread>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -129,7 +134,7 @@ ConfigurationEditDialog::ConfigurationEditDialog(Configuration& info, QWidget* p
 	layout()->setSizeConstraint(QLayout::SetMinimumSize);
 	setSizeGripEnabled(true);
 
-	restoreGeometry(g_last_geometry);
+
 
 	Init(info);
 }
@@ -266,6 +271,11 @@ void ConfigurationEditDialog::Init(const Configuration& info) {
 	m_ui->lineEdit_printf_file->setText(info.printf_output_file);
 	m_ui->lineEdit_printf_file->setEnabled(info.printf_direction ==
 	                                       Configuration::LogDirection::File);
+	m_ui->spinBox_master_volume->setValue(info.master_volume);
+	m_ui->checkBox_audio_muted->setChecked(info.audio_muted);
+
+	m_ui->checkBox_auto_fix_missing_files->setChecked(info.auto_fix_missing_files);
+
 	m_ui->checkBox_profiler->setChecked(info.profiler_enabled);
 }
 
@@ -404,6 +414,11 @@ static void UpdateInfo(Configuration& info, Ui::ConfigurationEditDialog& ui) {
 	    TextToEnum<Configuration::LogDirection>(ui.comboBox_printf_direction->currentText());
 	info.printf_output_file = ui.lineEdit_printf_file->text();
 	info.profiler_enabled = ui.checkBox_profiler->isChecked();
+
+	info.master_volume = ui.spinBox_master_volume->value();
+	info.audio_muted   = ui.checkBox_audio_muted->isChecked();
+
+	info.auto_fix_missing_files = ui.checkBox_auto_fix_missing_files->isChecked();
 }
 
 void ConfigurationEditDialog::save() {

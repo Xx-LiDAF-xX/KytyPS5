@@ -356,6 +356,7 @@ struct PipelineCache::ProgramCache {
 		uint32_t                                    last_permutation = UINT32_MAX;
 		uint32_t                                    last_push_cursor = 0;
 		bool                                        skip_dispatch = false;
+		bool                                        has_bvh       = false;
 		std::vector<PendingPermutation>             pending;
 		// Set once a GPU-thread refresh succeeded (its plan is compiled): only then may the draw
 		// speculation thread refresh this plan (see Speculate).
@@ -722,7 +723,7 @@ struct PipelineCache::ProgramCache {
 					     static_cast<unsigned long long>(params.hash));
 				}
 			}
-			if (source.skip_dispatch) {
+			if (source.skip_dispatch || (source.has_bvh && !Config::RayTracingEnabled())) {
 				return {};
 			}
 			if (auto program = existing(source)) {
@@ -736,7 +737,7 @@ struct PipelineCache::ProgramCache {
 		lookup_key.code_size       = static_cast<uint32_t>(params.code.size());
 		BuildStageStaticKey(input_info, lookup_key.static_state);
 		auto entry = programs.find(lookup_key);
-		if (entry != programs.end() && entry->second.skip_dispatch) {
+		if (entry != programs.end() && (entry->second.skip_dispatch || (entry->second.has_bvh && !Config::RayTracingEnabled()))) {
 			return {};
 		}
 		if (entry != programs.end() && &entry->second != refreshed) {
@@ -790,12 +791,14 @@ struct PipelineCache::ProgramCache {
 				std::unique_lock lock(programs_mutex);
 				entry = programs.try_emplace(lookup_key, ShaderRecompiler::IR::ResourcePlan {}).first;
 				entry->second.skip_dispatch = true;
+				entry->second.has_bvh       = translated->has_bvh;
 				return {};
 			}
 			{
 				std::unique_lock lock(programs_mutex);
 				entry = programs.try_emplace(lookup_key,
 				    ShaderRecompiler::IR::ExtractResourcePlan(translated->program)).first;
+				entry->second.has_bvh = translated->has_bvh;
 			}
 			EXIT_IF(!ShaderRecompiler::IR::MaterializeResources(
 			    entry->second.resource_plan, runtime, entry->second.resources,

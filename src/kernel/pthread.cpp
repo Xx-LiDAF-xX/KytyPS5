@@ -1093,7 +1093,7 @@ void Initialize() {
 	g_pthread_context->SetDefaultCondattr(default_condattr);
 	g_pthread_context->SetDefaultAttr(default_attr);
 
-	PRINT_NAME_ENABLE(true);
+	PRINT_NAME_ENABLE(false);
 
 	Common::Thread thread(FreeDetachedThreads, nullptr);
 	thread.Detach();
@@ -3289,7 +3289,7 @@ int KYTY_SYSV_ABI PthreadCreate(Pthread* thread, const PthreadAttr* attr,
 
 	PthreadAttrDbgPrint(&created_thread->attr);
 
-	PRINT_NAME_ENABLE(true);
+	PRINT_NAME_ENABLE(false);
 
 	if (result < 0) {
 		return result;

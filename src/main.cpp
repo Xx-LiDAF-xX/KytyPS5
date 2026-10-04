@@ -119,6 +119,8 @@ static void PrintUsage() {
 #endif
 	::printf("  --keymap <Control=Input>             DualSense mapping; may be repeated.\n");
 	::printf("  --rd                                 Enable RenderDoc capture.\n");
+	::printf("  --ray-tracing <true|false>           Enable hardware ray tracing. Default: false.\n");
+	::printf("  --auto-optimize                      Auto-detect and optimize for host PC specs.\n");
 }
 
 static bool NextArg(int argc, char* argv[], int& index, std::string& out) {
@@ -272,6 +274,41 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 		}
 #endif
 
+		if (arg == "--audio-mute") {
+			CheckOptionalBool(i, argc, argv, options.config.audio_muted);
+			continue;
+		}
+
+		if (arg == "--motion-blur") {
+			CheckOptionalBool(i, argc, argv, options.config.motion_blur_enabled);
+			continue;
+		}
+
+		if (arg == "--depth-of-field") {
+			CheckOptionalBool(i, argc, argv, options.config.depth_of_field_enabled);
+			continue;
+		}
+
+		if (arg == "--bloom") {
+			CheckOptionalBool(i, argc, argv, options.config.bloom_enabled);
+			continue;
+		}
+
+		if (arg == "--ambient-occlusion") {
+			CheckOptionalBool(i, argc, argv, options.config.ambient_occlusion_enabled);
+			continue;
+		}
+
+		if (arg == "--ray-tracing") {
+			CheckOptionalBool(i, argc, argv, options.config.ray_tracing_enabled);
+			continue;
+		}
+
+		if (arg == "--auto-optimize") {
+			CheckOptionalBool(i, argc, argv, options.config.auto_spec_optimization);
+			continue;
+		}
+
 		if (!arg.starts_with("--")) {
 			if (options.app0_dir.empty()) {
 				arg = "--game";
@@ -389,10 +426,28 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 				::printf("invalid osd alignment: %s\n", value.c_str());
 				return false;
 			}
+		} else if (arg == "--master-volume") {
+			if (!ParseUint32(value, options.config.master_volume) || options.config.master_volume > 100) {
+				::printf("invalid master volume (0-100): %s\n", value.c_str());
+				return false;
+			}
+		} else if (arg == "--aniso") {
+			if (!ParseInt32(value, options.config.anisotropic_filtering)) {
+				::printf("invalid anisotropic filtering: %s\n", value.c_str());
+				return false;
+			}
+		} else if (arg == "--res-scale") {
+			if (!ParseUint32(value, options.config.resolution_scale_percent) || options.config.resolution_scale_percent == 0) {
+				::printf("invalid resolution scale: %s\n", value.c_str());
+				return false;
+			}
 		} else if (arg == "--preset") {
 			std::string p = value;
 			std::transform(p.begin(), p.end(), p.begin(), ::tolower);
-			if (p == "quality") {
+			if (p == "auto") {
+				options.config.auto_spec_optimization = true;
+				::printf("Profile preset applied: Auto (Dynamic hardware detection & optimization enabled)\n");
+			} else if (p == "quality") {
 				options.config.gpu_timestamp_scale_percent = 100;
 				options.config.async_submit_enabled        = true;
 				options.config.pipeline_libraries_enabled  = true;

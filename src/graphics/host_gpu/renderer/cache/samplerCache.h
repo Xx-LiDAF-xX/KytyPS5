@@ -29,7 +29,7 @@ public:
 	vk::Sampler GetSampler(const ShaderSamplerResource& r, bool integer_border);
 
 private:
-	using SamplerKey = std::array<uint32_t, 5>;
+	using SamplerKey = std::array<uint32_t, 6>;
 
 	vk::Sampler FindOrCreateSampler(const ShaderSamplerResource& r, const SamplerKey& key);
 

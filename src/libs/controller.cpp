@@ -313,11 +313,10 @@ void GameController::Disconnect(int id) {
 	Common::LockGuard lock(m_mutex);
 
 	const auto it = std::find(m_connected_ids.begin(), m_connected_ids.end(), id);
-	EXIT_IF(it == m_connected_ids.end());
-
-	m_connected_ids.erase(it);
-
-	CheckActive();
+	if (it != m_connected_ids.end()) {
+		m_connected_ids.erase(it);
+		CheckActive();
+	}
 }
 
 void GameController::CheckActive() {
@@ -904,10 +903,6 @@ int KYTY_SYSV_ABI PadSetVibration(int handle, const PadVibrationParam* param) {
 	if (param == nullptr) {
 		return PAD_ERROR_INVALID_ARG;
 	}
-
-	LOGF("\t large_motor = %d\n"
-	     "\t small_motor = %d\n",
-	     static_cast<int>(param->large_motor), static_cast<int>(param->small_motor));
 
 	g_controller->SetVibration(param->large_motor, param->small_motor);
 

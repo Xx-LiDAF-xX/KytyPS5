@@ -679,6 +679,20 @@ static bool KytyExceptionHandler(const Common::HostException::ExceptionInfo& exc
 			return true;
 		}
 	}
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+	if (info->type == Common::HostException::ExceptionType::AccessViolation && info->native_context != nullptr) {
+		auto* ctx = static_cast<PCONTEXT>(info->native_context);
+		// ASTRO BOT null pointer dereference recovery at RVA 0x18b54e6
+		if ((info->exception_address & 0xFFFFFFFull) == 0x18b54e6ull && ctx->Rsi == 0) {
+			Log::Write(Log::Color::BrightYellow,
+			           fmt::format("KytyExceptionHandler: Auto-recovering from Astro Bot null pointer deref at pc=0x{:016x}\n",
+			                       info->exception_address));
+			ctx->Rsi = ctx->Rdx;
+			return true;
+		}
+	}
+#endif
+
 	// Report whatever guest context can be read safely before terminating: which guest thread
 	// faulted, the register file, the faulting code bytes and the top of its stack.
 	{
@@ -688,15 +702,19 @@ static bool KytyExceptionHandler(const Common::HostException::ExceptionInfo& exc
 				std::snprintf(thread_name, sizeof(thread_name), "(unnamed guest thread)");
 			}
 		}
-		std::printf("--- Guest fault context ---\n");
-		std::printf("thread: %s\n", thread_name);
-		std::printf("rax=%016" PRIx64 " rbx=%016" PRIx64 " rcx=%016" PRIx64 " rdx=%016" PRIx64 "\n"
-		            "rsi=%016" PRIx64 " rdi=%016" PRIx64 " rbp=%016" PRIx64 " rsp=%016" PRIx64 "\n"
-		            "r8 =%016" PRIx64 " r9 =%016" PRIx64 " r10=%016" PRIx64 " r11=%016" PRIx64 "\n"
-		            "r12=%016" PRIx64 " r13=%016" PRIx64 " r14=%016" PRIx64 " r15=%016" PRIx64 "\n",
-		            info->rax, info->rbx, info->rcx, info->rdx, info->rsi, info->rdi, info->rbp,
-		            info->rsp, info->r8, info->r9, info->r10, info->r11, info->r12, info->r13,
-		            info->r14, info->r15);
+		char fault_buf[1024];
+		std::snprintf(fault_buf, sizeof(fault_buf),
+		              "--- Guest fault context ---\nthread: %s\n"
+		              "rax=%016" PRIx64 " rbx=%016" PRIx64 " rcx=%016" PRIx64 " rdx=%016" PRIx64 "\n"
+		              "rsi=%016" PRIx64 " rdi=%016" PRIx64 " rbp=%016" PRIx64 " rsp=%016" PRIx64 "\n"
+		              "r8 =%016" PRIx64 " r9 =%016" PRIx64 " r10=%016" PRIx64 " r11=%016" PRIx64 "\n"
+		              "r12=%016" PRIx64 " r13=%016" PRIx64 " r14=%016" PRIx64 " r15=%016" PRIx64 "\n",
+		              thread_name,
+		              info->rax, info->rbx, info->rcx, info->rdx, info->rsi, info->rdi, info->rbp,
+		              info->rsp, info->r8, info->r9, info->r10, info->r11, info->r12, info->r13,
+		              info->r14, info->r15);
+		std::printf("%s", fault_buf);
+		Log::WriteFatal(std::string_view(fault_buf));
 		if (IsReadableRange(info->exception_address - 48, 96)) {
 			const auto* code = reinterpret_cast<const uint8_t*>(info->exception_address - 48);
 			std::printf("code (pc-48 .. pc+48, fault at byte 48):");
@@ -1269,12 +1287,20 @@ void RuntimeLinker::Execute(const std::filesystem::path& game_patch) {
 	PreloadAdjacentPrograms();
 	RelocateAll();
 
+	bool patch_applied = false;
 	if (!game_patch.empty()) {
-		if (!GamePatch::Apply(game_patch, m_programs.empty() ? nullptr : m_programs.front(),
+		if (GamePatch::Apply(game_patch, m_programs.empty() ? nullptr : m_programs.front(),
 		                      m_programs)) {
-			EXIT("Failed to apply game cheat\n");
+			patch_applied = true;
+		} else {
+			LOGF_COLOR(Log::Color::BrightRed, "Warning: Failed to apply game cheat from %s\n", game_patch.string().c_str());
 		}
 	}
+	
+	if (!patch_applied) {
+		GamePatch::ApplyAutoFixes(m_programs.empty() ? nullptr : m_programs.front(), m_programs);
+	}
+	
 	StartAllModules();
 
 	LOGF_COLOR(Log::Color::BrightYellow, "---\n--- Execute: %s\n---\n", "Main");

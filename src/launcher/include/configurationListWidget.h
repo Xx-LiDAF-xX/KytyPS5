@@ -62,6 +62,7 @@ protected slots:
 	void show_context_menu(const QPoint& pos);
 	void open_game_folder();
 	void remove_save_data();
+	void verify_and_fix_game_files();
 	void filter_configurations(const QString& text);
 
 private:

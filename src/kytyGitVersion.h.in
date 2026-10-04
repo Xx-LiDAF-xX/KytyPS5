@@ -9,7 +9,7 @@
 #define KYTY_SHADER_CACHE_KEY "@KYTY_SHADER_CACHE_KEY@"
 
 // The product name: in the window title, the log, crash reports and the Vulkan application info.
-#define KYTY_PRODUCT_NAME "BryKytyPS5"
+#define KYTY_PRODUCT_NAME "KytyPS5"
 
 /* Build provenance, shown in the window title and in crash reports. */
 #if defined(KYTY_OFFICIAL_BUILD)

@@ -87,6 +87,16 @@ struct ConfigOptions {
 	bool                   speculative_draws_enabled   = true;
 	bool                   record_thread_enabled       = true;
 	bool                   hardware_buffer_bounds      = true;
+	uint32_t               master_volume               = 100;
+	bool                   audio_muted                 = false;
+	int32_t                anisotropic_filtering       = -1;
+	uint32_t               resolution_scale_percent    = 100;
+	bool                   motion_blur_enabled         = true;
+	bool                   depth_of_field_enabled      = true;
+	bool                   bloom_enabled               = true;
+	bool                   ambient_occlusion_enabled   = true;
+	bool                   ray_tracing_enabled         = false;
+	bool                   auto_spec_optimization      = false;
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 	bool red_zone_protection_enabled = false;
 #endif
@@ -185,6 +195,33 @@ bool HardwareBufferBoundsEnabled();
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 bool RedZoneProtectionEnabled();
 #endif
+
+uint32_t GetMasterVolume();
+void     SetMasterVolume(uint32_t volume);
+bool     AudioMuted();
+void     SetAudioMuted(bool muted);
+int32_t  GetAnisotropicFiltering();
+void     SetAnisotropicFiltering(int32_t aniso);
+uint32_t GetResolutionScalePercent();
+void     SetResolutionScalePercent(uint32_t percent);
+bool     MotionBlurEnabled();
+void     SetMotionBlurEnabled(bool enabled);
+bool     DepthOfFieldEnabled();
+void     SetDepthOfFieldEnabled(bool enabled);
+bool     BloomEnabled();
+void     SetBloomEnabled(bool enabled);
+bool     AmbientOcclusionEnabled();
+void     SetAmbientOcclusionEnabled(bool enabled);
+
+bool     RayTracingEnabled();
+void     SetRayTracingEnabled(bool enabled);
+
+bool     AutoSpecOptimizationEnabled();
+void     SetAutoSpecOptimizationEnabled(bool enabled);
+
+void     ApplyAutoOptimization(bool log_reason = true);
+void     SaveCurrentSettings();
+void     ReloadFromSettingsFile();
 
 const Keymap& GetKeymap();
 

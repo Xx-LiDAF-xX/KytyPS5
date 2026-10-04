@@ -1607,6 +1607,7 @@ void NoteImageUsers(TextureCache& cache, std::span<PreparedBindings* const> stag
 // KYTY_DEBUG_MESH_RESTART=0 draws a mesh-emulated strip or fan with primitive restart as one
 // draw, reading its restart markers as vertices, as before restart was handled there.
 static bool MeshRestartSplitEnabled() {
+	if (Config::AutoSpecOptimizationEnabled()) return false;
 	static const bool enabled = [] {
 		const char* text = std::getenv("KYTY_DEBUG_MESH_RESTART");
 		return text == nullptr || std::strcmp(text, "0") != 0;

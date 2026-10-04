@@ -1,15 +1,10 @@
-# BryKytyPS5
+# KytyPS5
 
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64%20%7C%20Linux%20x64%20%7C%20macOS%20x86__64-0078D4.svg)](#system-requirements)
 [![Status](https://img.shields.io/badge/status-active%20development-orange.svg)](#current-status)
 [![License](https://img.shields.io/badge/license-GPL--2.0-blue.svg)](LICENSE)
 
-**BryKytyPS5** is Bryan's PlayStation 5 emulator: a fork of
-[KytyPS5](https://github.com/KytyPS5/KytyPS5), which is itself based on
-[Kyty](https://github.com/InoriRus/Kyty). It focuses on performance and rendering fixes, measured
-on Astro Bot with AMD hardware, and merges upstream KytyPS5 regularly. The emulator, its binaries
-and its options keep the KytyPS5 names, and the rest of this README is KytyPS5's and applies here
-too.
+**KytyPS5** is Xx-LiDAF-xX's PlayStation 5 emulator. It features UI simplifications, shader cache integrations, and memory optimizations for US and EU region games (like Astro Bot). It focuses on high performance and stability, integrating AMD-specific instruction emulation (e.g., SHA-NI, SSE4a) to also run reliably on Intel CPUs.
 
 Upstream KytyPS5: **[weekly updates](https://github.com/KytyPS5/KytyPS5/discussions/862)** (game
 progress, recent fixes and ongoing development) and
@@ -383,18 +378,18 @@ untested generated changes may be closed without review.
 
 ## License
 
-BryKytyPS5, like KytyPS5, is licensed under the
+KytyPS5 is licensed under the
 [GNU General Public License version 2](LICENSE) (`GPL-2.0-only`).
 
-BryKytyPS5 is a fork of [KytyPS5](https://github.com/KytyPS5/KytyPS5), which is based on the
+KytyPS5 is based on the
 original [Kyty](https://github.com/InoriRus/Kyty), released under the MIT License. Kyty's original
 copyright and license notice are preserved in [`LICENSES/Kyty-MIT.txt`](LICENSES/Kyty-MIT.txt).
 Third-party components remain subject to the licenses included with those components.
 
 ## Special Thanks
 
-- [KytyPS5/KytyPS5](https://github.com/KytyPS5/KytyPS5) — BryKytyPS5 is a fork of KytyPS5; the
-  emulator is the work of its developers and contributors.
+- [KytyPS5/KytyPS5](https://github.com/KytyPS5/KytyPS5) — the
+  emulator is the work of its original developers and contributors.
 - [InoriRus/Kyty](https://github.com/InoriRus/Kyty) — KytyPS5 is based on a heavily modified version
   of the original Kyty project.
 - [shadps4-emu/shadPS4](https://github.com/shadps4-emu/shadPS4) — reference for understanding PS4
