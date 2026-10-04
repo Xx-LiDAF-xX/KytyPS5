@@ -398,7 +398,7 @@ void ApplyAutoOptimization(bool log_reason) {
 	if (cpu_lower.find("amd") != std::string::npos || cpu_lower.find("ryzen") != std::string::npos) {
 		is_amd = true;
 	}
-	if (g_config && !is_amd) {
+	if (g_config && is_amd) {
 		g_config->amd_cpu_enabled = true;
 	}
 
@@ -415,7 +415,7 @@ void ApplyAutoOptimization(bool log_reason) {
 	SetRayTracingEnabled(false);
 
 	const char* profile_name = "Balanced";
-	if (cores >= 16 && ram_gb >= 16) {
+	if (cores >= 8 && ram_gb >= 16) {
 		profile_name = "Quality";
 		SetGpuTimestampScalePercent(115);
 		SetAnisotropicFiltering(16);
