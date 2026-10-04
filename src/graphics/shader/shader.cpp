@@ -47,12 +47,27 @@
 
 namespace Libs::Graphics {
 
-struct ShaderMapEntry {
-	ShaderMappedData data;
-	uint64_t hash;
+struct ShaderBinaryInfo {
+	uint8_t  signature[7];
+	uint8_t  version;
+	uint32_t pssl_or_cg  : 1;
+	uint32_t cached      : 1;
+	uint32_t type        : 4;
+	uint32_t source_type : 2;
+	uint32_t length      : 24;
+	uint8_t  chunk_usage_base_offset_dw;
+	uint8_t  num_input_usage_slots;
+	uint8_t  is_srt                 : 1;
+	uint8_t  is_srt_used_info_valid : 1;
+	uint8_t  is_extended_usage_info : 1;
+	uint8_t  reserved2              : 5;
+	uint8_t  reserved3;
+	uint32_t hash0;
+	uint32_t hash1;
+	uint32_t crc32;
 };
 
-static std::unique_ptr<std::unordered_map<uint64_t, ShaderMapEntry>> g_shader_map;
+static std::unique_ptr<std::unordered_map<uint64_t, ShaderMappedData>> g_shader_map;
 static std::mutex                                                      g_shader_map_mutex;
 static std::atomic<uint64_t>                                           g_shader_map_version {0};
 
@@ -63,7 +78,7 @@ uint64_t ShaderMapVersion() {
 void ShaderInit() {
 	EXIT_IF(g_shader_map != nullptr);
 
-	g_shader_map = std::make_unique<std::unordered_map<uint64_t, ShaderMapEntry>>();
+	g_shader_map = std::make_unique<std::unordered_map<uint64_t, ShaderMappedData>>();
 }
 
 static uint64_t GetDeclaredShaderHash(uint64_t shader_addr);
@@ -112,7 +127,7 @@ static void ShaderStoreHash(uint64_t addr, uint64_t generation, uint64_t hash) {
 	}
 }
 
-static ShaderMapEntry ShaderGetMappedData(uint64_t addr, const char* label) {
+static ShaderMappedData ShaderGetMappedData(uint64_t addr, const char* label) {
 	EXIT_IF(g_shader_map == nullptr);
 
 	std::scoped_lock lock(g_shader_map_mutex);
@@ -818,7 +833,7 @@ void BuildStageStaticKey(const ShaderComputeInputInfo& info, std::vector<uint32_
 ShaderParams PrepareProgram(const HW::VertexShaderInfo& regs, const HW::Context& context,
                             const HW::UserConfig& user_config, ShaderVertexInputInfo& info) {
 	const auto& sh     = context.GetShaderRegisters();
-	const auto [data, hash] = ShaderGetMappedData(regs.es_regs.data_addr, "ShaderGetInputInfoVS():");
+	const auto data = ShaderGetMappedData(regs.es_regs.data_addr, "ShaderGetInputInfoVS():");
 	const bool merged = (context.GetShaderStages() & 0x20u) != 0;
 	auto        params = GetShaderParams(
 	    regs.es_regs.data_addr, "ShaderRecompiler VS",
@@ -849,7 +864,7 @@ ShaderParams PrepareProgram(const HW::VertexShaderInfo& regs, const HW::Context&
 	mesh.fast_launch = fast_launch != 0;
 	if (data.type == Prospero::ShaderBinaryType::kGsFront) {
 		EXIT_IF(regs.gs_regs.data_addr == 0);
-		const auto [back, back_hash] = ShaderGetMappedData(regs.gs_regs.data_addr, "ShaderGetInputInfoGS():");
+		const auto back = ShaderGetMappedData(regs.gs_regs.data_addr, "ShaderGetInputInfoGS():");
 		const auto back_params =
 		    GetShaderParams(regs.gs_regs.data_addr, "ShaderRecompiler GS", {}, back);
 		params.back_code = back_params.code;
@@ -902,9 +917,9 @@ std::array<ShaderParams, 3>
 PrepareTessellationPrograms(const HW::VertexShaderInfo& regs, const HW::Context& context,
                             std::array<ShaderVertexInputInfo, 3>& input_info) {
 	const auto& sh        = context.GetShaderRegisters();
-	const auto [local, local_hash] = ShaderGetMappedData(regs.ls_regs.data_addr, "ShaderGetInputInfoLS():");
-	const auto [control, control_hash] = ShaderGetMappedData(regs.hs_regs.data_addr, "ShaderGetInputInfoHS():");
-	const auto [evaluation, evaluation_hash] = ShaderGetMappedData(regs.es_regs.data_addr, "ShaderGetInputInfoTES():");
+	const auto local = ShaderGetMappedData(regs.ls_regs.data_addr, "ShaderGetInputInfoLS():");
+	const auto control = ShaderGetMappedData(regs.hs_regs.data_addr, "ShaderGetInputInfoHS():");
+	const auto evaluation = ShaderGetMappedData(regs.es_regs.data_addr, "ShaderGetInputInfoTES():");
 	EXIT_NOT_IMPLEMENTED(local.type != Prospero::ShaderBinaryType::kHsFront ||
 	                     control.type != Prospero::ShaderBinaryType::kHsBack ||
 	                     evaluation.type != Prospero::ShaderBinaryType::kGs);
@@ -959,7 +974,7 @@ ShaderParams PrepareProgram(
     const HW::PixelShaderInfo& regs, const HW::ShaderRegisters& sh,
     std::span<const Prospero::ColorComponentMapping, 8> target_export_mapping,
     ShaderPixelInputInfo&                               ps_info) {
-	const auto [data, hash] = ShaderGetMappedData(regs.ps_regs.data_addr, "ShaderGetInputInfoPS():");
+	const auto data = ShaderGetMappedData(regs.ps_regs.data_addr, "ShaderGetInputInfoPS():");
 	ShaderGetStaticInputInfoPS(regs, sh, target_export_mapping, data, ps_info);
 	return GetShaderParams(
 	    regs.ps_regs.data_addr, "ShaderRecompiler PS",
@@ -968,7 +983,7 @@ ShaderParams PrepareProgram(
 
 ShaderParams PrepareProgram(const HW::ComputeShaderInfo& regs, const HW::ShaderRegisters& sh,
                             ShaderComputeInputInfo& info) {
-	const auto [data, hash] = ShaderGetMappedData(regs.cs_regs.data_addr, "ShaderGetInputInfoCS():");
+	const auto data = ShaderGetMappedData(regs.cs_regs.data_addr, "ShaderGetInputInfoCS():");
 	ShaderGetStaticInputInfoCS(regs, sh, data, info);
 	return GetShaderParams(
 	    regs.cs_regs.data_addr, "ShaderRecompiler CS",

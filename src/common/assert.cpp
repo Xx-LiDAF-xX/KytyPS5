@@ -40,7 +40,13 @@ static std::string CaptureStack() {
 
 static std::string BuildFatalReport(const char* title, std::string_view text, const char* file,
                                     int line) {
-	return fmt::format("--- Build ---\n{}\n{}\n{} in {}:{}\n{}", KYTY_BUILD_LABEL, title, text, file,
+	const char* file_name = file;
+	for (const char* p = file; *p; ++p) {
+		if (*p == '/' || *p == '\\') {
+			file_name = p + 1;
+		}
+	}
+	return fmt::format("--- Build ---\n{}\n{}\n{} in {}:{}\n{}", KYTY_BUILD_LABEL, title, text, file_name,
 	                   line, CaptureStack());
 }
 

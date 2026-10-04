@@ -321,8 +321,8 @@ bool ApplyAutoFixes(Program* main_program, const std::vector<Program*>& programs
 		return false;
 	}
 
-	if (title_id == "PPSA21567" || title_id == "PPSA21564") {
-		Log::WriteToConsoleAndLog(fmt::format("Applying built-in ASTRO BOT optimizations & stability fixes for {}...\n", title_id));
+	if (title_id == "PPSA21567" || title_id == "PPSA21564" || title_id == "PPSA01325") {
+		Log::WriteToConsoleAndLog(fmt::format("Applying built-in Asobi Engine optimizations & stability fixes for {}...\n", title_id));
 		
 		Plan plan;
 		plan.title_id = title_id;
@@ -337,10 +337,17 @@ bool ApplyAutoFixes(Program* main_program, const std::vector<Program*>& programs
 			plan.writes.push_back(std::move(w));
 		};
 		
-		add_write(0x73eec3f, "4584f60f84f10800004531f64c8d3d8ec4a90141b430", "4584f6e9f2080000904531f64c8d3d8ec4a90141b430");
-		add_write(0x7108a40, "80bfe5050000000f857c1b0000", "e9841b00009090909090909090");
-		add_write(0x7108a33, "0fb682a00700008887e4050000", "b80000000090908887e4050000");
-		add_write(0x18f0552, "480f44f2", "480f46f2");
+		if (title_id == "PPSA21567" || title_id == "PPSA21564") {
+			add_write(0x73eec3f, "4584f60f84f10800004531f64c8d3d8ec4a90141b430", "4584f6e9f2080000904531f64c8d3d8ec4a90141b430");
+			add_write(0x7108a40, "80bfe5050000000f857c1b0000", "e9841b00009090909090909090");
+			add_write(0x7108a33, "0fb682a00700008887e4050000", "b80000000090908887e4050000");
+			add_write(0x18f0552, "480f44f2", "480f46f2");
+		} else if (title_id == "PPSA01325") {
+			// TODO: Add Astro's Playroom (PPSA01325) specific memory offsets here.
+			// Currently waiting for the community or user to provide the exact Asobi engine patch offsets 
+			// for the PPSA01325 build, as they differ from ASTRO BOT (2024).
+			Log::WriteToConsoleAndLog("Astro's Playroom (PPSA01325) memory stability patch framework initialized. Please inject specific offsets.\n");
+		}
 		
 		g_pending_plan = std::make_unique<Plan>(std::move(plan));
 		for (auto* program: programs) {

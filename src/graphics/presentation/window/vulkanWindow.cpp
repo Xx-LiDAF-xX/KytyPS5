@@ -490,6 +490,13 @@ static vk::Device VulkanCreateDevice(GraphicContext& graphics,
 		pipeline_library.pNext    = supported_features2.pNext;
 		supported_features2.pNext = &pipeline_library;
 	}
+	const bool image_atomic_int64_extension =
+	    HasExtension(device_extensions, VK_EXT_SHADER_IMAGE_ATOMIC_INT64_EXTENSION_NAME);
+	vk::PhysicalDeviceShaderImageAtomicInt64FeaturesEXT image_atomic_int64 {};
+	if (image_atomic_int64_extension) {
+		image_atomic_int64.pNext = supported_features2.pNext;
+		supported_features2.pNext = &image_atomic_int64;
+	}
 	physical_device.getFeatures2(&supported_features2);
 	graphics.shader_image_int64_atomics_enabled = image_atomic_int64.shaderImageInt64Atomics;
 
@@ -683,6 +690,11 @@ static vk::Device VulkanCreateDevice(GraphicContext& graphics,
 		provoking_vertex.pNext = const_cast<void*>(create_info.pNext);
 		provoking_vertex.transformFeedbackPreservesProvokingVertex = VK_FALSE;
 		create_info.pNext = &provoking_vertex;
+	}
+	if (graphics.shader_image_int64_atomics_enabled) {
+		image_atomic_int64.pNext = const_cast<void*>(create_info.pNext);
+		image_atomic_int64.sparseImageInt64Atomics = VK_FALSE;
+		create_info.pNext = &image_atomic_int64;
 	}
 	if (graphics.conditional_rendering_enabled) {
 		conditional_rendering.pNext                         = const_cast<void*>(create_info.pNext);

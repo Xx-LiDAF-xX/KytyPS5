@@ -366,13 +366,13 @@ static void GameEventDidEnterForeground(WindowLoopState& game) {
 	SetPause(game, false);
 }
 
-void WindowContext::Resize(int new_width, int new_height) {
-	if (new_width <= 0 || new_height <= 0) {
+void WindowContext::Resize(uint32_t new_width, uint32_t new_height) {
+	if (new_width == 0 || new_height == 0) {
 		return;
 	}
 	Common::LockGuard lock(mutex);
-	graphic_ctx.screen_width  = static_cast<uint32_t>(new_width);
-	graphic_ctx.screen_height = static_cast<uint32_t>(new_height);
+	graphic_ctx.screen_width  = new_width;
+	graphic_ctx.screen_height = new_height;
 }
 
 void WindowContext::ProcessWindowEvent(const SDL_WindowEvent& event) {

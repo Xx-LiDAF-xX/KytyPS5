@@ -874,8 +874,8 @@ struct SocketTransport {
 		return ::close(value);
 #endif
 	}
-	NativeSocket socket;
-	const int    type;
+	std::atomic<NativeSocket> socket;
+	const int                 type;
 #if defined(_WIN32)
 	// These belong to the native transport, not a guest descriptor that can be reused.
 	std::atomic_bool   nonblocking {false};
@@ -883,6 +883,8 @@ struct SocketTransport {
 	std::atomic<DWORD> receive_timeout_ms {0};
 	std::mutex         option_mutex;
 	std::timed_mutex   receive_mutex;
+	std::vector<char>  receive_buffer;
+	std::atomic_size_t buffered_bytes {0};
 #endif
 };
 
@@ -2267,14 +2269,27 @@ int KYTY_SYSV_ABI Setsockopt(int s, int level, int optname, const void* optval, 
 	constexpr int ORBIS_SO_NBIO = 0x1200;
 	if (ConvertSocketOptionLevel(level) == SOL_SOCKET && optname == ORBIS_SO_NBIO &&
 	    optlen >= sizeof(int)) {
+		const bool enabled = *static_cast<const int*>(optval) != 0;
+#if defined(_WIN32)
 		std::lock_guard lock(state.transport->option_mutex);
-		u_long enabled = (*static_cast<const int*>(optval) != 0 ? 1 : 0);
-		if (ioctlsocket(socket, FIONBIO, &enabled) == SOCKET_ERROR) {
+		u_long enabled_win = enabled ? 1 : 0;
+		if (ioctlsocket(socket, FIONBIO, &enabled_win) == SOCKET_ERROR) {
 			return SetHostSocketError();
 		}
-		state.transport->nonblocking = enabled != 0;
+		state.transport->nonblocking = enabled;
+#else
+		const int  flags = ::fcntl(socket, F_GETFL, 0);
+		const bool failed =
+		    flags < 0 ||
+		    ::fcntl(socket, F_SETFL, enabled ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK)) != 0;
+		if (failed) {
+			return SetHostSocketError();
+		}
+#endif
 		return 0;
 	}
+
+#if defined(_WIN32)
 	if (ConvertSocketOptionLevel(level) == SOL_SOCKET && optname == 0x1006) {
 		DWORD timeout_ms = 0;
 		if (optlen == sizeof(NetTimeval)) {
@@ -2305,14 +2320,7 @@ int KYTY_SYSV_ABI Setsockopt(int s, int level, int optname, const void* optval, 
 		state.transport->receive_timeout_ms = timeout_ms;
 		return 0;
 	}
-#else
-		const int  flags = ::fcntl(socket, F_GETFL, 0);
-		const bool failed =
-		    flags < 0 ||
-		    ::fcntl(socket, F_SETFL, enabled ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK)) != 0;
 #endif
-		return failed ? SetHostSocketError() : 0;
-	}
 #if !defined(_WIN32)
 	// Guest TCP options: IPPROTO_TCP=6, TCP_NODELAY=1.
 	if (level != 6 || optname != 1) {

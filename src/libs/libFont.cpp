@@ -701,9 +701,6 @@ static std::vector<std::filesystem::path> fallback_font_candidates(const char* f
 	    std::filesystem::path("3rdparty") / "tracy" / "profiler" / "src" / "font" / file_name;
 	std::vector<std::filesystem::path> paths;
 
-	auto source_root = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path();
-	paths.push_back(source_root / rel);
-
 	std::error_code ec;
 	auto            cwd = std::filesystem::current_path(ec);
 	if (!ec) {

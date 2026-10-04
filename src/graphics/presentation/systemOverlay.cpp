@@ -110,7 +110,7 @@ bool HostQueueExternalInput(uint64_t generation, ExternalInput input) {
 
 } // namespace Ime
 
-enum class OverlayKind : uint8_t { None, Ime, Error, Settings };
+enum class OverlayKind : uint8_t { None, Ime, Dialog, Settings };
 
 // The emulator settings panel, toggled with F2. The generation changes on every open and close,
 // so each opening is a new session and the presenter redraws when it closes.
@@ -251,7 +251,7 @@ void RefreshVisibility() {
 	bool capture_keyboard   = false;
 	bool text_input         = false;
 	bool multiline          = false;
-	if (snapshot.session.kind == OverlayKind::Error ||
+	if (snapshot.session.kind == OverlayKind::Dialog ||
 	    snapshot.session.kind == OverlayKind::Settings) {
 		capture_controller = true;
 		capture_keyboard   = true;
@@ -520,7 +520,7 @@ void OsdSetAlignment(int alignment) {
 SystemOverlayVisualState GetSystemOverlayVisualState() noexcept {
 	const auto core   = CoreIme::GetVisualState();
 	const auto dialog = DialogIme::GetVisualState();
-	const auto error  = ErrorDialog::GetVisualState();
+	const auto error  = SystemDialog::GetVisualState();
 	const int shaders_compiling = g_shaders_compiling.load(std::memory_order_relaxed);
 	return {core.active || dialog.active || error.active ||
 	            g_settings_open.load(std::memory_order_acquire) ||
@@ -583,7 +583,7 @@ bool ProcessSystemOverlayInput(const SDL_Event& event) {
 		if (event.gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_STICK) g_r3_pressed.store(false, std::memory_order_relaxed);
 	}
 	if ((is_toggle_key || is_toggle_button) &&
-	    g_input_session.kind != OverlayKind::Ime && g_input_session.kind != OverlayKind::Error) {
+	    g_input_session.kind != OverlayKind::Ime && g_input_session.kind != OverlayKind::Dialog) {
 		SetSettingsOpen(!g_settings_open.load(std::memory_order_acquire));
 		return true;
 	}
@@ -630,7 +630,7 @@ bool ProcessSystemOverlayInput(const SDL_Event& event) {
 		}
 		return true;
 	}
-	if (keyboard_event && session.kind == OverlayKind::Error) {
+	if (keyboard_event && session.kind == OverlayKind::Dialog) {
 		if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
 		    (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER ||
 		     event.key.key == SDLK_ESCAPE)) {
@@ -1285,8 +1285,8 @@ struct SystemOverlay::Impl {
 		}
 
 		if (overlay_still_valid) {
-			if (snapshot.session.kind == OverlayKind::Error) {
-				DrawError(snapshot.error, frame_extent);
+			if (snapshot.session.kind == OverlayKind::Dialog) {
+				DrawDialog(snapshot.dialog, frame_extent);
 			} else if (snapshot.session.kind == OverlayKind::Settings) {
 				DrawSettings(frame_extent);
 			} else {

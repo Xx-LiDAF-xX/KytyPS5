@@ -256,10 +256,7 @@ void Run(const RunOptions& options) {
 		candidates.push_back(std::filesystem::current_path() / patch_filename);
 		candidates.push_back(options.app0_dir / "_Patches" / patch_filename);
 		candidates.push_back(options.app0_dir / patch_filename);
-#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
-		candidates.push_back(std::filesystem::path("C:/Users/TAPIOCA/Desktop/_Patches") / patch_filename);
-		candidates.push_back(std::filesystem::path("C:/Users/TAPIOCA/Desktop") / patch_filename);
-#endif
+
 
 		for (const auto& candidate : candidates) {
 			if (Common::File::IsFileExisting(candidate)) {

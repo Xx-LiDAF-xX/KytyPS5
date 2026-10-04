@@ -885,9 +885,6 @@ std::span<const uint8_t> SrtWalker::FindActiveSources() {
 		visited[index] = 1u;
 		const auto& block = m_program.control_flow[index];
 		for (const auto source: block.sources) active[source] = 1u;
-		for (const auto slot: block.srt_reads) {
-			if (!refresh(slot)) return false;
-		}
 		uint32_t condition = 0;
 		auto&    evaluator = index < direct.size() && direct[index] != 0u ? *this : strict;
 		if (!block.condition.IsEmpty() && m_runtime.read_specialization_memory != nullptr &&
@@ -895,6 +892,25 @@ std::span<const uint8_t> SrtWalker::FindActiveSources() {
 			pending.push_back(block.successors[condition != 0u ? 0u : 1u]);
 		} else {
 			pending.insert(pending.end(), block.successors.begin(), block.successors.end());
+		}
+	}
+	return active;
+}
+
+bool SrtWalker::RefreshFlatBuffer(std::vector<uint32_t>& flat) {
+	if (!m_program.srt_plan_complete) {
+		return false;
+	}
+	flat.resize(m_program.srt_reads.size());
+	for (const auto& read: m_program.srt_reads) {
+		const bool clean = read.flat_offset < m_clean_flat_slots.size() &&
+		                   m_clean_flat_slots[read.flat_offset] != 0u;
+		if (clean && (m_clean_evaluator == nullptr || m_runtime.read_specialization_memory == nullptr)) {
+			return false;
+		}
+		auto& evaluator = clean ? *m_clean_evaluator : *this;
+		if (read.flat_offset >= flat.size() || !evaluator.Evaluate(read.value, flat[read.flat_offset])) {
+			return false;
 		}
 	}
 	return true;

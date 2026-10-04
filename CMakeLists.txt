@@ -144,6 +144,18 @@ endif()
 
 project(Kyty${KYTY_PROJECT_NAME}${CMAKE_BUILD_TYPE}${KYTY_COMPILER} VERSION 0.3.0)
 
+# Strip absolute paths to avoid leaking local directories in distributed builds
+if(KYTY_CLANG_CL)
+	add_compile_options("/clang:-fmacro-prefix-map=${CMAKE_SOURCE_DIR}=.")
+	add_link_options("/PDBALTPATH:%_PDB%")
+elseif(CLANG OR GCC)
+	add_compile_options("-fmacro-prefix-map=${CMAKE_SOURCE_DIR}=.")
+endif()
+if(MSVC AND NOT KYTY_CLANG_CL)
+	add_compile_options("/d1trimfile:${CMAKE_SOURCE_DIR}\\")
+	add_link_options("/PDBALTPATH:%_PDB%")
+endif()
+
 include_directories(
 	${KYTY_THIRD_PARTY_DIR}/gtest/include
 	${KYTY_THIRD_PARTY_DIR}/gtest
