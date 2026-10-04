@@ -247,28 +247,10 @@ void GuestGpu::SubmitFlipPreparation(uint64_t request_id) {
 	Enqueue(std::move(submission));
 }
 
-void GuestGpu::Done() {
-	GpuMutexLock lock(m_submission_mutex);
-	if (!IsGpuThread()) {
-		const auto frames_ahead = Config::GetGpuFramesAhead();
-		if (frames_ahead == 0) {
-			WaitForIdle();
-		} else {
-			// sceAgcSuspendPoint does not wait for the GPU on hardware. Waiting for the work of an
-			// earlier suspend point instead of this one lets the game build the next frame while
-			// Thread_Gpu processes this one, at most `frames_ahead` frames ahead.
-			{
-				Common::LockGuard queue_lock(m_queue_mutex);
-				m_done_marks.push_back(m_next_sequence);
-			}
-			while (m_done_marks.size() > frames_ahead) {
-				const auto mark = m_done_marks.front();
-				m_done_marks.pop_front();
-				WaitForSubmissionsBefore(mark);
-			}
-		}
-	}
-	m_graphics_done = true;
+void GuestGpu::SuspendPoint() {
+	Submission submission;
+	submission.type = SubmissionType::SuspendPoint;
+	Enqueue(std::move(submission));
 	m_done_num++;
 }
 

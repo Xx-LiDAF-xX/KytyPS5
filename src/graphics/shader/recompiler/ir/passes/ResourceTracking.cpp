@@ -1671,7 +1671,14 @@ private:
 			if (expected == ValueOpcode::GetBufferResource &&
 			    std::all_of(descriptor.dwords.begin(), descriptor.dwords.begin() + width,
 			                [](Value word) { return word.Resolve().GetType() == Type::U32; })) {
+				source = InternSource(descriptor);
 				return false;
+			}
+			if ((expected == ValueOpcode::GetImageResource || expected == ValueOpcode::GetSamplerResource) &&
+			    std::all_of(descriptor.dwords.begin(), descriptor.dwords.begin() + width,
+			                [](Value word) { return word.Resolve().GetType() == Type::U32; })) {
+				source = InternSource(descriptor);
+				return true;
 			}
 			Fail(pc, fmt::format("{} dword {} is not a valid runtime value",
 			                     ValueOpcodeName(expected), bad_dword));

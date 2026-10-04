@@ -1103,7 +1103,7 @@ static void RecordImageGroup(RenderContext& context, PreparedBindings& prepared,
 		    (source.generation == 0 && !(source.null_image && NullReuseEnabled())) ||
 		    source.view_generation == 0 || source.view_image != binding.image_id ||
 		    source.view != binding.image_view ||
-		    program.info.images[i].mip_mode == ShaderRecompiler::IR::ImageMipMode::DynamicStorage) {
+		    program.info.images[i].mip_mode == ShaderRecompiler::IR::ImageMipMode::Dynamic) {
 			return;
 		}
 		if (values[i].dword_count >= 8) {
