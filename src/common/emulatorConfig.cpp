@@ -421,8 +421,8 @@ void ApplyAutoOptimization(bool log_reason) {
 		SetAnisotropicFiltering(16);
 		SetSpeculativeDrawsEnabled(true);
 		SetPipelineLibrariesEnabled(true);
-		SetAsyncPipelinesEnabled(false);
-		SetRelaxedReadbackEnabled(false);
+		SetAsyncPipelinesEnabled(true);
+		SetRelaxedReadbackEnabled(true);
 	} else if (cores <= 4 || ram_gb < 12) {
 		profile_name = "Performance";
 		SetGpuTimestampScalePercent(135);

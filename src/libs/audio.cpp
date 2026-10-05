@@ -33,7 +33,7 @@ constexpr int AUDIO_OUT_PORT_TYPE_AUDIO3D   = 126;
 constexpr int AUDIO_OUT_PORT_TYPE_AUX       = 127;
 
 constexpr uint32_t AUDIO_OUT_PARAM_FORMAT_MASK = 0x000000ffu;
-constexpr uint64_t AUDIO_OUT_TARGET_LATENCY_US = 40000;
+constexpr uint64_t AUDIO_OUT_TARGET_LATENCY_US = 60000;
 
 constexpr int      AUDIO_IN_SILENT_STATE_DEVICE_NONE = 0x1;
 constexpr uint32_t AUDIO_IN_GRAIN_MAX_ASYNC          = 384;

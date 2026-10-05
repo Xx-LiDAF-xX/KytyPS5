@@ -180,10 +180,6 @@ uint32_t EmitMemoryElementInBounds(EmitterState& state, const MemoryResourceAcce
 
 uint32_t EmitWordAccessInBounds(EmitterState& state, const MemoryResourceAccess& access,
                                 uint32_t index) {
-	if (HardwareStorageBufferBounds() && (access.kind == IR::ResourceKind::Buffer ||
-	                                      access.kind == IR::ResourceKind::ScalarBuffer)) {
-		return ConstantBool(state, true);
-	}
 	return EmitMemoryElementInBounds(state, access, index);
 }
 

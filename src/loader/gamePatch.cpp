@@ -343,10 +343,21 @@ bool ApplyAutoFixes(Program* main_program, const std::vector<Program*>& programs
 			add_write(0x7108a33, "0fb682a00700008887e4050000", "b80000000090908887e4050000");
 			add_write(0x18f0552, "480f44f2", "480f46f2");
 		} else if (title_id == "PPSA01325") {
-			// TODO: Add Astro's Playroom (PPSA01325) specific memory offsets here.
-			// Currently waiting for the community or user to provide the exact Asobi engine patch offsets 
-			// for the PPSA01325 build, as they differ from ASTRO BOT (2024).
-			Log::WriteToConsoleAndLog("Astro's Playroom (PPSA01325) memory stability patch framework initialized. Please inject specific offsets.\n");
+			// Asobi Engine core memory stability fix for Astro's Playroom (PPSA01325).
+			// Fixes a cmove bug that incorrectly assigns a NULL pointer and causes a memcpy access violation.
+			// Expanded to 16 bytes to ensure a unique anchor for the Matches() function (source_base).
+			add_write(0x1606e96, "ac0c000083782806480f44f2c5f82e04", "ac0c000083782806480f46f2c5f82e04");
+			add_write(0x186a28a, "634885f6488d7610480f44f2488b1648", "634885f6488d7610480f46f2488b1648");
+			add_write(0x19a79c4, "ba488d34114885d2480f44f27436488d", "ba488d34114885d2480f46f27436488d");
+			add_write(0x19ad474, "488d74020c4885d2480f44f2418b540f", "488d74020c4885d2480f46f2418b540f");
+			add_write(0x1ba35c7, "0848393a488d7210480f44f2eb044883", "0848393a488d7210480f46f2eb044883");
+			add_write(0x1baed31, "c6000100004d85f6480f44f24801c645", "c6000100004d85f6480f46f24801c645");
+			add_write(0x1baf057, "4885ff488b7c2410480f44f24801fe49", "4885ff488b7c2410480f46f24801fe49");
+			add_write(0x1baf19a, "488b8c24a0000000480f44f24801ce49", "488b8c24a0000000480f46f24801ce49");
+			add_write(0x1bb191d, "c6000100004885ff480f44f24c01f648", "c6000100004885ff480f46f24c01f648");
+			add_write(0x1be9ed9, "d94989d44c0f44e6480f44f2ffc04983", "d94989d44c0f44e6480f46f2ffc04983");
+			add_write(0x1bea269, "d94989d44c0f44e6480f44f2ffc04983", "d94989d44c0f44e6480f46f2ffc04983");
+			Log::WriteToConsoleAndLog(fmt::format("Applying Astro's Playroom (PPSA01325) memory stability patch at 11 locations...\n"));
 		}
 		
 		g_pending_plan = std::make_unique<Plan>(std::move(plan));

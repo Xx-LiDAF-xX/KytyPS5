@@ -251,6 +251,11 @@ void GuestGpu::SuspendPoint() {
 	Submission submission;
 	submission.type = SubmissionType::SuspendPoint;
 	Enqueue(std::move(submission));
+
+	if (!IsGpuThread()) {
+		WaitForIdle();
+	}
+
 	m_done_num++;
 }
 

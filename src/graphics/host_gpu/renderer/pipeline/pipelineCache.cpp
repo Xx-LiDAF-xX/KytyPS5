@@ -128,22 +128,38 @@ void PipelineCacheLog(fmt::format_string<Args...> format, Args&&... args) {
 }
 
 bool ReadShaderGuestMemory(void*, uint64_t address, std::span<uint32_t> values) {
-	return !values.empty() &&
-	       Libs::LibKernel::Memory::TryReadGpuCleanBacking(address, values.data(), values.size_bytes());
+	if (values.empty()) {
+		return true;
+	}
+	if (!Libs::LibKernel::Memory::TryReadGpuCleanBacking(address, values.data(), values.size_bytes())) {
+		std::memset(values.data(), 0, values.size_bytes());
+	}
+	return true;
 }
 
 // Per-draw resource tables can share a tracker page with GPU-written data, which protects the
 // whole page. Reading their clean bytes from the backing avoids a fault and a GPU wait; bytes
 // the GPU did write still fault and read back.
 bool ReadShaderGuestMemoryOnGpuThread(void*, uint64_t address, std::span<uint32_t> values) {
+	if (Libs::LibKernel::Memory::ClampRangeSize(address, values.size_bytes()) < values.size_bytes()) {
+		std::memset(values.data(), 0, values.size_bytes());
+		return true;
+	}
 	Libs::LibKernel::Memory::ReadGuestOnGpuThread(address, values.data(), values.size_bytes());
 	return true;
 }
 
 // A whole 64-byte block for the reads above, when each of them would be a plain copy.
 bool ReadShaderGuestBlockOnGpuThread(void*, uint64_t address, std::span<uint32_t> values) {
-	return Libs::LibKernel::Memory::TryReadGuestPlainOnGpuThread(address, values.data(),
-	                                                             values.size_bytes());
+	if (Libs::LibKernel::Memory::ClampRangeSize(address, values.size_bytes()) < values.size_bytes()) {
+		std::memset(values.data(), 0, values.size_bytes());
+		return true;
+	}
+	if (!Libs::LibKernel::Memory::TryReadGuestPlainOnGpuThread(address, values.data(),
+	                                                             values.size_bytes())) {
+		std::memset(values.data(), 0, values.size_bytes());
+	}
+	return true;
 }
 
 // The draw speculation thread's reader for all three kinds of read (userdata: the BufferCache).
@@ -156,7 +172,10 @@ bool ReadShaderGuestMemoryAhead(void* userdata, uint64_t address, std::span<uint
 	    buffers->IsPageGpuDirtyHint(address + values.size_bytes() - 1u)) {
 		return false;
 	}
-	return Libs::LibKernel::Memory::TryReadBacking(address, values.data(), values.size_bytes());
+	if (!Libs::LibKernel::Memory::TryReadBacking(address, values.data(), values.size_bytes())) {
+		std::memset(values.data(), 0, values.size_bytes());
+	}
+	return true;
 }
 
 void DumpShaderSpirv(const char* stage_name, uint64_t shader_hash,
