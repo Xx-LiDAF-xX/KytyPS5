@@ -18,6 +18,9 @@ struct CompileOptions {
 	uint64_t                    shader_hash     = 0;
 	bool                        dump_ir                    = true;
 	bool                        early_dump                 = false;
+	// Capture the rendering policy when scheduling translation. Worker threads
+	// must not read a changing global setting midway through a compilation.
+	bool                        ray_tracing_enabled        = true;
 	const char*                 dump_label                 = nullptr;
 	std::span<const uint32_t>   user_data;
 	std::span<const uint32_t>   back_code;

@@ -254,6 +254,7 @@ constexpr VopcOpcodeInfo VOPC_OPCODE_LIST[] = {
     {0xc5u, Opcode::V_CMP_NE_U32},         {0xc6u, Opcode::V_CMP_GE_U32},
     {0xc7u, Opcode::V_CMP_T_U32},          {0xa2u, Opcode::V_CMP_EQ_I64, false},
     {0xa1u, Opcode::V_CMP_LT_I64, false},  {0xa3u, Opcode::V_CMP_LE_I64, false},
+    {0xa5u, Opcode::V_CMP_NE_I64, false},
     {0xb5u, Opcode::V_CMPX_NE_I64, false}, {0xd1u, Opcode::V_CMPX_LT_U32},
     {0xd2u, Opcode::V_CMPX_EQ_U32},        {0xd3u, Opcode::V_CMPX_LE_U32},
     {0xd4u, Opcode::V_CMPX_GT_U32},        {0xd5u, Opcode::V_CMPX_NE_U32},

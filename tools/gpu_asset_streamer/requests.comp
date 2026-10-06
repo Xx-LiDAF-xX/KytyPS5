@@ -1,0 +1,9 @@
+#version 450
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0, std430) writeonly buffer Requests { uint ids[]; } requests;
+layout(push_constant) uniform Policy { uint assetCount; uint stride; } policy;
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= policy.assetCount) return;
+    requests.ids[id] = (id % policy.stride == 0u) ? id : 0xffffffffu;
+}

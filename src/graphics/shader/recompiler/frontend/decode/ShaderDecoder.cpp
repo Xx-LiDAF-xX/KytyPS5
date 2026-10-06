@@ -125,6 +125,8 @@ std::string ImageSampleFlagsToString(uint32_t flags) {
 std::string FormatMimg(const Instruction& inst) {
 	const char* sample_name =
 	    inst.opcode == Opcode::IMAGE_SAMPLE ? MimgSampleOpcodeName(inst.opcode_id) : nullptr;
+	if (inst.opcode == Opcode::IMAGE_BVH_INTERSECT_RAY && inst.opcode_id == 0xe7u)
+		sample_name = "IMAGE_BVH64_INTERSECT_RAY";
 	const std::string_view name =
 	    sample_name != nullptr ? sample_name : magic_enum::enum_name(inst.opcode);
 	std::string text =
@@ -389,6 +391,7 @@ Program DecodeFrontProgram(std::span<const uint32_t> front) {
 	while (front_words < front.size()) {
 		auto& inst = result.instructions.emplace_back();
 		DecodeInstruction(front, front_words, inst);
+		result.has_bvh |= inst.opcode == Opcode::IMAGE_BVH_INTERSECT_RAY;
 		front_words += inst.word_count;
 		if (inst.opcode == Opcode::S_SETPC_B64) {
 			EXIT_NOT_IMPLEMENTED(inst.src0.kind != OperandKind::Sgpr || inst.src0.reg != 6u);
@@ -406,6 +409,7 @@ void DecodeProgram(std::span<const uint32_t> code, Program& program) {
 	program.instructions.clear();
 	program.instructions.reserve(code.size());
 	program.code = code;
+	program.has_bvh = false;
 
 	std::vector<bool> branch_targets;
 	for (uint32_t word_index = 0; word_index < code.size();) {
@@ -413,6 +417,7 @@ void DecodeProgram(std::span<const uint32_t> code, Program& program) {
 		DecodeInstruction(code, word_index, program.instructions.back());
 
 		const auto& inst = program.instructions.back();
+		program.has_bvh |= inst.opcode == Opcode::IMAGE_BVH_INTERSECT_RAY;
 		word_index += inst.word_count;
 
 		if (IsDirectBranch(inst.opcode)) {

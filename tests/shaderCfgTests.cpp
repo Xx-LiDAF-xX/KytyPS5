@@ -38,6 +38,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <fstream>
 #include <initializer_list>
 #include <iterator>
 #include <span>
@@ -4942,6 +4943,45 @@ void TestNewShaderRecompilerMemoryFamilyTranslation() {
   CheckSpirvBinaryValidates(result.spirv);
 }
 
+void TestGpuGuardedScalarPointerChain() {
+  // The pointer is runtime shader data. A vector predicate may skip this chain entirely;
+  // resource refresh cannot eagerly follow a possibly null pointer on the CPU.
+  const uint32_t shader[] = {
+      EncodeVopc(0xc1, 256, 1),
+      EncodeSopp(0x06, 7),
+      EncodeSmem0(0x01, 8, 0), 125u << 25u,
+      EncodeSmem0(0x01, 10, 4), (125u << 25u) | 48u,
+      EncodeVop1(0x01, 0, 10),
+      EncodeExp0(0x00, 0x1), EncodeExp1(0, 0, 0, 0),
+      EncodeSopp(0x01),
+  };
+  std::array<uint32_t, 2> user_data {0x1000u, 0u};
+  auto options = MakeCompileOptions(ShaderType::Pixel);
+  options.user_data = user_data;
+  const auto translated = ShaderRecompiler::TranslateProgram(shader, options);
+  Check(translated.program.srt_reads.empty(),
+        "GPU-guarded scalar pointer chain was moved into CPU resource refresh");
+  Check(translated.program.info.uses_dma && translated.program.info.buffers.empty(),
+        "runtime scalar pointer chain lost its physical-address memory domain");
+  const auto no_host_read = +[](void*, uint64_t, std::span<uint32_t>) {
+    Check(false, "runtime pointer data was read during CPU resource refresh");
+    return false;
+  };
+  const auto result = RecompileForTest(shader, options, no_host_read);
+  CheckSpirvBinaryValidates(result.spirv);
+  uint32_t loads = 0;
+  for (const auto* block : result.program.blocks) {
+    for (const auto& inst : *block) {
+      if (inst.GetOpcode() != ShaderRecompiler::IR::ValueOpcode::LoadAddressU32) continue;
+      Check(!result.program.memory_info[inst.Flags<ShaderRecompiler::IR::MemoryFlags>().index]
+                 .planning_only,
+            "runtime pointer chain retained a planning-only scalar load");
+      ++loads;
+    }
+  }
+  Check(loads == 3u, "runtime scalar pointer chain lost its dependent address loads");
+}
+
 void TestNewShaderRecompilerScalarMemoryBindingDomains() {
   const auto count_live_memory_ops =
       [](const ShaderRecompiler::IR::Program &program,
@@ -8706,6 +8746,34 @@ void TestSharedExitPreservesNativeDescriptorSources() {
   }
 }
 
+void TestResourceBooleanUniformFactors() {
+  using namespace ShaderRecompiler::IR;
+  for (const auto op : {ValueOpcode::LogicalAnd, ValueOpcode::LogicalOr}) {
+    for (const bool known : {false, true}) {
+      for (const bool first : {false, true}) {
+        ResourcePlan plan;
+        auto &unknown = plan.value_storage.emplace_back(ValueOpcode::UndefU1);
+        auto &condition = plan.value_storage.emplace_back(op);
+        condition.SetArg(first ? 0 : 1, Value(known));
+        condition.SetArg(first ? 1 : 0, Value(&unknown));
+        plan.control_flow.resize(1);
+        plan.control_flow[0].condition = Value(&condition);
+        const auto &compiled = CompileResourcePlan(plan);
+        SrtRuntime runtime;
+        SrtWalker reference(plan, runtime);
+        SrtEvaluator evaluator(plan, compiled, runtime);
+        uint32_t expected = 0, actual = 0;
+        const bool reference_ok = reference.Evaluate(Value(&condition), expected);
+        const bool compiled_ok = evaluator.Evaluate(compiled.conditions[0], actual);
+        const bool determined = op == ValueOpcode::LogicalAnd ? !known : known;
+        Check(reference_ok == determined && compiled_ok == reference_ok &&
+                  (!compiled_ok || actual == expected),
+              "compiled resource predicate lost a uniform Boolean factor");
+      }
+    }
+  }
+}
+
 void TestNativeScalarReadDescriptorPlanning() {
   constexpr uint32_t nested = 10, read = 14, join = 18, end = 20;
   const uint32_t shader[] = {
@@ -8734,17 +8802,41 @@ void TestNativeScalarReadDescriptorPlanning() {
   user_data[2] = sizeof(table);
   user_data[3] = 3u << 28u;
   user_data[9] = 1u;
+  const auto guarded_read = +[](void* data, uint64_t address, std::span<uint32_t> values) {
+    Check(address >= 0x10000u, "inactive scalar-read branch accessed its null table");
+    return ReadHostTestMemory(data, address, values);
+  };
   for (const uint32_t mode : {2u, 0u, 1u}) {
     user_data[8] = mode;
+    user_data[0] = mode == 2u ? static_cast<uint32_t>(address) : 0u;
+    user_data[1] = mode == 2u ? static_cast<uint32_t>(address >> 32u) : 0u;
     auto options = MakeCompileOptions(ShaderType::Pixel);
     options.user_data = user_data;
-    const auto result = RecompileForTest(shader, options, ReadHostTestMemory);
+    const auto result = RecompileForTest(shader, options, guarded_read);
     const auto expected = mode == 2u ? table : std::array<uint32_t, 4>{};
     Check(!result.program.dispatcher_fallback && result.resources.buffers.size() == 1u &&
               std::ranges::equal(result.resources.flattened_srt, expected),
           "scalar descriptor planning retained an unrelated native execution mask");
     Check(std::equal(expected.begin(), expected.end(), result.resources.buffers[0].dwords.begin()),
           "scalar descriptor planning selected the wrong native resource");
+    ShaderRecompiler::IR::SrtRuntime runtime{
+        .user_data = user_data,
+        .read_memory = guarded_read,
+        .read_specialization_memory = guarded_read};
+    const auto translated = ShaderRecompiler::TranslateProgram(shader, options);
+    const auto refresh_plan = ShaderRecompiler::IR::ExtractResourcePlan(translated.program);
+    for (const uint32_t next_mode : {0u, 1u, 2u, 0u, 2u, 1u}) {
+      user_data[8] = next_mode;
+      user_data[0] = next_mode == 2u ? static_cast<uint32_t>(address) : 0u;
+      user_data[1] = next_mode == 2u ? static_cast<uint32_t>(address >> 32u) : 0u;
+      ShaderRecompiler::IR::ResourceSnapshot snapshot;
+      ShaderRecompiler::IR::ResourceSpecialization specialization;
+      Check(ShaderRecompiler::IR::MaterializeResources(refresh_plan, runtime, snapshot, specialization),
+            "scalar-read refresh failed after a branch change");
+      const auto next_expected = next_mode == 2u ? table : std::array<uint32_t, 4>{};
+      Check(std::ranges::equal(snapshot.flattened_srt, next_expected),
+            "learned resource walk reused stale scalar-read reachability");
+    }
     CheckSpirvBinaryValidates(result.spirv);
   }
 }
@@ -14313,15 +14405,46 @@ void TestNewShaderRecompilerSpirvSizeBaselines() {
 }
 
 #include "ShaderRayTracingTests.inc"
+#include "CapturedSrtReplay.inc"
 
 } // namespace
 } // namespace Libs::Graphics
 
-int main() {
+int main(int argc, char** argv) {
   using namespace Libs::Graphics;
-
+  if (argc == 3 && std::strcmp(argv[1], "--decode-only") == 0) {
+    std::ifstream input(argv[2], std::ios::binary | std::ios::ate);
+    Check(input.good(), "cannot open captured shader");
+    const auto size = input.tellg();
+    Check(size > 0 && size <= 16 * 1024 * 1024 && size % 4 == 0,
+          "captured shader has invalid size");
+    std::vector<uint32_t> code(static_cast<size_t>(size) / 4);
+    input.seekg(0);
+    Check(static_cast<bool>(input.read(reinterpret_cast<char*>(code.data()), size)),
+          "cannot read captured shader");
+    ShaderRecompiler::Decoder::Program decoded;
+    ShaderRecompiler::Decoder::DecodeProgram(code, decoded);
+    std::printf("%s", ShaderRecompiler::Decoder::ProgramToString(decoded).c_str());
+    return 0;
+  }
   EnsureConfigInitialized();
+  if (argc == 4 && std::strcmp(argv[1], "--replay-srt") == 0) {
+    return ReplayCapturedSrt(argv[2], argv[3]);
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--scalar-pointer-chain-only") == 0) {
+    TestGpuGuardedScalarPointerChain();
+    return 0;
+  }
   TestRayTracingInstructions();
+  if (argc == 2 && std::strcmp(argv[1], "--ray-tracing-only") == 0) {
+    return 0;
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--resource-control-only") == 0) {
+    TestResourceBooleanUniformFactors();
+    TestNativeScalarReadDescriptorPlanning();
+    TestNativeGuardedSamplerSource();
+    return 0;
+  }
   TestResourceDescriptorClassification();
   TestShaderBufferResourceSize();
   TestNativeShaderResourceDependencies();

@@ -1445,6 +1445,7 @@ struct TestCase {
   std::vector<std::pair<std::string, size_t>> decoded_counts;
   std::vector<std::pair<std::string, size_t>> ir_counts;
   u32 expected_storage_mip_descriptors = 0;
+  u32 expected_mip_descriptors = 0;
   // Opt-in alternate for a documented host-format conversion, never a general
   // numerical tolerance. Every word still has to match one complete result.
   std::vector<u32> alternate_expected;
@@ -3478,12 +3479,12 @@ public:
       });
       gate_entered.acquire();
       gpu.Submit(first_commands, {});
-      gpu.Done();
+      gpu.SuspendPoint();
       const bool first_did_not_wait = first_value == 0;
       gpu.Submit(second_commands, {});
       std::atomic_bool second_returned{false};
       std::thread second_done([&] {
-        gpu.Done();
+        gpu.SuspendPoint();
         second_returned.store(true);
       });
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -3496,7 +3497,7 @@ public:
       barrier.gpu_frames_ahead = 0;
       barrier.label_flush_interval_us = 0;
       Config::Load(barrier);
-      gpu.Done();
+      gpu.SuspendPoint();
       Require("GpuCommandLane", "frames-ahead suspend points",
               first_did_not_wait && second_waited && first_completed &&
                   second_value == 2,
@@ -11834,12 +11835,16 @@ public:
       null_storage.read = false;
       null_storage.written = true;
       null_program.info.images.push_back(null_storage);
+      auto null_depth = null_resource;
+      null_depth.numeric_class = Prospero::TextureNumericClass::Float;
+      null_depth.depth_compare = true;
+      null_program.info.images.push_back(null_depth);
       ShaderRecompiler::IR::ResourceSnapshot null_snapshot{};
       ShaderRecompiler::IR::DescriptorValue null_descriptor{};
       null_descriptor.dword_count = 8;
-      null_snapshot.images.assign(3, null_descriptor);
+      null_snapshot.images.assign(4, null_descriptor);
       ShaderRecompiler::IR::ResourceSpecialization null_specialization{};
-      null_specialization.images.resize(3);
+      null_specialization.images.resize(4);
       for (auto &image : null_specialization.images) {
         image.numeric_class = Prospero::TextureNumericClass::Float;
         image.dimension = ShaderRecompiler::Decoder::ImageDimension::Dim2D;
@@ -11856,15 +11861,21 @@ public:
       executor.PrepareBindings(null_runtime, null_bindings);
       executor.RebindImages(null_bindings);
       Require(name, "null descriptor count",
-              null_bindings.images.size() == 3,
+              null_bindings.images.size() == 4,
               "null descriptor preparation lost an image binding");
       const auto null_image_id = null_bindings.images[0].image_id;
       const auto &null_image = texture_cache.GetImage(null_image_id);
       Require(name, "one null image per format",
               null_bindings.images[1].image_id == null_image_id &&
                   null_bindings.images[2].image_id == null_image_id &&
-                  TextureCacheTestAccess::NullImageCount(texture_cache) == 1,
+                  TextureCacheTestAccess::NullImageCount(texture_cache) == 2,
               "null view dimension or usage created another image allocation");
+      const auto &null_depth_image = texture_cache.GetImage(null_bindings.images[3].image_id);
+      Require(name, "null depth comparison format",
+              null_depth_image.info.IsDepth() &&
+                  null_depth_image.backing.format == vk::Format::eD32Sfloat &&
+                  null_bindings.images[3].desc.view_info.aspect == vk::ImageAspectFlagBits::eDepth,
+              "null depth-comparison descriptor used a color image view");
       Require(name, "null descriptors share final cache acquisition",
               null_image.info.data.Empty() && !null_image.binding.is_bound &&
                   !null_image.binding.is_target &&
@@ -24929,6 +24940,36 @@ TestCase VectorVop3CompareNeU64OnGpu() {
            O::S_MOV_B32, O::BUFFER_STORE_DWORD, O::S_ENDPGM}};
 }
 
+TestCase VectorCompareNeI64OnGpu() {
+  std::vector<u32> code;
+  AppendVMovU32(&code, 1, 1);
+  AppendVMovU32(&code, 2, 0xffffffffu);
+  AppendVMovU32(&code, 3, 0xffffffffu);
+  AppendVMovU32(&code, 4, 0xffffffffu);
+  AppendVMovU32(&code, 5, 0xffffffffu);
+  const auto store_result = [&](u32 index) {
+    code.push_back(EncodeVop2(0x01, 6, InlineU32(0), 1));
+    AppendStoreVgpr(&code, 6, index);
+  };
+  // Equal pairs, then pairs differing only in the high word. Neither comparison
+  // may change EXEC: the zero result must still be stored.
+  code.push_back(EncodeVopc(0xa5, 258, 4));
+  store_result(0);
+  AppendVMovU32(&code, 5, 0);
+  code.push_back(EncodeVopc(0xa5, 258, 4));
+  store_result(1);
+  // A signed I64 literal is sign extended, unlike an unsigned I64 literal.
+  code.push_back(EncodeVopc(0xa5, 255, 2));
+  code.push_back(0xffffffffu);
+  store_result(2);
+  // VOP3 uses the same comparison semantics and retains the full pair width.
+  code.push_back(0xd4a5006au);
+  code.push_back(258u | (260u << 9u));
+  store_result(3);
+  AppendEnd(&code);
+  return {"VectorCompareNeI64OnGpu", code, {9, 9, 9, 9}, {0, 1, 0, 1}};
+}
+
 TestCase VectorVopcCmpxNeU64CapturedExecMask() {
   using O = ShaderOpcode;
 
@@ -32959,6 +33000,7 @@ TestCase DispatcherIrreducibleControlFlow() {
 
 #include "ShaderRayTracingGpuTests.inc"
 
+#if !defined(KYTY_RAY_TRACING_TESTS_ONLY)
 std::vector<TestCase> MakeCases() {
   std::vector<TestCase> cases;
   cases.reserve(128);
@@ -33402,6 +33444,8 @@ std::vector<TestCase> MakeCases() {
   return cases;
 }
 
+#endif
+
 std::vector<GraphicsCase> MakeGraphicsCases() {
   return {
       GraphicsInterpolationExport(),
@@ -33422,6 +33466,41 @@ std::vector<GraphicsCase> MakeGraphicsCases() {
       GraphicsFinalVmExportSupersedesEarlierVmMask(),
       GraphicsBranchPathFinalVmExportDiscardsInactiveExec(),
   };
+}
+
+void CheckRayTracingProgramCache(VulkanHarness &vulkan) {
+  constexpr const char *name = "RayTracingProgramCache";
+  std::vector<u32> code{0xf1989f01u, 0x00081014u};
+  AppendEnd(&code);
+  ShaderMapUserData(reinterpret_cast<uint64_t>(code.data()),
+      {.type = Prospero::ShaderBinaryType::kCs,
+       .code_size_bytes = static_cast<u32>(code.size() * sizeof(u32))});
+  GraphicContext graphics;
+  graphics.device = vulkan.Device();
+  graphics.physical_device_properties =
+      vulkan.RuntimeContext().GetPhysicalDeviceProperties();
+  HW::ComputeShaderInfo regs{};
+  regs.cs_regs.data_addr = reinterpret_cast<uint64_t>(code.data());
+  regs.cs_regs.num_thread_x = regs.cs_regs.num_thread_y = regs.cs_regs.num_thread_z = 1;
+  regs.cs_regs.wave_size = 32;
+  PipelineCache cache(graphics);
+  ShaderComputeInputInfo input{};
+  const bool previous_rt = Config::RayTracingEnabled();
+  Config::SetRayTracingEnabled(false);
+  Require(name, "disabled", !cache.GetComputeProgram(regs, {}, input),
+          "disabled BVH dispatch was compiled");
+  Config::SetRayTracingEnabled(true);
+  const auto enabled = cache.GetComputeProgram(regs, {}, input);
+  Require(name, "enabled", static_cast<bool>(enabled),
+          "RT-on reused the RT-off skipped source entry");
+  Config::SetRayTracingEnabled(false);
+  Require(name, "disabled again", !cache.GetComputeProgram(regs, {}, input),
+          "RT-off reused the RT-on program");
+  Config::SetRayTracingEnabled(true);
+  Require(name, "enabled cache reuse", cache.GetComputeProgram(regs, {}, input).id == enabled.id,
+          "RT-on did not reuse its compiled program after toggling");
+  Config::SetRayTracingEnabled(previous_rt);
+  std::printf("[gpu]     %-32s ok\n", name);
 }
 
 void CheckComputeLdsLimit(VulkanHarness &vulkan) {
@@ -38113,6 +38192,24 @@ int main(int argc, char **argv) {
 
   std::setvbuf(stdout, nullptr, _IONBF, 0);
   EnsureConfigInitialized();
+#if defined(KYTY_RAY_TRACING_TESTS_ONLY)
+  VulkanHarness vulkan;
+  if (argc == 2 && std::strcmp(argv[1], "--null-depth-image-only") == 0) {
+    vulkan.CheckRenderExecutorStencilBindingDiscovery();
+    return 0;
+  }
+  CheckRayTracingProgramCache(vulkan);
+  RunCase(&vulkan, VectorCompareNeI64OnGpu());
+  RunCase(&vulkan, FlatStackApertures(32));
+  RunCase(&vulkan, FlatStackApertures(64));
+  RunCase(&vulkan, BvhIntersections(true, true, 1));
+  for (bool barycentrics : {false, true}) {
+    for (bool sorted : {false, true}) {
+      RunCase(&vulkan, BvhIntersections(barycentrics, sorted));
+    }
+  }
+  return 0;
+#else
   CheckLeastRecentlyUsedCacheOrdering();
   CheckAttachmentFeedbackPipelineKeys();
   if (argc >= 2 && std::strcmp(argv[1], "--hardware-buffer-bounds") == 0) {
@@ -38330,6 +38427,7 @@ int main(int argc, char **argv) {
 #endif
   if (argc == 2 && std::strcmp(argv[1], "--ray-tracing-only") == 0) {
     VulkanHarness vulkan;
+    CheckRayTracingProgramCache(vulkan);
     RunCase(&vulkan, FlatStackApertures(32));
     RunCase(&vulkan, FlatStackApertures(64));
     RunCase(&vulkan, BvhIntersections(true, true, 1));
@@ -38985,4 +39083,5 @@ int main(int argc, char **argv) {
   }
   std::printf("ShaderRecompilerComputeTests: all cases passed\n");
   return 0;
+#endif
 }

@@ -411,8 +411,7 @@ void ApplyAutoOptimization(bool log_reason) {
 	}
 #endif
 
-	// Turn Ray Tracing OFF across all games by default to avoid BVH performance bottlenecks
-	SetRayTracingEnabled(false);
+	// Keep the requested rendering path. Hardware tuning must not override RT.
 
 	const char* profile_name = "Balanced";
 	if (cores >= 8 && ram_gb >= 16) {
@@ -444,8 +443,9 @@ void ApplyAutoOptimization(bool log_reason) {
 	if (log_reason) {
 		Log::WriteToConsoleAndLog(fmt::format(
 		    "[Auto-Optimizer] Analyzed PC Specs: CPU='{}' ({} threads), System RAM={} GB.\n"
-		    "[Auto-Optimizer] Applied Universal Profile: '{}' (Ray Tracing=OFF, Aniso={}x, Headroom={}%, AsyncPipelines={}).\n",
-		    cpu_name, cores, ram_gb, profile_name,
+		    "[Auto-Optimizer] Applied Universal Profile: '{}' (Ray Tracing={}, Aniso={}x, "
+			"Headroom={}%, AsyncPipelines={}).\n",
+		    cpu_name, cores, ram_gb, profile_name, RayTracingEnabled() ? "ON" : "OFF",
 		    GetAnisotropicFiltering() > 0 ? std::to_string(GetAnisotropicFiltering()) : "Auto",
 		    GetGpuTimestampScalePercent(), AsyncPipelinesEnabled() ? "ON" : "OFF"));
 	}
@@ -516,21 +516,18 @@ void ReloadFromSettingsFile() {
 			if (lower_val == "quality") {
 				SetGpuTimestampScalePercent(115);
 				SetAnisotropicFiltering(16);
-				SetRayTracingEnabled(false);
 				SetPipelineLibrariesEnabled(true);
 				SetAsyncPipelinesEnabled(false);
 				SetRelaxedReadbackEnabled(false);
 			} else if (lower_val == "balanced") {
 				SetGpuTimestampScalePercent(125);
 				SetAnisotropicFiltering(8);
-				SetRayTracingEnabled(false);
 				SetPipelineLibrariesEnabled(true);
 				SetAsyncPipelinesEnabled(true);
 				SetRelaxedReadbackEnabled(true);
 			} else if (lower_val == "performance") {
 				SetGpuTimestampScalePercent(135);
 				SetAnisotropicFiltering(4);
-				SetRayTracingEnabled(false);
 				SetPipelineLibrariesEnabled(true);
 				SetAsyncPipelinesEnabled(true);
 				SetRelaxedReadbackEnabled(true);

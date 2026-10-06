@@ -443,6 +443,7 @@ enum class Opcode {
 	V_CMP_GE_U32,
 	V_CMP_T_U32,
 	V_CMP_EQ_I64,
+	V_CMP_NE_I64,
 	V_CMP_LT_I64,
 	V_CMP_LE_I64,
 	V_CMP_LT_U64,

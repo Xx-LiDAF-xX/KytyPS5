@@ -124,7 +124,8 @@ static void PrintUsage() {
 #endif
 	::printf("  --keymap <Control=Input>             DualSense mapping; may be repeated.\n");
 	::printf("  --rd                                 Enable RenderDoc capture.\n");
-	::printf("  --ray-tracing <true|false>           Enable hardware ray tracing. Default: false.\n");
+	::printf("  --ray-tracing <true|false>           Enable guest RT through Vulkan compute BVH. "
+	         "Default: false.\n");
 	::printf("  --auto-optimize                      Auto-detect and optimize for host PC specs.\n");
 }
 

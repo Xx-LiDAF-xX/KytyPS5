@@ -1,12 +1,13 @@
 #include "loader/gamePatch.h"
 
 #include "common/assert.h"
+#include "common/emulatorConfig.h"
+#include "common/logging/log.h"
 #include "common/stringUtils.h"
 #include "common/virtualMemory.h"
 #include "kernel/memory.h"
 #include "loader/elf.h"
 #include "loader/runtimeLinker.h"
-#include "common/logging/log.h"
 #include "loader/systemContent.h"
 
 #include <algorithm>
@@ -30,6 +31,7 @@ struct Write {
 	uint64_t             target_address = 0;
 	std::vector<uint8_t> off;
 	std::vector<uint8_t> on;
+	bool                 ray_tracing_bypass = false;
 };
 
 struct Plan {
@@ -271,6 +273,9 @@ bool ApplyWrites(Plan* plan, const Program& program, std::string* error) {
 
 	for (int external = 1; external >= 0; external--) {
 		for (const auto& write: plan->writes) {
+			if (write.ray_tracing_bypass && Config::RayTracingEnabled()) {
+				continue;
+			}
 			if (static_cast<int>(
 			        !IsInsideProgram(program, write.target_address, write.on.size())) != external) {
 				continue;
@@ -327,20 +332,25 @@ bool ApplyAutoFixes(Program* main_program, const std::vector<Program*>& programs
 		Plan plan;
 		plan.title_id = title_id;
 		plan.process = main_program->file_name.filename().string();
-		plan.mod_names = {"Auto-Optimizer: Deferred Renderer, GI Bypass, Crash Fixes"};
-		
-		auto add_write = [&plan](uint64_t addr, const char* off, const char* on) {
+		plan.mod_names = {Config::RayTracingEnabled()
+		                      ? "Asobi stability fixes (guest RT renderer preserved)"
+		                      : "Auto-Optimizer: Deferred Renderer, GI Bypass, Crash Fixes"};
+
+		auto add_write = [&plan](uint64_t addr, const char* off, const char* on,
+		                         bool ray_tracing_bypass = false) {
 			Write w;
 			w.source_address = addr;
+			w.ray_tracing_bypass = ray_tracing_bypass;
 			ParseBytes(off, &w.off);
 			ParseBytes(on, &w.on);
 			plan.writes.push_back(std::move(w));
 		};
-		
+
 		if (title_id == "PPSA21567" || title_id == "PPSA21564") {
-			add_write(0x73eec3f, "4584f60f84f10800004531f64c8d3d8ec4a90141b430", "4584f6e9f2080000904531f64c8d3d8ec4a90141b430");
-			add_write(0x7108a40, "80bfe5050000000f857c1b0000", "e9841b00009090909090909090");
-			add_write(0x7108a33, "0fb682a00700008887e4050000", "b80000000090908887e4050000");
+			add_write(0x73eec3f, "4584f60f84f10800004531f64c8d3d8ec4a90141b430",
+			          "4584f6e9f2080000904531f64c8d3d8ec4a90141b430", true);
+			add_write(0x7108a40, "80bfe5050000000f857c1b0000", "e9841b00009090909090909090", true);
+			add_write(0x7108a33, "0fb682a00700008887e4050000", "b80000000090908887e4050000", true);
 			add_write(0x18f0552, "480f44f2", "480f46f2");
 		} else if (title_id == "PPSA01325") {
 			// Asobi Engine core memory stability fix for Astro's Playroom (PPSA01325).
@@ -402,9 +412,10 @@ void ToggleRayTracingBypass(bool enable_raytracing) {
 	
 	if (g_applied_plan->title_id == "PPSA21567" || g_applied_plan->title_id == "PPSA21564") {
 		for (const auto& write: g_applied_plan->writes) {
-			// Don't revert the crash fix (0x18f0552)
-			if (write.source_address == 0x18f0552) continue;
-			
+			// Only built-in renderer bypasses participate, never stability fixes
+			// or writes from a user-supplied cheat plan.
+			if (!write.ray_tracing_bypass) continue;
+
 			const auto& bytes = enable_raytracing ? write.off : write.on;
 			std::memcpy(reinterpret_cast<void*>(write.target_address), bytes.data(), bytes.size());
 			Common::VirtualMemory::FlushInstructionCache(write.target_address, bytes.size());

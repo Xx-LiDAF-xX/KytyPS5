@@ -11,6 +11,7 @@ if(KYTY_CLANG_CL)
 endif()
 
 add_library(common STATIC ${common_src} ${common_headers})
+kyty_configure_directstorage(common)
 
 target_include_directories(common
 	PUBLIC ${KYTY_SOURCE_DIR}

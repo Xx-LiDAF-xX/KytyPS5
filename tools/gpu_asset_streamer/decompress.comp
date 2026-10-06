@@ -1,0 +1,20 @@
+#version 450
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0, std430) readonly buffer Compressed { uint words[]; } inputData;
+layout(set = 0, binding = 1, std430) writeonly buffer Decoded { uint words[]; } outputData;
+void main() {
+    uint word = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * 64u;
+    uint outputCount = inputData.words[1];
+    if (word >= outputCount) return;
+    uint low = 0u;
+    uint high = inputData.words[2];
+    while (low < high) {
+        uint middle = low + (high - low) / 2u;
+        uint offset = inputData.words[4u + middle * 3u];
+        if (offset <= word) low = middle + 1u;
+        else high = middle;
+    }
+    // Host validation establishes contiguous coverage and a nonempty run table.
+    uint record = 4u + (low - 1u) * 3u;
+    outputData.words[word] = inputData.words[record + 2u];
+}

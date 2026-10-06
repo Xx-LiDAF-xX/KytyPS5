@@ -1099,7 +1099,6 @@ struct SystemOverlay::Impl {
 				// Quality Mode
 				Config::SetGpuTimestampScalePercent(115);
 				Config::SetAnisotropicFiltering(16);
-				Config::SetRayTracingEnabled(false);
 				Config::SetPipelineLibrariesEnabled(true);
 				Config::SetAsyncPipelinesEnabled(false);
 				Config::SetRelaxedReadbackEnabled(false);
@@ -1107,7 +1106,6 @@ struct SystemOverlay::Impl {
 				// Performance Mode
 				Config::SetGpuTimestampScalePercent(135);
 				Config::SetAnisotropicFiltering(4);
-				Config::SetRayTracingEnabled(false);
 				Config::SetPipelineLibrariesEnabled(true);
 				Config::SetAsyncPipelinesEnabled(true);
 				Config::SetRelaxedReadbackEnabled(true);

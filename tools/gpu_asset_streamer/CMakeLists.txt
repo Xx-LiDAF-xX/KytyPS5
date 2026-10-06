@@ -1,0 +1,26 @@
+cmake_minimum_required(VERSION 3.20)
+project(GpuAssetStreamer LANGUAGES CXX)
+find_package(Threads REQUIRED)
+find_package(Vulkan 1.3 REQUIRED COMPONENTS glslc)
+add_library(gpu_asset_streamer GuestVirtualMemory.cpp GpuAssetStreamer.cpp)
+target_compile_features(gpu_asset_streamer PUBLIC cxx_std_20)
+target_include_directories(gpu_asset_streamer PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(gpu_asset_streamer PUBLIC Vulkan::Vulkan Threads::Threads)
+set(shader_outputs)
+foreach(shader decompress requests)
+    set(output "${CMAKE_CURRENT_BINARY_DIR}/${shader}.spv")
+    add_custom_command(OUTPUT "${output}"
+        COMMAND Vulkan::glslc --target-env=vulkan1.3 "${CMAKE_CURRENT_SOURCE_DIR}/${shader}.comp" -o "${output}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${shader}.comp" VERBATIM)
+    list(APPEND shader_outputs "${output}")
+endforeach()
+add_custom_target(streaming_shaders ALL DEPENDS ${shader_outputs})
+add_executable(gpu_asset_streamer_demo main.cpp)
+target_link_libraries(gpu_asset_streamer_demo PRIVATE gpu_asset_streamer)
+add_dependencies(gpu_asset_streamer_demo streaming_shaders)
+include(CTest)
+if(BUILD_TESTING)
+    add_test(NAME gpu_asset_streamer_integration
+        COMMAND gpu_asset_streamer_demo "${CMAKE_CURRENT_BINARY_DIR}/decompress.spv"
+        "${CMAKE_CURRENT_BINARY_DIR}/requests.spv" "${CMAKE_CURRENT_BINARY_DIR}/fixtures" --validation)
+endif()

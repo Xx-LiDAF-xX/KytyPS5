@@ -8,7 +8,7 @@ void TestRayTracingInstructions() {
       EncodeSopp(0x01)};
   D::Program decoded;
   D::DecodeProgram(code, decoded);
-  Check(decoded.instructions.size() == 5 &&
+  Check(decoded.has_bvh && decoded.instructions.size() == 5 &&
             decoded.instructions.back().opcode == D::Opcode::S_ENDPGM,
         "decoder stopped before instructions following BVH intersections");
   for (const auto index : {0u, 2u}) {
@@ -26,9 +26,34 @@ void TestRayTracingInstructions() {
         "BVH intersections did not use GPU descriptors and raw guest memory");
   CheckSpirvBinaryValidates(result.spirv);
 
+  auto disabled_options = MakeCompileOptions(ShaderType::Compute);
+  disabled_options.ray_tracing_enabled = false;
+  const auto disabled = ShaderRecompiler::TranslateProgram(code, disabled_options);
+  Check(disabled.skip_dispatch && disabled.has_bvh,
+        "disabled RT compilation did not identify and skip the BVH dispatch");
+  const std::array front_bvh{0xf1989f01u, 0x00081014u, EncodeSop1(0x20, 0, 6)};
+  Check(D::DecodeFrontProgram(front_bvh).has_bvh,
+        "front shader decode did not preserve BVH metadata");
+  const std::array plain_front{EncodeSop1(0x20, 0, 6)};
+  const std::array plain_back{EncodeSopp(0x01)};
+  disabled_options.back_code = plain_back;
+  Check(ShaderRecompiler::TranslateProgram(front_bvh, disabled_options).skip_dispatch,
+        "fused translation lost front-stage BVH metadata");
+  disabled_options.back_code = code;
+  Check(ShaderRecompiler::TranslateProgram(plain_front, disabled_options).skip_dispatch,
+        "fused translation lost back-stage BVH metadata");
+  const bool previous_rt = Config::RayTracingEnabled();
+  Config::SetRayTracingEnabled(false);
+  auto enabled_options = MakeCompileOptions(ShaderType::Compute);
+  enabled_options.ray_tracing_enabled = true;
+  const auto enabled = ShaderRecompiler::TranslateProgram(code, enabled_options);
+  Config::SetRayTracingEnabled(previous_rt);
+  Check(!enabled.skip_dispatch && enabled.has_bvh,
+        "translation used mutable global RT policy instead of its captured options");
+
   const std::array literal{EncodeSMovB32(0, 255), 0xf1989f01u, EncodeSopp(0x01)};
   D::DecodeProgram(literal, decoded);
-  Check(decoded.instructions.size() == 2 && decoded.instructions[0].opcode == D::Opcode::S_MOV_B32,
+  Check(!decoded.has_bvh && decoded.instructions.size() == 2 && decoded.instructions[0].opcode == D::Opcode::S_MOV_B32,
         "BVH-shaped scalar literal was decoded as an instruction");
 #if KYTY_PLATFORM != KYTY_PLATFORM_WINDOWS
   for (const auto words : {std::array{0xf19c9f01u, 0x00081014u}, // BVH64

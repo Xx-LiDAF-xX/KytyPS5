@@ -141,6 +141,9 @@ static void Init(const Config::ConfigOptions& cfg, const std::filesystem::path& 
 	if (Config::AutoSpecOptimizationEnabled()) {
 		Config::ApplyAutoOptimization(true);
 	}
+	if (Config::RayTracingEnabled()) {
+		Log::WriteToConsoleAndLog("Ray tracing: guest BVH intersections enabled through Vulkan compute.\n");
+	}
 
 	if (Common::File::IsFileExisting(param_json)) {
 		Loader::SystemContentLoadParamSfo(param_json);

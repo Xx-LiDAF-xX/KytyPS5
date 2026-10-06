@@ -203,6 +203,7 @@ if (CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12.0.0)
 endif()
 
 option(KYTY_BUILD_LAUNCHER "Build Qt launcher" ON)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DirectStorage.cmake")
 
 config_compiler_and_linker()
 
@@ -565,6 +566,12 @@ add_executable(controller_settings_tests EXCLUDE_FROM_ALL
 target_link_libraries(controller_settings_tests common fmt::fmt SDL3::SDL3-static)
 target_include_directories(controller_settings_tests PRIVATE ${inc_headers})
 
+add_executable(ray_tracing_settings_tests EXCLUDE_FROM_ALL
+	"${KYTY_TESTS_DIR}/RayTracingSettingsTests.cpp"
+)
+target_link_libraries(ray_tracing_settings_tests common fmt::fmt)
+target_include_directories(ray_tracing_settings_tests PRIVATE ${inc_headers})
+
 add_executable(save_data_memory_tests EXCLUDE_FROM_ALL
 	"${KYTY_TESTS_DIR}/SaveDataMemoryTests.cpp"
 )
@@ -640,6 +647,9 @@ add_custom_command(
 target_sources(shader_recompiler_compute_tests PRIVATE
 	"${gpu_test_ms_depth_header}")
 
+add_kyty_full_emulator_test(shader_ray_tracing_tests "${KYTY_TESTS_DIR}/ShaderRayTracingGpuTests.cpp")
+target_sources(shader_ray_tracing_tests PRIVATE "${gpu_test_ms_depth_header}")
+
 add_kyty_full_emulator_test(virtual_memory_allocation_tests "${KYTY_TESTS_DIR}/VirtualMemoryAllocationTests.cpp")
 target_compile_definitions(virtual_memory_allocation_tests PRIVATE
 	KYTY_VIRTUAL_MEMORY_ALLOCATION_TESTS=1)
@@ -697,6 +707,15 @@ if(BUILD_TESTING)
 	add_test(NAME ngs2_sampler COMMAND $<TARGET_FILE:ngs2_sampler_tests>)
 	add_test(NAME pad_haptics COMMAND $<TARGET_FILE:pad_haptics_tests>)
 	add_test(NAME controller_settings COMMAND $<TARGET_FILE:controller_settings_tests>)
+	add_test(NAME ray_tracing_settings COMMAND $<TARGET_FILE:ray_tracing_settings_tests>)
+	add_test(NAME shader_ray_tracing
+		COMMAND $<TARGET_FILE:shader_ray_tracing_tests>)
+	add_test(NAME shader_ray_tracing_ir
+		COMMAND $<TARGET_FILE:shader_cfg_tests> --ray-tracing-only)
+	add_test(NAME shader_resource_control
+		COMMAND $<TARGET_FILE:shader_cfg_tests> --resource-control-only)
+	add_test(NAME null_depth_image
+		COMMAND $<TARGET_FILE:shader_ray_tracing_tests> --null-depth-image-only)
 	add_test(NAME save_data_memory COMMAND $<TARGET_FILE:save_data_memory_tests>)
 	add_test(NAME png_enc COMMAND $<TARGET_FILE:png_enc_tests>)
 	add_test(NAME ces COMMAND $<TARGET_FILE:ces_tests>)
@@ -790,6 +809,8 @@ if(BUILD_TESTING)
 		ngs2_sampler_tests
 		pad_haptics_tests
 		controller_settings_tests
+		ray_tracing_settings_tests
+		shader_ray_tracing_tests
 		save_data_memory_tests
 		png_enc_tests
 		ces_tests
@@ -815,6 +836,7 @@ if(APPLE AND (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR
 endif()
 
 add_executable(kyty_emulator "${KYTY_SOURCE_DIR}/main.cpp" ${kyty_emulator_src})
+kyty_stage_directstorage(kyty_emulator)
 configure_macos_guest_address_space(kyty_emulator)
 
 target_link_libraries(kyty_emulator ${kyty_emulator_link_libraries})
@@ -877,6 +899,13 @@ if(APPLE)
 endif()
 
 install(TARGETS kyty_emulator DESTINATION .)
+if(KYTY_ENABLE_DIRECTSTORAGE)
+	install(FILES
+		"${KYTY_DIRECTSTORAGE_SDK}/native/bin/x64/dstorage.dll"
+		"${KYTY_DIRECTSTORAGE_SDK}/native/bin/x64/dstoragecore.dll" DESTINATION .)
+	install(FILES "${KYTY_DIRECTSTORAGE_SDK}/LICENSE.txt"
+		"${KYTY_DIRECTSTORAGE_SDK}/LICENSE-CODE.txt" DESTINATION licenses/directstorage)
+endif()
 if(KYTY_BUILD_LAUNCHER)
 	add_subdirectory("${KYTY_SOURCE_DIR}/launcher" "${CMAKE_CURRENT_BINARY_DIR}/launcher")
 

@@ -468,6 +468,7 @@ Decoder::Program DecodeFusedProgram(std::span<const uint32_t> front, std::span<c
 	Decoder::DecodeInstruction(joined_code, front_words - 1u, result.instructions.back());
 	Decoder::Program back_program;
 	Decoder::DecodeProgram(back, back_program);
+	result.has_bvh |= back_program.has_bvh;
 	const auto back_pc = front_words * sizeof(uint32_t);
 	for (auto& inst: back_program.instructions) {
 		// A back-stage PC-relative data reference requires its guest code address.
@@ -533,15 +534,14 @@ TranslateResult TranslateProgram(std::span<const uint32_t> code, const CompileOp
 	     GetDumpLabel(options), StageName(options.stage), options.shader_hash,
 	     static_cast<uint64_t>(decoded.instructions.size()), phase_ms());
 
-	// When Ray Tracing is disabled, bypass BVH intersection shaders across all games to eliminate bottlenecks
-	if (decoded.has_bvh && !Config::RayTracingEnabled()) {
+	// The explicit RT-off policy skips guest dispatches that contain BVH intersections.
+	if (decoded.has_bvh && !options.ray_tracing_enabled) {
 		static std::atomic_flag warned = ATOMIC_FLAG_INIT;
 		if (!warned.test_and_set(std::memory_order_relaxed)) {
-			const auto& bvh = decoded.instructions.back();
 			Log::WriteToConsoleAndLog(fmt::format(
-			    "Ray Tracing is disabled: bypassing BVH intersection shader "
-			    "(stage={}, shader=0x{:016x}, pc=0x{:08x}, opcode=0x{:02x}) for maximum FPS and stability.\n",
-			    StageName(options.stage), options.shader_hash, bvh.pc, bvh.opcode_id));
+			    "Ray tracing disabled: skipping guest BVH dispatch "
+			    "(stage={}, shader=0x{:016x}).\n",
+			    StageName(options.stage), options.shader_hash));
 		}
 		return {.skip_dispatch = true, .has_bvh = true};
 	}

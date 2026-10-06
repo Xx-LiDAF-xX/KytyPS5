@@ -10,6 +10,7 @@
 #include <windows.h> // IWYU pragma: keep
 
 #include "common/platform/sysFileIO.h"
+#include "common/directStorage.h"
 #include "common/platform/sysTimer.h"
 #include "common/stringUtils.h"
 
@@ -35,6 +36,7 @@ struct sys_file_mem_buf_t {
 // NOLINTNEXTLINE(readability-identifier-naming)
 struct sys_file_t {
 	sys_file_type_t type;
+	std::unique_ptr<Common::DirectStorageReader> direct_storage;
 	union {
 		HANDLE              handle;
 		sys_file_mem_buf_t* buf;
@@ -65,6 +67,18 @@ static DWORD GetCacheAccessType(sys_file_cache_type_t t) {
 
 void SysFileRead(void* data, uint32_t size, sys_file_t& f, uint32_t* bytes_read) {
 	if (f.type == SYS_FILE_FILE) {
+		if (f.direct_storage != nullptr && size >= Common::DirectStorageReader::ChunkSize) {
+			const auto offset = SysFileTell(f);
+			const auto read = f.direct_storage->ReadAt(data, size, offset);
+			if (read && SysFileSeek(f, offset + *read)) {
+				if (bytes_read != nullptr) {
+					*bytes_read = *read;
+				}
+				return;
+			}
+			// ReadAt leaves the native position unchanged; retry the entire read.
+			f.direct_storage.reset();
+		}
 		DWORD w = 0;
 		ReadFile(f.handle, data, size, &w, nullptr);
 		if (bytes_read != nullptr) {
@@ -167,6 +181,9 @@ sys_file_t* SysFileOpenR(const std::filesystem::path& file_name, sys_file_cache_
 	}
 
 	ret->handle = h_file;
+	if (ret->type == SYS_FILE_FILE) {
+		ret->direct_storage = Common::DirectStorageReader::Open(file_name, h_file);
+	}
 
 	return ret;
 }
@@ -239,6 +256,7 @@ sys_file_t* SysFileOpenRw(const std::filesystem::path& file_name,
 }
 
 void SysFileClose(sys_file_t* f) {
+	f->direct_storage.reset();
 	if (f->type == SYS_FILE_FILE) {
 		CloseHandle(f->handle);
 	} else if (f->type == SYS_FILE_MEMORY_STAT) {

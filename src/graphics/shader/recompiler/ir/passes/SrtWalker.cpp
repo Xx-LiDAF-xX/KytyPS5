@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fmt/format.h>
 #include <map>
@@ -28,6 +30,23 @@ SrtRuntime CleanRuntime(SrtRuntime runtime) {
 namespace {
 
 constexpr uint64_t AddressMask = 0x0000ffffffffffffull;
+
+// Match the renderer's opt-in SRT trace. Log before invoking the memory reader so a checked
+// invalid-range exit retains the native instruction and the address calculation that caused it.
+void TraceResourceRead(const ResourcePlan& plan, const char* evaluator, uint32_t pc,
+                       uint64_t base, uint64_t address, size_t words) {
+	static const bool enabled = [] {
+		const char* value = std::getenv("KYTY_TRACE_SRT_READS");
+		return value != nullptr && std::strcmp(value, "1") == 0;
+	}();
+	if (!enabled) return;
+	std::fprintf(stderr, "SRT origin evaluator=%s shader=%016llx stage=%u pc=%08x "
+	                     "base=%016llx address=%016llx words=%zu\n",
+	             evaluator, static_cast<unsigned long long>(plan.shader_hash),
+	             static_cast<unsigned>(plan.stage), pc, static_cast<unsigned long long>(base),
+	             static_cast<unsigned long long>(address), words);
+	std::fflush(stderr);
+}
 
 bool AddSignedAddress(uint64_t base, int64_t offset, uint64_t& result) {
 	if (base > AddressMask) {
@@ -481,6 +500,7 @@ bool SrtWalker::EvaluateRawRead(const Inst& inst, uint64_t& result) {
 		}
 	}
 	uint32_t word = 0;
+	TraceResourceRead(m_program, "reference", flags.pc, base, address, 1);
 	if (m_runtime.read_memory != nullptr) {
 		if (!m_runtime.read_memory(m_runtime.userdata, address, {&word, 1})) {
 			return false;
@@ -870,8 +890,10 @@ std::span<const uint8_t> SrtWalker::FindActiveSources() {
 	auto&       strict = m_clean_evaluator != nullptr ? *m_clean_evaluator : *this;
 	auto&       active = m_program.ThreadScratch().active_sources;
 	active.assign(m_program.descriptor_sources.size(), 1u);
+	m_active_reads.assign(m_program.srt_reads.size(), 1u);
 	for (const auto& block: m_program.control_flow) {
 		for (const auto source: block.sources) active.at(source) = 0u;
+		for (const auto slot: block.srt_reads) m_active_reads.at(slot) = 0u;
 	}
 	auto& visited = m_program.ThreadScratch().visited_blocks;
 	auto& pending = m_program.ThreadScratch().pending_blocks;
@@ -885,6 +907,7 @@ std::span<const uint8_t> SrtWalker::FindActiveSources() {
 		visited[index] = 1u;
 		const auto& block = m_program.control_flow[index];
 		for (const auto source: block.sources) active[source] = 1u;
+		for (const auto slot: block.srt_reads) m_active_reads[slot] = 1u;
 		uint32_t condition = 0;
 		auto&    evaluator = index < direct.size() && direct[index] != 0u ? *this : strict;
 		if (!block.condition.IsEmpty() && m_runtime.read_specialization_memory != nullptr &&
@@ -901,8 +924,11 @@ bool SrtWalker::RefreshFlatBuffer(std::vector<uint32_t>& flat) {
 	if (!m_program.srt_plan_complete) {
 		return false;
 	}
-	flat.resize(m_program.srt_reads.size());
+	flat.assign(m_program.srt_reads.size(), 0u);
 	for (const auto& read: m_program.srt_reads) {
+		if (!m_active_reads.empty() && !m_active_reads.at(read.flat_offset)) {
+			continue;
+		}
 		const bool clean = read.flat_offset < m_clean_flat_slots.size() &&
 		                   m_clean_flat_slots[read.flat_offset] != 0u;
 		if (clean && (m_clean_evaluator == nullptr || m_runtime.read_specialization_memory == nullptr)) {
@@ -1155,6 +1181,8 @@ private:
 			return node;
 		}
 		const auto& memory = m_program.memory_info[inst.Flags<MemoryFlags>().index];
+		// Raw read nodes do not otherwise use aux; retain the native PC for optional diagnostics.
+		node.aux = inst.Flags<MemoryFlags>().pc;
 		node.imm = static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(memory.offset)));
 		node.args[0] = Node(handle->Arg(0));
 		node.args[1] = Node(handle->Arg(1));
@@ -1316,7 +1344,8 @@ void AnalyzeControlFlow(const ResourcePlan& program, CompiledResourcePlan& compi
 				continue;
 			}
 			reached[index] = 1u;
-			inert          = program.control_flow[index].sources.empty();
+			inert          = program.control_flow[index].sources.empty() &&
+			                 program.control_flow[index].srt_reads.empty();
 			stack.insert(stack.end(), program.control_flow[index].successors.begin(),
 			             program.control_flow[index].successors.end());
 		}
@@ -1606,6 +1635,7 @@ bool SrtEvaluator::EvaluateRawRead(const ResourceNode& node, uint64_t& result) {
 		}
 	}
 	uint32_t word = 0;
+	TraceResourceRead(m_program, "compiled", node.aux, base, address, 1);
 	if (m_runtime.read_memory != nullptr) {
 		if (!m_runtime.read_memory(m_runtime.userdata, address, {&word, 1})) {
 			return false;
@@ -1869,14 +1899,26 @@ bool SrtEvaluator::EvaluateInst(const ResourceNode& node, uint64_t& result) {
 			result = std::bit_cast<int32_t>(static_cast<uint32_t>(a)) >=
 			         std::bit_cast<int32_t>(static_cast<uint32_t>(b));
 			return true;
-		case NodeOp::LogicalAnd:
-			if (!binary()) return false;
-			result = (a != 0u) && (b != 0u);
+		case NodeOp::LogicalAnd: {
+			const bool left = EvaluateWide(node.args[0], a);
+			if (left && a == 0u) {
+				result = 0u;
+				return true;
+			}
+			if (!EvaluateWide(node.args[1], b) || (b != 0u && !left)) return false;
+			result = b != 0u;
 			return true;
-		case NodeOp::LogicalOr:
-			if (!binary()) return false;
-			result = (a != 0u) || (b != 0u);
+		}
+		case NodeOp::LogicalOr: {
+			const bool left = EvaluateWide(node.args[0], a);
+			if (left && a != 0u) {
+				result = 1u;
+				return true;
+			}
+			if (!EvaluateWide(node.args[1], b) || (b == 0u && !left)) return false;
+			result = b != 0u;
 			return true;
+		}
 		case NodeOp::LogicalXor:
 			if (!binary()) return false;
 			result = (a != 0u) != (b != 0u);
@@ -1915,6 +1957,10 @@ std::span<const uint8_t> SrtEvaluator::FindActiveSources() {
 		return {};
 	}
 	auto&      active    = m_program.ThreadScratch().active_sources;
+	m_active_reads.assign(m_program.srt_reads.size(), 1u);
+	for (const auto& block: m_program.control_flow) {
+		for (const auto slot: block.srt_reads) m_active_reads.at(slot) = 0u;
+	}
 	auto&      strict    = m_clean_evaluator != nullptr ? *m_clean_evaluator : *this;
 	const bool evaluates = m_runtime.read_specialization_memory != nullptr;
 	const auto outcome   = [&](uint32_t index) -> uint8_t {
@@ -1941,6 +1987,7 @@ std::span<const uint8_t> SrtEvaluator::FindActiveSources() {
 			const auto first = m_program.ThreadScratch().active_tree_sources.begin() + tree[node].sources;
 			const auto count = static_cast<ptrdiff_t>(m_program.descriptor_sources.size());
 			active.assign(first, first + count);
+			m_active_reads.assign(first + count, first + count + m_program.srt_reads.size());
 			return active;
 		}
 	}
@@ -1986,6 +2033,7 @@ std::span<const uint8_t> SrtEvaluator::FindActiveSources() {
 		for (const auto source: block.sources) {
 			active[source] = 1u;
 		}
+		for (const auto slot: block.srt_reads) m_active_reads[slot] = 1u;
 		// Nothing reachable from here adds a source: skip the condition and its strict reads.
 		if (!m_compiled.inert_successors.empty() && m_compiled.inert_successors[index] != 0u) {
 			continue;
@@ -2032,6 +2080,7 @@ std::span<const uint8_t> SrtEvaluator::FindActiveSources() {
 		if (fits && tree[node].sources == TreeNode::None) {
 			tree[node].sources = static_cast<uint32_t>(sources.size());
 			sources.insert(sources.end(), active.begin(), active.end());
+			sources.insert(sources.end(), m_active_reads.begin(), m_active_reads.end());
 		} else if (!fits) {
 			// Not expected: the walk order is a function of the outcomes. Start over.
 			tree.clear();
@@ -2045,23 +2094,32 @@ bool SrtEvaluator::RefreshFlatBuffer(std::vector<uint32_t>& flat) {
 	if (!m_program.srt_plan_complete) {
 		return false;
 	}
-	flat.resize(m_program.srt_reads.size());
+	flat.assign(m_program.srt_reads.size(), 0u);
 	// Run slots are ordinary: this walker evaluates them. A run that cannot be read whole
 	// evaluates its slots one by one, and fails exactly as that would.
 	const bool runs = !m_compiled.flat_runs.empty() && m_active_mask == ResourceNode::NoNode;
 	for (uint32_t run = 0; runs && run < m_compiled.flat_runs.size(); run++) {
 		const auto& info = m_compiled.flat_runs[run];
-		if (ReadFlatRun(info, flat)) {
+		const bool active_run = m_active_reads.empty() ||
+		    std::ranges::all_of(std::span(m_compiled.run_entries).subspan(info.first, info.count),
+		        [&](const auto& entry) { return m_active_reads.at(entry.flat_offset) != 0u; });
+		if (active_run && ReadFlatRun(info, flat)) {
 			continue;
 		}
 		for (uint32_t index = 0; index < info.count; index++) {
 			const auto slot = m_compiled.run_entries[info.first + index].slot;
+			if (!m_active_reads.empty() && !m_active_reads.at(m_program.srt_reads[slot].flat_offset)) {
+				continue;
+			}
 			if (!Evaluate(m_compiled.slots[slot], flat[m_program.srt_reads[slot].flat_offset])) {
 				return false;
 			}
 		}
 	}
 	for (uint32_t slot = 0; slot < m_program.srt_reads.size(); slot++) {
+		if (!m_active_reads.empty() && !m_active_reads.at(m_program.srt_reads[slot].flat_offset)) {
+			continue;
+		}
 		if (runs && m_compiled.in_run[slot] != 0u) {
 			continue;
 		}
@@ -2112,6 +2170,7 @@ bool SrtEvaluator::ReadFlatRun(const CompiledResourcePlan::FlatRun& run,
 		const auto address = first + uint64_t {done} * 4u;
 		const auto count   = std::min<uint64_t>(run.dwords - done, (64u - (address & 63u)) / 4u);
 		const auto values  = std::span(words.data() + done, count);
+		TraceResourceRead(m_program, "flat-run", node.aux, base, address, count);
 		if (m_runtime.read_memory != nullptr) {
 			if (!m_runtime.read_memory(m_runtime.userdata, address, values)) {
 				return false;

@@ -72,6 +72,7 @@ private:
 	std::span<const uint8_t>         m_clean_flat_slots;
 	SrtWalker*                      m_clean_evaluator = nullptr;
 	Value                           m_active_mask;
+	std::vector<uint8_t>             m_active_reads;
 	ResourcePlan::EvaluationContext& m_context;
 };
 
@@ -117,6 +118,7 @@ private:
 	ResourcePlan::EvaluationContext& m_context;
 	ResourcePlan::EvaluationContext::Entry* m_memo;
 	uint64_t                         m_generation;
+	std::vector<uint8_t>             m_active_reads;
 	// Set by a successful RefreshFlatBuffer: this walker's slot values.
 	const std::vector<uint32_t>*     m_flat = nullptr;
 };

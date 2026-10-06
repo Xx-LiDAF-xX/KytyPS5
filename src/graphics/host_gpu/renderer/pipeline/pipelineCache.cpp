@@ -127,6 +127,19 @@ void PipelineCacheLog(fmt::format_string<Args...> format, Args&&... args) {
 	Log::WriteToConsoleAndLog(message);
 }
 
+void TraceShaderResourceRead(const char* reader, uint64_t address,
+                            std::span<const uint32_t> values, bool completed) {
+	static const bool enabled = [] {
+		const char* value = std::getenv("KYTY_TRACE_SRT_READS");
+		return value != nullptr && std::strcmp(value, "1") == 0;
+	}();
+	if (!enabled) return;
+	std::string line = fmt::format("SRT {} {} address={:016x} words={}", reader,
+	                              completed ? "result" : "request", address, values.size());
+	if (completed) for (const auto word: values) line += fmt::format(" {:08x}", word);
+	Log::WriteToConsoleAndLog(line + "\n");
+}
+
 bool ReadShaderGuestMemory(void*, uint64_t address, std::span<uint32_t> values) {
 	if (values.empty()) {
 		return true;
@@ -134,6 +147,7 @@ bool ReadShaderGuestMemory(void*, uint64_t address, std::span<uint32_t> values) 
 	if (!Libs::LibKernel::Memory::TryReadGpuCleanBacking(address, values.data(), values.size_bytes())) {
 		std::memset(values.data(), 0, values.size_bytes());
 	}
+	TraceShaderResourceRead("clean", address, values, true);
 	return true;
 }
 
@@ -141,11 +155,13 @@ bool ReadShaderGuestMemory(void*, uint64_t address, std::span<uint32_t> values) 
 // whole page. Reading their clean bytes from the backing avoids a fault and a GPU wait; bytes
 // the GPU did write still fault and read back.
 bool ReadShaderGuestMemoryOnGpuThread(void*, uint64_t address, std::span<uint32_t> values) {
+	TraceShaderResourceRead("ordinary", address, values, false);
 	if (Libs::LibKernel::Memory::ClampRangeSize(address, values.size_bytes()) < values.size_bytes()) {
 		std::memset(values.data(), 0, values.size_bytes());
 		return true;
 	}
 	Libs::LibKernel::Memory::ReadGuestOnGpuThread(address, values.data(), values.size_bytes());
+	TraceShaderResourceRead("ordinary", address, values, true);
 	return true;
 }
 
@@ -334,6 +350,7 @@ struct PipelineCache::ProgramCache {
 		uint64_t              hash            = 0;
 		uint32_t              user_data_count = 0;
 		uint32_t              code_size       = 0;
+		bool                  ray_tracing_enabled = true;
 		std::vector<uint32_t> static_state;
 
 		bool operator==(const ProgramKey&) const = default;
@@ -360,8 +377,8 @@ struct PipelineCache::ProgramCache {
 	};
 
 	struct SourceEntry {
-		explicit SourceEntry(ShaderRecompiler::IR::ResourcePlan plan)
-		    : resource_plan(std::move(plan)) {
+		explicit SourceEntry(ShaderRecompiler::IR::ResourcePlan plan, bool ray_tracing)
+		    : resource_plan(std::move(plan)), ray_tracing_enabled(ray_tracing) {
 			permutations.reserve(8);
 		}
 
@@ -376,6 +393,7 @@ struct PipelineCache::ProgramCache {
 		uint32_t                                    last_push_cursor = 0;
 		bool                                        skip_dispatch = false;
 		bool                                        has_bvh       = false;
+		bool                                        ray_tracing_enabled = true;
 		std::vector<PendingPermutation>             pending;
 		// Set once a GPU-thread refresh succeeded (its plan is compiled): only then may the draw
 		// speculation thread refresh this plan (see Speculate).
@@ -391,6 +409,7 @@ struct PipelineCache::ProgramCache {
 			}
 			PipelineKeyHash::Mix(hash, key.user_data_count);
 			PipelineKeyHash::Mix(hash, key.code_size);
+			PipelineKeyHash::Mix(hash, key.ray_tracing_enabled);
 			PipelineKeyHash::Mix(hash, key.static_state.size());
 			// Bucket same-shape static variants by source. ProgramKey equality performs the one
 			// exact state comparison needed on a stable hit without hashing the full state first.
@@ -539,7 +558,8 @@ struct PipelineCache::ProgramCache {
 
 	template <typename InputInfo>
 	static std::unique_ptr<TranslationInput<InputInfo>>
-	CopyTranslationInput(ShaderType stage, const ShaderParams& params, const InputInfo& input_info) {
+	CopyTranslationInput(ShaderType stage, const ShaderParams& params, const InputInfo& input_info,
+	                     bool ray_tracing_enabled) {
 		static_assert(std::tuple_size_v<decltype(params.user_data)> == 40);
 		auto input = std::make_unique<TranslationInput<InputInfo>>();
 		input->code.assign(params.code.begin(), params.code.end());
@@ -550,6 +570,7 @@ struct PipelineCache::ProgramCache {
 		input->options = MakeOptions(stage, params.hash,
 		                             std::span(input->user_data).first(params.user_data_count),
 		                             input->back_code, input->input_info);
+		input->options.ray_tracing_enabled = ray_tracing_enabled;
 		// Worker threads never write the shader log.
 		input->options.dump_ir    = false;
 		input->options.early_dump = false;
@@ -636,6 +657,7 @@ struct PipelineCache::ProgramCache {
 		lookup_key.hash            = params.hash;
 		lookup_key.user_data_count = params.user_data_count;
 		lookup_key.code_size       = static_cast<uint32_t>(params.code.size());
+		lookup_key.ray_tracing_enabled = Config::RayTracingEnabled();
 		BuildStageStaticKey(input_info, lookup_key.static_state);
 		if (programs.contains(lookup_key) || pending_sources.contains(lookup_key)) {
 			return;
@@ -643,8 +665,9 @@ struct PipelineCache::ProgramCache {
 		std::promise<ShaderRecompiler::TranslateResult> promise;
 		pending_sources.emplace(lookup_key, promise.get_future());
 		PostJob(
-		    [input = CopyTranslationInput(stage, params, input_info),
-		     promise = std::move(promise)]() mutable {
+		    [input =
+			     CopyTranslationInput(stage, params, input_info, lookup_key.ray_tracing_enabled),
+			 promise = std::move(promise)]() mutable {
 			    promise.set_value(ShaderRecompiler::TranslateProgram(input->code, input->options));
 		    },
 		    false);
@@ -672,6 +695,7 @@ struct PipelineCache::ProgramCache {
 		const bool background = wait != ProgramWait::Wait && workers != nullptr &&
 		                        Config::GetShaderLogDirection() == Config::LogDirection::Silent;
 		const bool urgent     = wait == ProgramWait::Defer;
+		const bool ray_tracing_enabled = Config::RayTracingEnabled();
 
 		const auto user_data = std::span(params.user_data).first(params.user_data_count);
 		const ShaderRecompiler::IR::SrtRuntime runtime {
@@ -727,7 +751,9 @@ struct PipelineCache::ProgramCache {
 		};
 		// Refreshed below without a permutation yet: the lookup finds it again, to compile one.
 		const SourceEntry* refreshed = nullptr;
-		if (known_source != nullptr) {
+		if (known_source != nullptr &&
+		    static_cast<const SourceEntry*>(known_source)->ray_tracing_enabled ==
+		        ray_tracing_enabled) {
 			auto& source = *static_cast<SourceEntry*>(const_cast<void*>(known_source));
 			if (verify_speculation) {
 				// KYTY_VERIFY_SPEC=1: the known source must be the entry the key finds.
@@ -735,6 +761,7 @@ struct PipelineCache::ProgramCache {
 				lookup_key.hash            = params.hash;
 				lookup_key.user_data_count = params.user_data_count;
 				lookup_key.code_size       = static_cast<uint32_t>(params.code.size());
+				lookup_key.ray_tracing_enabled = ray_tracing_enabled;
 				BuildStageStaticKey(input_info, lookup_key.static_state);
 				const auto found = programs.find(lookup_key);
 				if (found == programs.end() || &found->second != &source) {
@@ -742,7 +769,7 @@ struct PipelineCache::ProgramCache {
 					     static_cast<unsigned long long>(params.hash));
 				}
 			}
-			if (source.skip_dispatch || (source.has_bvh && !Config::RayTracingEnabled())) {
+			if (source.skip_dispatch || (source.has_bvh && !ray_tracing_enabled)) {
 				return {};
 			}
 			if (auto program = existing(source)) {
@@ -754,9 +781,11 @@ struct PipelineCache::ProgramCache {
 		lookup_key.hash            = params.hash;
 		lookup_key.user_data_count = params.user_data_count;
 		lookup_key.code_size       = static_cast<uint32_t>(params.code.size());
+		lookup_key.ray_tracing_enabled = ray_tracing_enabled;
 		BuildStageStaticKey(input_info, lookup_key.static_state);
 		auto entry = programs.find(lookup_key);
-		if (entry != programs.end() && (entry->second.skip_dispatch || (entry->second.has_bvh && !Config::RayTracingEnabled()))) {
+		if (entry != programs.end() &&
+		    (entry->second.skip_dispatch || (entry->second.has_bvh && !ray_tracing_enabled))) {
 			return {};
 		}
 		if (entry != programs.end() && &entry->second != refreshed) {
@@ -777,9 +806,19 @@ struct PipelineCache::ProgramCache {
 			return ShaderProgram {};
 		};
 		auto options = MakeOptions(stage, params.hash, user_data, params.back_code, input_info);
+		options.ray_tracing_enabled = ray_tracing_enabled;
 		std::optional<ShaderRecompiler::TranslateResult> translated;
 		if (entry == programs.end()) {
 			// A new source: translate it first.
+			// Preserve the guest input before resource materialization can fail.
+			// The debug switch keeps this filesystem work out of normal rendering.
+			DumpShaderOriginal(StageName(stage), params.hash, params.code);
+			if (Config::GraphicsDebugDumpEnabled()) {
+				std::string diagnostic = fmt::format("Shader resource input: stage={} hash={:016x} userdata:",
+				                                    StageName(stage), params.hash);
+				for (const auto word: user_data) diagnostic += fmt::format(" {:08x}", word);
+				Log::WriteToConsoleAndLog(diagnostic + "\n");
+			}
 			if (auto queued = pending_sources.find(lookup_key); queued != pending_sources.end()) {
 				if (background && !IsReady(queued->second)) {
 					return defer();
@@ -794,8 +833,9 @@ struct PipelineCache::ProgramCache {
 					std::promise<ShaderRecompiler::TranslateResult> promise;
 					pending_sources.emplace(lookup_key, promise.get_future());
 					PostJob(
-					    [input   = CopyTranslationInput(stage, params, input_info),
-					     promise = std::move(promise)]() mutable {
+					    [input =
+						     CopyTranslationInput(stage, params, input_info, ray_tracing_enabled),
+						 promise = std::move(promise)]() mutable {
 						    promise.set_value(
 						        ShaderRecompiler::TranslateProgram(input->code, input->options));
 					    },
@@ -808,15 +848,22 @@ struct PipelineCache::ProgramCache {
 			}
 			if (translated->skip_dispatch) {
 				std::unique_lock lock(programs_mutex);
-				entry = programs.try_emplace(lookup_key, ShaderRecompiler::IR::ResourcePlan {}).first;
+				entry = programs
+				            .try_emplace(lookup_key, ShaderRecompiler::IR::ResourcePlan {},
+				                         ray_tracing_enabled)
+				            .first;
 				entry->second.skip_dispatch = true;
 				entry->second.has_bvh       = translated->has_bvh;
 				return {};
 			}
 			{
 				std::unique_lock lock(programs_mutex);
-				entry = programs.try_emplace(lookup_key,
-				    ShaderRecompiler::IR::ExtractResourcePlan(translated->program)).first;
+				entry =
+				    programs
+				        .try_emplace(lookup_key,
+						             ShaderRecompiler::IR::ExtractResourcePlan(translated->program),
+						             ray_tracing_enabled)
+				        .first;
 				entry->second.has_bvh = translated->has_bvh;
 			}
 			EXIT_IF(!ShaderRecompiler::IR::MaterializeResources(
@@ -847,9 +894,10 @@ struct PipelineCache::ProgramCache {
 				                          .push_data_cursor = push_data_cursor,
 				                          .compiled         = promise.get_future()});
 				PostJob(
-				    [device = device, input = CopyTranslationInput(stage, params, input_info),
-				     translated = std::move(translated), specialization = source.specialization,
-				     push_data_cursor, promise = std::move(promise)]() mutable {
+				    [device = device,
+					 input  = CopyTranslationInput(stage, params, input_info, ray_tracing_enabled),
+					 translated = std::move(translated), specialization = source.specialization,
+					 push_data_cursor, promise = std::move(promise)]() mutable {
 					    if (!translated) {
 						    translated = ShaderRecompiler::TranslateProgram(input->code, input->options);
 					    }
@@ -909,6 +957,7 @@ struct PipelineCache::ProgramCache {
 		key.hash            = params.hash;
 		key.user_data_count = params.user_data_count;
 		key.code_size       = static_cast<uint32_t>(params.code.size());
+		key.ray_tracing_enabled = Config::RayTracingEnabled();
 		BuildStageStaticKey(input_info, key.static_state);
 		SourceEntry* source = nullptr;
 		{
@@ -1367,13 +1416,16 @@ void PipelineCache::ReplayPrecompiled(std::vector<ShaderPrecompile::PermutationR
 		ProgramCache::CompiledModule                     compiled;
 		bool                                             valid = false;
 	};
-	const auto options_for = [](ShaderPrecompile::PermutationRecord& record, ShaderParams& params) {
+	const bool ray_tracing_enabled = Config::RayTracingEnabled();
+	const auto options_for = [ray_tracing_enabled](ShaderPrecompile::PermutationRecord& record,
+	                                               ShaderParams&                        params) {
 		params.code            = record.code;
 		params.back_code       = record.back_code;
 		params.hash            = record.hash;
 		params.user_data_count = record.user_data_count;
 		ShaderRecompiler::CompileOptions options;
 		options.stage          = record.stage;
+		options.ray_tracing_enabled = ray_tracing_enabled;
 		options.shader_hash    = record.hash;
 		options.user_data      = std::span(params.user_data).first(params.user_data_count);
 		options.back_code      = params.back_code;
@@ -1445,6 +1497,7 @@ void PipelineCache::ReplayPrecompiled(std::vector<ShaderPrecompile::PermutationR
 		key.hash            = record.hash;
 		key.user_data_count = record.user_data_count;
 		key.code_size       = static_cast<uint32_t>(record.code.size());
+		key.ray_tracing_enabled = options.ray_tracing_enabled;
 		std::visit([&](auto& info) { BuildStageStaticKey(info, key.static_state); }, record.info);
 		auto entry = m_program_cache->programs.find(key);
 		if (entry != m_program_cache->programs.end() &&
@@ -1460,7 +1513,9 @@ void PipelineCache::ReplayPrecompiled(std::vector<ShaderPrecompile::PermutationR
 		}
 		if (entry == m_program_cache->programs.end()) {
 			std::unique_lock insert_lock(m_program_cache->programs_mutex);
-			entry = m_program_cache->programs.try_emplace(std::move(key), std::move(*result.plan))
+			entry = m_program_cache->programs
+			            .try_emplace(std::move(key), std::move(*result.plan),
+			                         options.ray_tracing_enabled)
 			            .first;
 		}
 		entry->second.permutations.push_back(m_program_cache->MakePermutation(

@@ -1,0 +1,18 @@
+cmake_minimum_required(VERSION 3.20)
+project(UniversalShaderCache LANGUAGES CXX)
+find_package(Threads REQUIRED)
+find_package(Vulkan 1.3 REQUIRED)
+add_library(universal_shader_cache UniversalShaderCache.cpp)
+target_compile_features(universal_shader_cache PUBLIC cxx_std_20)
+target_include_directories(universal_shader_cache PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(universal_shader_cache PUBLIC Vulkan::Vulkan Threads::Threads)
+
+include(CTest)
+if(BUILD_TESTING)
+    # Compile against test Vulkan symbols, without linking the real Vulkan loader.
+    add_executable(universal_shader_cache_tests tests.cpp UniversalShaderCache.cpp)
+    target_compile_features(universal_shader_cache_tests PRIVATE cxx_std_20)
+    target_include_directories(universal_shader_cache_tests PRIVATE ${Vulkan_INCLUDE_DIRS})
+    target_link_libraries(universal_shader_cache_tests PRIVATE Threads::Threads)
+    add_test(NAME universal_shader_cache_contracts COMMAND universal_shader_cache_tests)
+endif()
