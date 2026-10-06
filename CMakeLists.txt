@@ -714,6 +714,8 @@ if(BUILD_TESTING)
 		COMMAND $<TARGET_FILE:shader_cfg_tests> --ray-tracing-only)
 	add_test(NAME shader_resource_control
 		COMMAND $<TARGET_FILE:shader_cfg_tests> --resource-control-only)
+	add_test(NAME shader_mesh_input_assembly
+		COMMAND $<TARGET_FILE:shader_cfg_tests> --mesh-input-assembly-only)
 	add_test(NAME null_depth_image
 		COMMAND $<TARGET_FILE:shader_ray_tracing_tests> --null-depth-image-only)
 	add_test(NAME save_data_memory COMMAND $<TARGET_FILE:save_data_memory_tests>)

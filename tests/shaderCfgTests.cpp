@@ -4956,7 +4956,11 @@ void TestGpuGuardedScalarPointerChain() {
       EncodeSopp(0x01),
   };
   std::array<uint32_t, 2> user_data {0x1000u, 0u};
+  ShaderPixelInputInfo pixel_info{};
+  pixel_info.ps_pos_x = true;
+  pixel_info.ps_pos_y = true;
   auto options = MakeCompileOptions(ShaderType::Pixel);
+  options.input_info.pixel = &pixel_info;
   options.user_data = user_data;
   const auto translated = ShaderRecompiler::TranslateProgram(shader, options);
   Check(translated.program.srt_reads.empty(),
@@ -4968,6 +4972,8 @@ void TestGpuGuardedScalarPointerChain() {
     return false;
   };
   const auto result = RecompileForTest(shader, options, no_host_read);
+  Check(ProgramHasInput(result.program, ShaderRecompiler::IR::StageInputKind::FragCoord),
+        "guarded pointer fixture lost its varying GPU branch input");
   CheckSpirvBinaryValidates(result.spirv);
   uint32_t loads = 0;
   for (const auto* block : result.program.blocks) {
@@ -10581,7 +10587,8 @@ void TestMeshInputAssembly() {
       mesh.primitives_per_group = mesh.InputPrimitiveCount(test.capacity);
       mesh.vertices_per_group =
           mesh.InputVertexCount(mesh.primitives_per_group);
-      mesh.threads_num[0] = 256;
+      mesh.fast_launch = test.fast_launch;
+      mesh.threads_num[0] = test.threads;
       mesh.threads_num[1] = mesh.threads_num[2] = 1;
       Decoder::Program decoded;
       CFG::Graph graph;
@@ -10616,18 +10623,22 @@ void TestMeshInputAssembly() {
         }
       }
       ConstantPropagationPass(program.blocks);
-      Check(load != nullptr &&
-                load->Arg(1).Resolve().U32() == test.byte_offset &&
-                load->Arg(3).Resolve().U1() == test.fetch,
-            "mesh index fetch address or active-lane predicate is wrong");
-      const auto *resource = load->Arg(0).ResolveInstruction();
-      Check(resource != nullptr &&
-                resource->Arg(0).Resolve().U32() == (test.address_low & ~3u) &&
-                resource->Arg(1).Resolve().U32() == 0x12 &&
-                program.memory_info[load->Flags<MemoryFlags>().index].kind ==
-                    ResourceKind::Global,
-            "mesh index fetch lost its aligned guest address resource");
-      load->ReplaceUsesWith(Value(test.fetch ? 0xabcd0123u : 0u));
+      if (test.fast_launch) {
+        Check(load == nullptr, "fast-launch mesh prolog unexpectedly fetched an index");
+      } else {
+        Check(load != nullptr &&
+                  load->Arg(1).Resolve().U32() == test.byte_offset &&
+                  load->Arg(3).Resolve().U1() == test.fetch,
+              "mesh index fetch address or active-lane predicate is wrong");
+        const auto *resource = load->Arg(0).ResolveInstruction();
+        Check(resource != nullptr &&
+                  resource->Arg(0).Resolve().U32() == (test.address_low & ~3u) &&
+                  resource->Arg(1).Resolve().U32() == 0x12 &&
+                  program.memory_info[load->Flags<MemoryFlags>().index].kind ==
+                      ResourceKind::Global,
+              "mesh index fetch lost its aligned guest address resource");
+        load->ReplaceUsesWith(Value(test.fetch ? 0xabcd0123u : 0u));
+      }
       ConstantPropagationPass(program.blocks);
       std::array<uint32_t, 9> vgprs{};
       uint32_t sgpr3 = 0;
@@ -10642,7 +10653,7 @@ void TestMeshInputAssembly() {
       Check(sgpr3 == test.wave_info &&
                 vgprs[0] == ((test.first << 2) | (test.second << 18)) &&
                 vgprs[1] == test.third * 4 && vgprs[5] == test.vertex_id &&
-                vgprs[8] == 9,
+                vgprs[test.fast_launch ? 6 : 8] == 9,
             "mesh prolog changed input assembly, wave counts, vertex ID, or "
             "instance ID");
     }
@@ -14435,11 +14446,17 @@ int main(int argc, char** argv) {
     TestGpuGuardedScalarPointerChain();
     return 0;
   }
+  if (argc == 2 && std::strcmp(argv[1], "--mesh-input-assembly-only") == 0) {
+    TestMeshInputAssembly();
+    return 0;
+  }
   TestRayTracingInstructions();
   if (argc == 2 && std::strcmp(argv[1], "--ray-tracing-only") == 0) {
     return 0;
   }
   if (argc == 2 && std::strcmp(argv[1], "--resource-control-only") == 0) {
+    TestGpuGuardedScalarPointerChain();
+    TestSharedExitPreservesNativeDescriptorSources();
     TestResourceBooleanUniformFactors();
     TestNativeScalarReadDescriptorPlanning();
     TestNativeGuardedSamplerSource();
@@ -14474,6 +14491,7 @@ int main(int argc, char** argv) {
   TestNewShaderRecompilerCapturedVop1SdwaByteConvert();
   TestNewShaderRecompilerVop1SdwaNotDestination();
   TestNewShaderRecompilerScalarMemoryBindingDomains();
+  TestGpuGuardedScalarPointerChain();
   // Opcode semantics and optimized SPIR-V are exercised by
   // ShaderRecompilerComputeTests; keep the distinct decoder contract checks
   // here.

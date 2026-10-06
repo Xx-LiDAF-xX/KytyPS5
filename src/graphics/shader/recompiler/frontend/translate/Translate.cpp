@@ -1291,7 +1291,7 @@ IR::Program TranslateProgram(const Decoder::Program& decoded, const CFG::Graph& 
 				              u32(mesh.primitives_per_group));
 			const auto step  = u32(mesh.InputPrimitiveStep());
 			const auto size  = u32(mesh.InputPrimitiveSize());
-			const auto group = builtin(IR::StageInputKind::WorkgroupId, 0);
+			const auto group = entry_ir.IAdd(builtin(IR::StageInputKind::WorkgroupId, 0), draw(6));
 			const auto chunk = mesh.fast_launch ? group : entry_ir.IMul(primitive_chunk, step);
 			const auto vertices = mesh.fast_launch ? u32(mesh.vertices_per_group) :
 			    minimum(subtract_saturate(draw(0), chunk), u32(mesh.vertices_per_group));

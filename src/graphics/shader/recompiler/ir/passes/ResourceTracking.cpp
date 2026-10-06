@@ -12,6 +12,7 @@
 #include <optional>
 #include <span>
 #include <tuple>
+#include <unordered_set>
 #include <utility>
 
 namespace Libs::Graphics::ShaderRecompiler::IR {
@@ -623,10 +624,38 @@ private:
 		m_scalar_reads.push_back(inst);
 	}
 
+	std::unordered_set<const Block*> GpuControlledBlocks() const {
+		std::unordered_set<const Block*> controlled;
+		if (m_program.blocks.size() != m_program.block_info.size()) {
+			controlled.insert(m_program.blocks.begin(), m_program.blocks.end());
+			return controlled;
+		}
+		std::vector<const Block*> pending;
+		for (size_t index = 0; index < m_program.blocks.size(); ++index) {
+			const auto& info = m_program.block_info[index];
+			if (info.terminator.kind != CFG::TerminatorKind::ConditionalBranch ||
+			    ValidateRuntimeValue(m_program, info.condition, RuntimeValueType::Integer)) continue;
+			for (const auto* successor: m_program.blocks[index]->ImmSuccessors())
+				pending.push_back(successor);
+		}
+		// Conservatively retain execution loads after joins and around backedges too.
+		// This only restricts optional CPU planning; actual descriptor dependencies
+		// are handled independently. Visit each successor once, including loops.
+		while (!pending.empty()) {
+			const auto* current = pending.back();
+			pending.pop_back();
+			if (!controlled.insert(current).second) continue;
+			for (const auto* successor: current->ImmSuccessors()) pending.push_back(successor);
+		}
+		return controlled;
+	}
+
 	void PlanScalarReads() {
 		m_program.srt_plan_complete = false;
 		m_program.srt_reads.clear();
+		const auto gpu_controlled_blocks = GpuControlledBlocks();
 		for (auto* block: m_program.blocks) {
+			const bool gpu_controlled = gpu_controlled_blocks.contains(block);
 			for (auto& inst: *block) {
 				const auto op = inst.GetOpcode();
 				const auto image = ImageOpcodeInfoOf(op);
@@ -646,6 +675,9 @@ private:
 					const auto* handle = inst.Arg(arg).Resolve().TryInstruction();
 					if (handle == nullptr) continue;
 					const auto kind = handle->GetOpcode();
+					// Do not speculate execution-only pointer chains past GPU predicates.
+					// Actual descriptor dependencies are still collected recursively below.
+					if (kind == ValueOpcode::GetAddressResource && gpu_controlled) continue;
 					const bool sampler = kind == ValueOpcode::GetSamplerResource;
 					const uint32_t width = kind == ValueOpcode::GetImageResource ? 8u
 					                     : kind == ValueOpcode::GetAddressResource ? 2u
@@ -664,6 +696,7 @@ private:
 			}
 		}
 		for (auto* block: m_program.blocks) {
+			if (gpu_controlled_blocks.contains(block)) continue;
 			for (auto& inst: *block) {
 				uint32_t index = 0;
 				if (inst.GetOpcode() == ValueOpcode::LoadAddressU32 &&

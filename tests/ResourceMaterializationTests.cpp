@@ -774,7 +774,8 @@ int main() {
   TestUnbasedFlatCacheHitMaterializes();
   TestWrittenDescriptorUsesStrictReaderOnce();
   TestFailedMaterializationRejectsStage();
-  TestMixedSamplerDuplicatesTheCorrectSnapshot();
+  TestMixedSamplerVariantsShareRuntimeDescriptor();
+  TestFiniteImageRefreshReusesScalarReads();
   TestMemoTracksDescriptorInputs();
   TestMemoTracksActiveSources();
   TestMemoRejectsUntrackedInputs();
