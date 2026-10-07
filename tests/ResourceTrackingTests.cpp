@@ -2971,7 +2971,9 @@ void TestConditionalBufferMaterialization() {
 
 void TestGuardedScalarDescriptorReads() {
   namespace CFG = Libs::Graphics::ShaderRecompiler::CFG;
+  for (const bool gpu_controlled : {false, true}) {
   for (const bool shared : {false, true}) {
+    if (gpu_controlled && shared) continue;
     for (const bool exec : {false, true}) {
       Fixture fixture;
       auto *entry = fixture.block;
@@ -2981,7 +2983,8 @@ void TestGuardedScalarDescriptorReads() {
       entry->AddBranch(done);
       optional->AddBranch(done);
       fixture.program.block_info[0].terminator = {
-          .kind = CFG::TerminatorKind::ConditionalBranch, .true_block = 1, .false_block = 2};
+          .kind = CFG::TerminatorKind::ConditionalBranch, .true_block = 1, .false_block = 2,
+          .merge_block = 2};
       fixture.program.block_info[1].terminator = {
           .kind = CFG::TerminatorKind::Branch, .true_block = 2};
       fixture.program.block_info[2].terminator.kind = CFG::TerminatorKind::Return;
@@ -2997,7 +3000,7 @@ void TestGuardedScalarDescriptorReads() {
       const auto varying = fixture.Emit(ValueOpcode::INotEqual32, {lane, Value(0u)});
       const auto enabled = fixture.Emit(ValueOpcode::INotEqual32, {flag, Value(0u)});
       fixture.program.block_info[0].condition =
-          fixture.Emit(ValueOpcode::LogicalAnd, {varying, enabled});
+          gpu_controlled ? varying : enabled;
       const auto root = fixture.Address(fixture.UserData(4), Value(0u));
       const auto Load = [&](Block *block) {
         fixture.block = block;
@@ -3013,8 +3016,11 @@ void TestGuardedScalarDescriptorReads() {
               {table, Value(0u), Value(0u), Value(exec)}, fixture.AddMemory(address, 12));
         }
         scalar.offset = 0;
-        fixture.Emit(ValueOpcode::ReadConstBuffer, {fixture.Buffer(words), Value(0u)},
-                     fixture.AddMemory(scalar, 16));
+        const auto data = fixture.Emit(ValueOpcode::ReadConstBuffer,
+            {fixture.Buffer(words), Value(0u)}, fixture.AddMemory(scalar, 16));
+        // Keep the descriptor consumer live so DCE cannot erase the access under test.
+        fixture.Emit(ValueOpcode::Reference,
+            {fixture.Emit(ValueOpcode::INotEqual32, {data, Value(0u)})});
       };
       Load(optional);
       if (shared) Load(done);
@@ -3026,6 +3032,25 @@ void TestGuardedScalarDescriptorReads() {
            Value(0u), Value(0u), Value(0u), Value(1u), Value(true)}, fixture.AddMemory(store, 20));
       fixture.PlanAndTrack();
       auto plan = ExtractResourcePlan(fixture.program);
+      if (gpu_controlled) {
+        Check(plan.srt_reads.empty(), "GPU-controlled pointer chain was hoisted into the CPU plan");
+        Check(std::ranges::count_if(fixture.program.memory_info, [](const auto& info) {
+                  return info.kind == ResourceKind::IndirectBuffer;
+                }) == (shared ? 2 : 1),
+              "GPU-controlled scalar descriptors did not remain GPU buffer loads");
+        TestMemory unreadable;
+        const SrtRuntime runtime{.userdata = &unreadable, .read_memory = ReadTestMemory,
+                                  .read_specialization_memory = ReadTestMemory};
+        // CPU materialization must not touch the guarded table, even with an invalid root.
+        const std::array<uint32_t, 5> user_data{0x1000u, 0u, 64u, 0u, 0x1040u};
+        auto configured = runtime;
+        configured.user_data = user_data;
+        ResourceSnapshot snapshot;
+        ResourceSpecialization specialization;
+        Check(MaterializeResources(plan, configured, snapshot, specialization) && unreadable.reads == 0,
+              "GPU-controlled null chain was read during resource materialization");
+        continue;
+      }
       Check(!exec || (!plan.srt_reads.empty() && !plan.control_flow[1].srt_reads.empty() &&
                       (!shared || !plan.control_flow[2].srt_reads.empty())),
             "guarded shared-read fixture lost its flattened execution sites");
@@ -3042,12 +3067,17 @@ void TestGuardedScalarDescriptorReads() {
       memory.data.words[0xb0 / 4] = 4u;
       ResourceSnapshot snapshot;
       ResourceSpecialization specialization;
+      uint32_t active_null_reads = 0;
       if (!shared) {
         Check(MaterializeResources(plan, runtime, snapshot, specialization) && memory.null_reads == 0 &&
                   std::ranges::all_of(snapshot.flattened_srt, [](auto word) { return word == 0; }),
               "disabled feature speculatively dereferenced its null BVH table");
         memory.data.words[7] = 1;
-        Check(!MaterializeResources(plan, runtime, snapshot, specialization) && memory.null_reads == 1,
+        const auto active_result = MaterializeResources(plan, runtime, snapshot, specialization);
+        active_null_reads = memory.null_reads;
+        // A failed batched read can retry its individual words. The semantic
+        // requirement is failure while active and no new reads after disabling.
+        Check(!active_result && active_null_reads != 0,
               "active feature accepted an unreadable BVH table");
       }
       memory.data.words[0x40 / 4] = 0x1080u;
@@ -3063,11 +3093,12 @@ void TestGuardedScalarDescriptorReads() {
       if (!shared) {
         memory.data.words[7] = 0;
         memory.data.words[0x40 / 4] = 0;
-        Check(MaterializeResources(plan, runtime, snapshot, specialization) && memory.null_reads == 1 &&
+        Check(MaterializeResources(plan, runtime, snapshot, specialization) && memory.null_reads == active_null_reads &&
                   std::ranges::all_of(snapshot.flattened_srt, [](auto word) { return word == 0; }),
               "cached plan retained reads after the feature was disabled");
       }
     }
+  }
   }
 }
 

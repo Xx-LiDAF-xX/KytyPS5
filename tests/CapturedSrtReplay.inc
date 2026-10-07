@@ -75,6 +75,7 @@ int ReplayCapturedSrt(const char* shader_path, const char* trace_path) {
   auto options = MakeCompileOptions(ShaderType::Compute);
   options.user_data = user_data;
   options.shader_hash = hash;
+  options.early_dump = true;
   auto translated = ShaderRecompiler::TranslateProgram(code, options);
   std::printf("%s", ProgramToString(translated.program).c_str());
   const auto plan = ExtractResourcePlan(translated.program);

@@ -78,6 +78,7 @@ bool IsRawRead(const ResourcePlan& values, const Inst& inst) {
 		return false;
 	}
 	const auto kind = values.memory_info[index].kind;
+	if (values.memory_info[index].gpu_execution_only) return false;
 	return (op == ValueOpcode::LoadAddressU32 && kind == ResourceKind::ScalarAddress) ||
 	       (op == ValueOpcode::ReadConstBuffer && kind == ResourceKind::ScalarBuffer);
 }

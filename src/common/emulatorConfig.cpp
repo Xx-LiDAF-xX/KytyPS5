@@ -21,11 +21,13 @@
 namespace Config {
 
 static std::unique_ptr<ConfigOptions> g_config;
+static std::atomic<int> g_ray_tracing_on_restart {-1};
 
 void Initialize() {
 	EXIT_IF(g_config != nullptr);
 
 	g_config = std::make_unique<ConfigOptions>();
+	g_ray_tracing_on_restart.store(-1, std::memory_order_relaxed);
 }
 
 void Shutdown() {
@@ -380,6 +382,16 @@ void SetRayTracingEnabled(bool enabled) {
 	g_ray_tracing_override.store(enabled ? 1 : 0, std::memory_order_relaxed);
 }
 
+bool RayTracingEnabledOnRestart() {
+	const auto value = g_ray_tracing_on_restart.load(std::memory_order_relaxed);
+	return value >= 0 ? value != 0 : RayTracingEnabled();
+}
+
+void SetRayTracingEnabledOnRestart(bool enabled) {
+	// Changing guest code patches and existing pipelines requires a fresh game launch.
+	g_ray_tracing_on_restart.store(enabled ? 1 : 0, std::memory_order_relaxed);
+}
+
 bool AutoSpecOptimizationEnabled() {
 	const auto val = g_auto_spec_optimization_override.load(std::memory_order_relaxed);
 	return val >= 0 ? val != 0 : (g_config ? g_config->auto_spec_optimization : false);
@@ -456,7 +468,7 @@ void SaveCurrentSettings() {
 	Common::SettingsFile::Save("audio-mute", AudioMuted() ? "true" : "false");
 	Common::SettingsFile::Save("aniso", std::to_string(GetAnisotropicFiltering()));
 	Common::SettingsFile::Save("res-scale", std::to_string(GetResolutionScalePercent()));
-	Common::SettingsFile::Save("ray-tracing", RayTracingEnabled() ? "true" : "false");
+	Common::SettingsFile::Save("ray-tracing", RayTracingEnabledOnRestart() ? "true" : "false");
 	Common::SettingsFile::Save("motion-blur", MotionBlurEnabled() ? "true" : "false");
 	Common::SettingsFile::Save("depth-of-field", DepthOfFieldEnabled() ? "true" : "false");
 	Common::SettingsFile::Save("bloom", BloomEnabled() ? "true" : "false");
@@ -493,7 +505,7 @@ void ReloadFromSettingsFile() {
 		} else if (arg == "--res-scale") {
 			try { SetResolutionScalePercent(static_cast<uint32_t>(std::stoi(val))); } catch (...) {}
 		} else if (arg == "--ray-tracing") {
-			SetRayTracingEnabled(bool_val);
+			SetRayTracingEnabledOnRestart(bool_val);
 		} else if (arg == "--motion-blur") {
 			SetMotionBlurEnabled(bool_val);
 		} else if (arg == "--depth-of-field") {

@@ -1251,6 +1251,33 @@ void EmitReadConstBuffer(ValueEmitContext& ctx, const IR::Inst& inst) {
 	auto mem = ctx.Memory(inst);
 	if (mem.planning_only) return;
 	auto& state        = ctx.state;
+	if (mem.kind == IR::ResourceKind::IndirectBuffer) {
+		const auto& handle = *inst.Arg(0).ResolveInstruction();
+		const auto word1 = ctx.Arg(handle, 1);
+		const auto stride = EmitBitFieldUExtract(state, word1, ConstantU32(state, 16),
+		                                        ConstantU32(state, 14));
+		const auto records = Unary(state, spv::OpUConvert, TypeScalarU64(state), ctx.Arg(handle, 2));
+		const auto size = Select(
+		    state, TypeScalarU64(state),
+		    Binary(state, spv::OpINotEqual, TypeBool(state), stride, ConstantU32(state, 0)),
+		    Binary(state, spv::OpIMul, TypeScalarU64(state), records,
+		           Unary(state, spv::OpUConvert, TypeScalarU64(state), stride)), records);
+		// Align SOFFSET and the immediate independently, as in the bound scalar path.
+		const auto aligned = Binary(state, spv::OpBitwiseAnd, TypeU32(state), ctx.Arg(inst, 1),
+		                            ConstantU32(state, ~3u));
+		const auto offset = Binary(
+		    state, spv::OpIAdd, TypeScalarU64(state),
+		    Unary(state, spv::OpUConvert, TypeScalarU64(state), aligned),
+		    Unary(state, spv::OpUConvert, TypeScalarU64(state), ConstantU32(state, mem.offset & ~3u)));
+		const auto end = Binary(state, spv::OpIAdd, TypeScalarU64(state), offset,
+		                        Unary(state, spv::OpUConvert, TypeScalarU64(state), ConstantU32(state, 4)));
+		const auto in_bounds = Binary(state, spv::OpULessThanEqual, TypeBool(state), end, size);
+		const auto high = EmitBitFieldUExtract(state, word1, ConstantU32(state, 0), ConstantU32(state, 16));
+		const auto base = DeviceAddressFromWords(state, ctx.Arg(handle, 0), high);
+		ctx.Define(inst, LoadBda(ctx, Binary(state, spv::OpIAdd, TypeScalarU64(state), base, offset),
+		                         in_bounds, 32u));
+		return;
+	}
 	mem.kind           = IR::ResourceKind::ScalarBuffer;
 	auto index = Binary(state, spv::OpShiftRightLogical, TypeU32(state), ctx.Arg(inst, 1),
 	                    ConstantU32(state, 2));

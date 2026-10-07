@@ -99,7 +99,7 @@ void ShaderMapUserData(uint64_t addr, const ShaderMappedData& data) {
 	auto&           entry      = (*g_shader_map)[addr];
 	entry                      = data;
 	entry.generation           = ++generation;
-	entry.hash                 = 0;
+	entry.hash                 = hash;
 
 	// KYTY_PERMUTATION_LOG=1 (diagnostic): when each shader is registered, to compare with the
 	// time of its first permutation.

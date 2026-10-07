@@ -226,6 +226,8 @@ void     SetAmbientOcclusionEnabled(bool enabled);
 
 bool     RayTracingEnabled();
 void     SetRayTracingEnabled(bool enabled);
+bool     RayTracingEnabledOnRestart();
+void     SetRayTracingEnabledOnRestart(bool enabled);
 
 bool     AutoSpecOptimizationEnabled();
 void     SetAutoSpecOptimizationEnabled(bool enabled);

@@ -148,7 +148,7 @@ public:
 	bool                   ambient_occlusion           = true;
 	bool                   auto_fix_missing_files      = true;
 	bool                   ray_tracing                 = false;
-	bool                   auto_optimize               = true;
+	bool                   auto_optimize               = false;
 #if defined(_WIN32)
 	bool red_zone_protection_enabled = false;
 #endif
@@ -312,7 +312,8 @@ public:
 		ambient_occlusion = s->value("ambient_occlusion", true).toBool();
 		auto_fix_missing_files = s->value("auto_fix_missing_files", true).toBool();
 		ray_tracing = s->value("ray_tracing", false).toBool();
-		auto_optimize = s->value("auto_optimize", true).toBool();
+		// The launcher no longer enables hardware tuning implicitly, including old profiles.
+		auto_optimize = false;
 #if defined(_WIN32)
 		red_zone_protection_enabled =
 		    s->value("red_zone_protection_enabled", red_zone_protection_enabled).toBool();

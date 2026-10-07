@@ -23,9 +23,16 @@ std::vector<Rumble>                rumble;
 std::vector<Rumble>                haptics;
 std::vector<std::array<Uint8, 32>> effects;
 bool                               haptics_handles_rumble = false;
+bool                               trigger_send_succeeds = true;
+int                                joystick_lock_depth = 0;
 } // namespace
 
 namespace Fake {
+void LockJoysticks() { ++joystick_lock_depth; }
+void UnlockJoysticks() {
+	Check(joystick_lock_depth > 0, "joystick lock was not held");
+	--joystick_lock_depth;
+}
 Uint64 GetTicks() {
 	return now;
 }
@@ -45,7 +52,7 @@ bool SendGamepadEffect(SDL_Gamepad*, const void* data, int size) {
 	std::array<Uint8, 32> effect {};
 	std::memcpy(effect.data(), data, effect.size());
 	effects.push_back(effect);
-	return true;
+	return trigger_send_succeeds;
 }
 bool SetGamepadLED(SDL_Gamepad*, Uint8, Uint8, Uint8) {
 	return true;
@@ -70,6 +77,8 @@ void Delay(Uint32) {}
 #define SDL_SetGamepadSensorEnabled Fake::SetGamepadSensorEnabled
 #define SDL_CloseGamepad            Fake::CloseGamepad
 #define SDL_Delay                   Fake::Delay
+#define SDL_LockJoysticks           Fake::LockJoysticks
+#define SDL_UnlockJoysticks         Fake::UnlockJoysticks
 #include "libs/controller.cpp"
 #undef SDL_GetTicks
 #undef SDL_GetGamepadFromID
@@ -81,6 +90,8 @@ void Delay(Uint32) {}
 #undef SDL_SetGamepadSensorEnabled
 #undef SDL_CloseGamepad
 #undef SDL_Delay
+#undef SDL_LockJoysticks
+#undef SDL_UnlockJoysticks
 
 namespace Libs::Controller::DualSenseHaptics {
 bool SetVibration(int, uint8_t large_motor, uint8_t small_motor, uint32_t duration_ms) {
@@ -109,6 +120,7 @@ struct Controller {
 	Controller() {
 		now                    = 1000;
 		haptics_handles_rumble = false;
+		trigger_send_succeeds = true;
 		Initialize();
 		Connect(1);
 		Check(GetSettingScale(Setting::SpeakerVolume) ==
@@ -279,6 +291,139 @@ void TestMaskedTriggersAndValidation() {
 	Check(rumble.empty() && haptics.empty(), "trigger intensity resent vibration");
 }
 
+void TestTriggerSendCacheAndRetry() {
+	Controller controller;
+	PadTriggerEffectParam param {};
+	param.trigger_mask = 3;
+	for (auto& command: param.command) {
+		command.mode = 1;
+		command.data[0] = 2;
+		command.data[1] = 6;
+	}
+	Check(PadSetTriggerEffect(1, &param) == 0 && effects.size() == 1,
+	      "initial trigger effect did not reach the host");
+	Check(PadSetTriggerEffect(1, &param) == 0 && effects.size() == 1,
+	      "unchanged delivered trigger effects were resent");
+	param.trigger_mask = 1;
+	param.command[0].data[1] = 8;
+	trigger_send_succeeds = false;
+	Check(PadSetTriggerEffect(1, &param) == 0 && effects.size() == 2,
+	      "failed host send was not attempted");
+	auto right = param;
+	right.trigger_mask = 2;
+	right.command[1].data[1] = 7;
+	trigger_send_succeeds = true;
+	Check(PadSetTriggerEffect(1, &right) == 0 && effects.size() == 3,
+	      "independent right trigger update failed");
+	Check(PadSetTriggerEffect(1, &param) == 0 && effects.size() == 4,
+	      "right trigger success incorrectly suppressed a failed left-trigger retry");
+	Check(PadSetTriggerEffect(1, &param) == 0 && effects.size() == 4,
+	      "successful left trigger retry was not cached");
+	CycleSetting(Setting::TriggerEffectIntensity);
+	Check(effects.size() == 5 && LastEffect().left_trigger[0] == 5 &&
+	          LastEffect().right_trigger[0] == 5,
+	      "trigger cache prevented an intensity change from disabling both effects");
+	Check(joystick_lock_depth == 0, "trigger submission leaked a joystick lock");
+}
+
+void TestTriggerEffectStatesAndTravel() {
+	Controller controller;
+	int32_t state[2] {-1, -1};
+	Check(PadGetTriggerEffectState(2, state) == PAD_ERROR_INVALID_HANDLE,
+	      "trigger state accepted an invalid handle");
+	Check(PadGetTriggerEffectState(1, nullptr) == -2137653243,
+	      "trigger state accepted a null output pointer");
+	Check(PadGetTriggerEffectState(1, state) == 0 && state[0] == 0 && state[1] == 0,
+	      "initial trigger state was not off");
+	PadTriggerEffectParam param {};
+	param.trigger_mask = 3;
+	param.command[0].mode = 1;
+	param.command[0].data[0] = 4;
+	param.command[0].data[1] = 8;
+	param.command[1].mode = 2;
+	param.command[1].data[0] = 2;
+	param.command[1].data[1] = 7;
+	param.command[1].data[2] = 6;
+	Check(PadSetTriggerEffect(1, &param) == 0, "feedback/weapon setup failed");
+	const auto check_state = [&](int left, int right, int expected_left, int expected_right) {
+		SetAxis(1, Axis::TriggerLeft, left);
+		SetAxis(1, Axis::TriggerRight, right);
+		Check(PadGetTriggerEffectState(1, state) == 0 && state[0] == expected_left &&
+		          state[1] == expected_right, "trigger state did not follow command and travel");
+	};
+	check_state(0, 0, 1, 3);
+	check_state(102, 52, 1, 4);
+	check_state(103, 178, 2, 4);
+	check_state(255, 180, 2, 5);
+	param.trigger_mask = 1;
+	param.command[0] = {};
+	param.command[0].mode = 3;
+	param.command[0].data[0] = 0;
+	param.command[0].data[1] = 4;
+	param.command[0].data[2] = 20;
+	Check(PadSetTriggerEffect(1, &param) == 0, "vibration setup failed");
+	check_state(0, 255, 6, 5);
+	check_state(7, 0, 6, 3);
+	check_state(8, 0, 7, 3);
+	CycleSetting(Setting::TriggerEffectIntensity);
+	Check(PadGetTriggerEffectState(1, state) == 0 && state[0] == 7,
+	      "muting physical resistance disabled a guest gameplay action");
+	auto invalid = param;
+	invalid.command[0].data[1] = 255;
+	Check(PadSetTriggerEffect(1, &invalid) == PAD_ERROR_INVALID_ARG &&
+	          PadGetTriggerEffectState(1, state) == 0 && state[0] == 7,
+	      "rejected trigger command changed the accepted guest state");
+	param.command[0] = {};
+	param.command[0].mode = 4;
+	param.command[0].data[4] = 6;
+	Check(PadSetTriggerEffect(1, &param) == 0, "multi-position feedback setup failed");
+	check_state(102, 0, 1, 3);
+	check_state(103, 0, 2, 3);
+	check_state(255, 0, 1, 3);
+	param.command[0] = {};
+	param.command[0].mode = 5;
+	param.command[0].data[0] = 3;
+	param.command[0].data[1] = 7;
+	param.command[0].data[2] = 2;
+	param.command[0].data[3] = 6;
+	Check(PadSetTriggerEffect(1, &param) == 0, "slope feedback setup failed");
+	check_state(76, 0, 1, 3);
+	check_state(77, 0, 2, 3);
+	param.command[0] = {};
+	param.command[0].mode = 6;
+	param.command[0].data[0] = 30;
+	param.command[0].data[1] = 5;
+	param.command[0].data[10] = 5;
+	Check(PadSetTriggerEffect(1, &param) == 0, "multi-position vibration setup failed");
+	check_state(0, 0, 6, 3);
+	check_state(8, 0, 7, 3);
+	check_state(128, 0, 6, 3);
+	check_state(255, 0, 7, 3);
+	param.command[0] = {};
+	param.command[0].mode = 1;
+	param.command[0].data[1] = 5;
+	Check(PadSetTriggerEffect(1, &param) == 0, "digital feedback setup failed");
+	check_state(0, 0, 1, 3);
+	SetButton(1, PAD_BUTTON_L2, true);
+	Check(PadGetTriggerEffectState(1, state) == 0 && state[0] == 2,
+	      "a digital L2 press did not activate feedback");
+	PadData data {};
+	Check(PadReadState(1, &data) == 0 && data.analog_buttons_l2 == 255 &&
+	          data.analog_buttons_r2 == 0, "digital L2 did not supply full analog travel independently");
+	SetButton(1, PAD_BUTTON_L2, false);
+	Check(PadGetTriggerEffectState(1, state) == 0 && state[0] == 1,
+	      "digital L2 release retained a pressed effect");
+	SetAxis(1, Axis::TriggerLeft, 8);
+	Check(PadReadState(1, &data) == 0 && data.analog_buttons_l2 == 8,
+	      "partial analog L2 travel was promoted to full travel");
+	param.command[0] = {};
+	Check(PadSetTriggerEffect(1, &param) == 0 && PadGetTriggerEffectState(1, state) == 0 &&
+	          state[0] == 0 && state[1] == 3, "off command affected the other trigger state");
+	Disconnect(1);
+	Check(PadGetTriggerEffectState(1, state) == 0 && state[0] == 0 && state[1] == 0,
+	      "disconnected pad retained trigger effects");
+}
+
 void TestIndependentOutputsAndPadSwitch() {
 	Controller controller;
 	haptics_handles_rumble = true;
@@ -335,6 +480,8 @@ int main() {
 	// Each following test initializes another controller and requires strong defaults.
 	TestVibrationLifetime();
 	TestMaskedTriggersAndValidation();
+	TestTriggerSendCacheAndRetry();
+	TestTriggerEffectStatesAndTravel();
 	TestIndependentOutputsAndPadSwitch();
 	Config::Shutdown();
 	return 0;

@@ -118,6 +118,7 @@ public:
 	int  GetActiveControllerId();
 	void SetLightBar(uint8_t r, uint8_t g, uint8_t b);
 	bool SetTriggerEffect(const PadTriggerEffectParam& param);
+	void GetTriggerEffectState(int32_t* state);
 	void  CycleSetting(Setting setting);
 	float GetSettingScale(Setting setting) const;
 	void ReadState(ControllerState* state, bool* flag, int* count);
@@ -152,11 +153,18 @@ private:
 	std::array<uint8_t, 2> m_vibration {};
 	uint64_t               m_vibration_until = 0;
 	PadTriggerEffectParam  m_trigger_effect {};
+	uint8_t               m_trigger_output_valid_mask = 0;
 	// Setting changes share the output lock; audio only needs an atomic scale snapshot.
 	std::array<std::atomic<uint32_t>, 3> m_setting_steps {};
 };
 
 static GameController* g_controller = nullptr;
+
+static int TriggerTravel(const ControllerState& state, Axis axis) {
+	const auto button = axis == Axis::TriggerLeft ? PAD_BUTTON_L2 : PAD_BUTTON_R2;
+	const int value = std::clamp(state.axes[static_cast<int>(axis)], 0, 255);
+	return value == 0 && (state.buttons & button) != 0 ? 255 : value;
+}
 
 static void pad_fill_data(PadData* data, const ControllerState& state, bool connected,
                           int connected_count) {
@@ -169,8 +177,8 @@ static void pad_fill_data(PadData* data, const ControllerState& state, bool conn
 	data->left_stick_y      = state.axes[static_cast<int>(Axis::LeftY)];
 	data->right_stick_x     = state.axes[static_cast<int>(Axis::RightX)];
 	data->right_stick_y     = state.axes[static_cast<int>(Axis::RightY)];
-	data->analog_buttons_l2 = state.axes[static_cast<int>(Axis::TriggerLeft)];
-	data->analog_buttons_r2 = state.axes[static_cast<int>(Axis::TriggerRight)];
+	data->analog_buttons_l2 = static_cast<uint8_t>(TriggerTravel(state, Axis::TriggerLeft));
+	data->analog_buttons_r2 = static_cast<uint8_t>(TriggerTravel(state, Axis::TriggerRight));
 	data->acceleration_x     = state.accel[0];
 	data->acceleration_y     = state.accel[1];
 	data->acceleration_z     = state.accel[2];
@@ -328,6 +336,28 @@ static bool trigger_effect_to_dualsense(const PadTriggerEffectCommand& command, 
 	}
 }
 
+// Adapted from Jetsku/KytyPS5 a6d70665, bbe1f24b and 6a8a89ee. SDL does not expose
+// the controller's trigger motor state, so derive the guest state from its accepted
+// command and input travel. Host intensity settings must not change guest gameplay.
+static int32_t TriggerEffectState(const PadTriggerEffectCommand& command, int travel) {
+	const int position = std::clamp(travel, 0, 255) * 10 / 256;
+	const bool pressed = travel >= 8;
+	switch (command.mode) {
+		case 1: return pressed && command.data[1] != 0 && position >= command.data[0] ? 2 : 1;
+		case 2:
+			if (command.data[2] == 0) return 0; // A zero-strength weapon command disables the effect.
+			if (position >= command.data[1]) return 5;
+			return position >= command.data[0] ? 4 : 3;
+		case 3:
+			return pressed && command.data[1] != 0 && command.data[2] != 0 &&
+			               position >= command.data[0] ? 7 : 6;
+		case 4: return pressed && command.data[position] != 0 ? 2 : 1;
+		case 5: return pressed && position >= command.data[0] ? 2 : 1;
+		case 6: return pressed && command.data[0] != 0 && command.data[1 + position] != 0 ? 7 : 6;
+		default: return 0;
+	}
+}
+
 void Initialize() {
 	EXIT_IF(g_controller != nullptr);
 
@@ -416,6 +446,7 @@ void GameController::CheckActive() {
 	m_vibration          = {};
 	m_vibration_until    = 0;
 	m_trigger_effect     = {};
+	m_trigger_output_valid_mask = 0;
 }
 
 void GameController::AddState() {
@@ -718,6 +749,20 @@ void GameController::SetLightBar(uint8_t r, uint8_t g, uint8_t b) {
 
 bool GameController::SetTriggerEffect(const PadTriggerEffectParam& param) {
 	Common::LockGuard lock(m_mutex);
+	if ((param.trigger_mask & ~0x03u) != 0) {
+		return false;
+	}
+	bool unchanged = (m_trigger_output_valid_mask & param.trigger_mask) == param.trigger_mask;
+	for (int i = 0; i < 2 && unchanged; ++i) {
+		if ((param.trigger_mask & (1u << i)) != 0) {
+			unchanged = m_trigger_effect.command[i].mode == param.command[i].mode &&
+			            std::memcmp(m_trigger_effect.command[i].data, param.command[i].data,
+			                        sizeof(param.command[i].data)) == 0;
+		}
+	}
+	if (unchanged) {
+		return true;
+	}
 	if (!SendTriggerEffect(param)) {
 		return false;
 	}
@@ -753,11 +798,40 @@ bool GameController::SendTriggerEffect(const PadTriggerEffectParam& param) {
 		return true;
 	}
 
+	// Keep the SDL pad alive between lookup and report submission during hotplug.
+	SDL_LockJoysticks();
 	auto* pad = SDL_GetGamepadFromID(static_cast<SDL_JoystickID>(m_active_id));
-	if (pad != nullptr && SDL_GetGamepadType(pad) == SDL_GAMEPAD_TYPE_PS5) {
-		(void)SDL_SendGamepadEffect(pad, &effect, sizeof(effect));
+	const bool delivered = pad != nullptr && SDL_GetGamepadType(pad) == SDL_GAMEPAD_TYPE_PS5 &&
+	                       SDL_SendGamepadEffect(pad, &effect, sizeof(effect));
+	if (delivered) {
+		m_trigger_output_valid_mask |= param.trigger_mask;
+	} else {
+		// Desired effects are retained, but an identical future request must retry the send.
+		m_trigger_output_valid_mask &= static_cast<uint8_t>(~param.trigger_mask);
 	}
+	SDL_UnlockJoysticks();
 	return true;
+}
+
+void GameController::GetTriggerEffectState(int32_t* state) {
+	Common::LockGuard lock(m_mutex);
+	for (int i = 0; i < 2; ++i) {
+		const auto axis = i == 0 ? Axis::TriggerLeft : Axis::TriggerRight;
+		state[i] = m_connected && (m_trigger_effect.trigger_mask & (1u << i)) != 0
+		               ? TriggerEffectState(m_trigger_effect.command[i], TriggerTravel(m_state, axis))
+		               : 0;
+	}
+}
+
+int KYTY_SYSV_ABI PadGetTriggerEffectState(int handle, int32_t* state) {
+	if (handle != 1) return PAD_ERROR_INVALID_HANDLE;
+	if (state == nullptr) return -2137653243; // Preserve the existing API's null-pointer error.
+	if (g_controller == nullptr) {
+		state[0] = state[1] = 0;
+	} else {
+		g_controller->GetTriggerEffectState(state);
+	}
+	return OK;
 }
 
 void GameController::GetConnectionInfo(bool* flag, int* count) {

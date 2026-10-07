@@ -588,6 +588,12 @@ private:
 		if (value.IsImmediate()) return;
 		auto* inst = value.TryInstruction();
 		if (inst == nullptr) Fail(use_pc, "invalid typed planning value");
+		if (inst->GetOpcode() == ValueOpcode::LoadAddressU32 ||
+		    inst->GetOpcode() == ValueOpcode::ReadConstBuffer) {
+			const auto index = inst->Flags<MemoryFlags>().index;
+			if (index < m_program.memory_info.size() &&
+			    m_program.memory_info[index].gpu_execution_only) return;
+		}
 		const auto cycle = std::ranges::find(m_srt_visiting, inst);
 		if (cycle != m_srt_visiting.end()) {
 			if (std::any_of(cycle, m_srt_visiting.end(), [](const Inst* value) {
@@ -608,6 +614,14 @@ private:
 				Fail(use_pc, "scalar read has an invalid resource handle");
 			MakeSource(*handle, width, false, false, ScalarReadBase(*inst), source,
 			           inst->Flags<MemoryFlags>().pc);
+			// Native-source recovery can resolve a structured phi to a uniform
+			// descriptor. Validate those recovered words, rather than the original phi.
+			for (uint32_t word = 0; word < width; ++word) {
+				if (ValidateRuntimeValue(m_program, source.dwords[word])) continue;
+				m_srt_visiting.pop_back();
+				m_srt_visited.push_back(inst);
+				return;
+			}
 			for (uint32_t word = 0; word < width; ++word)
 				CollectScalarRead(source.dwords[word], inst->Flags<MemoryFlags>().pc);
 			for (size_t arg = 1; arg < inst->NumArgs(); ++arg)
@@ -630,22 +644,30 @@ private:
 			controlled.insert(m_program.blocks.begin(), m_program.blocks.end());
 			return controlled;
 		}
-		std::vector<const Block*> pending;
 		for (size_t index = 0; index < m_program.blocks.size(); ++index) {
 			const auto& info = m_program.block_info[index];
 			if (info.terminator.kind != CFG::TerminatorKind::ConditionalBranch ||
 			    ValidateRuntimeValue(m_program, info.condition, RuntimeValueType::Integer)) continue;
+			const auto merge_id = info.terminator.merge_block;
+			const Block* merge = nullptr;
+			// Block IDs come from the native CFG. Translation prepends a prologue,
+			// so an ID is not an index into program.blocks.
+			for (size_t candidate = 0; candidate < m_program.block_info.size(); ++candidate)
+				if (m_program.block_info[candidate].id == merge_id)
+					merge = m_program.blocks[candidate];
+			std::vector<const Block*> pending;
+			std::unordered_set<const Block*> visited;
 			for (const auto* successor: m_program.blocks[index]->ImmSuccessors())
 				pending.push_back(successor);
-		}
-		// Conservatively retain execution loads after joins and around backedges too.
-		// This only restricts optional CPU planning; actual descriptor dependencies
-		// are handled independently. Visit each successor once, including loops.
-		while (!pending.empty()) {
-			const auto* current = pending.back();
-			pending.pop_back();
-			if (!controlled.insert(current).second) continue;
-			for (const auto* successor: current->ImmSuccessors()) pending.push_back(successor);
+			// Loads after structured reconvergence execute independently of this predicate.
+			// Dependent phi values still fail CPU validation.
+			while (!pending.empty()) {
+				const auto* current = pending.back();
+				pending.pop_back();
+				if (current == merge || !visited.insert(current).second) continue;
+				controlled.insert(current);
+				for (const auto* successor: current->ImmSuccessors()) pending.push_back(successor);
+			}
 		}
 		return controlled;
 	}
@@ -654,6 +676,33 @@ private:
 		m_program.srt_plan_complete = false;
 		m_program.srt_reads.clear();
 		const auto gpu_controlled_blocks = GpuControlledBlocks();
+		std::unordered_set<const Inst*> pointer_dependencies;
+		std::vector<const Inst*> pending;
+		for (const auto* block: m_program.blocks)
+			for (const auto& inst: *block)
+				if (inst.GetOpcode() == ValueOpcode::GetAddressResource) pending.push_back(&inst);
+		while (!pending.empty()) {
+			const auto* inst = pending.back();
+			pending.pop_back();
+			if (!pointer_dependencies.insert(inst).second) continue;
+			for (size_t arg = 0; arg < inst->NumArgs(); ++arg)
+				if (const auto* input = inst->Arg(arg).Resolve().TryInstruction()) pending.push_back(input);
+		}
+		// Mark before following any descriptor dependencies: a descriptor can itself
+		// come from a guarded pointer chain, and recursion must preserve that guard.
+		// Direct descriptor-table reads remain eligible for existing image bindings.
+		for (auto* block: m_program.blocks) {
+			if (!gpu_controlled_blocks.contains(block)) continue;
+			for (auto& inst: *block) {
+				if (inst.GetOpcode() != ValueOpcode::LoadAddressU32 ||
+				    !pointer_dependencies.contains(&inst)) continue;
+				const auto index = inst.Flags<MemoryFlags>().index;
+				if (index < m_program.memory_info.size() &&
+				    m_program.memory_info[index].kind == ResourceKind::ScalarAddress &&
+				    m_program.memory_info[index].component_count <= 2u)
+					m_program.memory_info[index].gpu_execution_only = true;
+			}
+		}
 		for (auto* block: m_program.blocks) {
 			const bool gpu_controlled = gpu_controlled_blocks.contains(block);
 			for (auto& inst: *block) {
@@ -676,7 +725,7 @@ private:
 					if (handle == nullptr) continue;
 					const auto kind = handle->GetOpcode();
 					// Do not speculate execution-only pointer chains past GPU predicates.
-					// Actual descriptor dependencies are still collected recursively below.
+					// Buffer dependencies recurse below, honoring gpu_execution_only.
 					if (kind == ValueOpcode::GetAddressResource && gpu_controlled) continue;
 					const bool sampler = kind == ValueOpcode::GetSamplerResource;
 					const uint32_t width = kind == ValueOpcode::GetImageResource ? 8u
@@ -1707,12 +1756,6 @@ private:
 				source = InternSource(descriptor);
 				return false;
 			}
-			if ((expected == ValueOpcode::GetImageResource || expected == ValueOpcode::GetSamplerResource) &&
-			    std::all_of(descriptor.dwords.begin(), descriptor.dwords.begin() + width,
-			                [](Value word) { return word.Resolve().GetType() == Type::U32; })) {
-				source = InternSource(descriptor);
-				return true;
-			}
 			Fail(pc, fmt::format("{} dword {} is not a valid runtime value",
 			                     ValueOpcodeName(expected), bad_dword));
 		}
@@ -1902,10 +1945,12 @@ private:
 		if (buffer != BufferAccess::None) {
 			if (!GetHandle(inst.Arg(0), ValueOpcode::GetBufferResource, 4, flags.pc,
 			               memory.resource * 4u, handle, source)) {
-				if (memory.kind != ResourceKind::Buffer || !memory.SupportsIndirectBufferLoad(op)) {
+				if ((memory.kind != ResourceKind::Buffer &&
+				     !(memory.kind == ResourceKind::ScalarBuffer && op == ValueOpcode::ReadConstBuffer)) ||
+				    !memory.SupportsIndirectBufferLoad(op)) {
 					Fail(flags.pc,
 					     "buffer descriptor is not a valid runtime value; GPU-selected access "
-					     "requires a raw DWORD x2/x3/x4 load");
+					     "requires a raw DWORD load");
 				}
 				m_program.memory_info[flags.index].kind = ResourceKind::IndirectBuffer;
 				m_info.uses_dma                         = true;

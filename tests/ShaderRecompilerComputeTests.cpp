@@ -24701,6 +24701,10 @@ TestCase VectorSinCosLargeFiniteSpecialCases() {
            O::S_ENDPGM}};
 }
 
+#include "RestoredVectorCompareCases.inc"
+#include "GpuSelectedScalarBufferCase.inc"
+#include "ScalarMaskPairCases.inc"
+
 TestCase VectorCompareF32ExposureGuard() {
   using O = ShaderOpcode;
   TestCase test;
@@ -38375,6 +38379,27 @@ int main(int argc, char **argv) {
     RunCase(&vulkan, VectorCompareF64WaveMasks(64));
     RunCase(&vulkan, VectorF64CapturedScreenSpaceShadows());
     RunCase(&vulkan, VectorF64ModesModifiersAndExec());
+    return 0;
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--scalar-mask-pair-only") == 0) {
+    VulkanHarness vulkan;
+    RunCase(&vulkan, OddScalarMaskPair(32));
+    RunCase(&vulkan, OddScalarMaskPair(64));
+    return 0;
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--gpu-scalar-buffer-only") == 0) {
+    VulkanHarness vulkan;
+    RunCase(&vulkan, ScalarBufferLoadsGpuSelectedDescriptors());
+    return 0;
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--restored-compare-only") == 0) {
+    VulkanHarness vulkan;
+    RunCase(&vulkan, VectorCompareF64Edges());
+    RunCase(&vulkan, VectorCompareInteger64Edges());
+    for (const auto wave_size : {32u, 64u}) {
+      RunCase(&vulkan, VectorCompareExecWaveMasks(wave_size));
+      RunCase(&vulkan, VectorCompareF64WaveMasks(wave_size));
+    }
     return 0;
   }
   if (argc == 2 && std::strcmp(argv[1], "--cmp-ngt-f16-only") == 0) {

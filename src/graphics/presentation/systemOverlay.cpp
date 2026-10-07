@@ -565,24 +565,10 @@ bool ProcessSystemOverlayInput(const SDL_Event& event) {
 		}
 		return false;
 	}
-	// Open/close emulator settings panel: F1, F2, F10, `~`, gamepad Touchpad, Guide, or L3+R3.
-	static std::atomic<bool> g_l3_pressed {false};
-	static std::atomic<bool> g_r3_pressed {false};
+	// Settings use a keyboard shortcut so gamepad buttons stay available to the game.
 	const bool is_toggle_key = (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
-	    (event.key.key == SDLK_F2 || event.key.key == SDLK_F1 || event.key.key == SDLK_F10 || event.key.key == SDLK_GRAVE));
-	bool is_toggle_button = false;
-	if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
-		if (event.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_STICK) g_l3_pressed.store(true, std::memory_order_relaxed);
-		if (event.gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_STICK) g_r3_pressed.store(true, std::memory_order_relaxed);
-		if (event.gbutton.button == SDL_GAMEPAD_BUTTON_TOUCHPAD || event.gbutton.button == SDL_GAMEPAD_BUTTON_GUIDE ||
-		    (g_l3_pressed.load(std::memory_order_relaxed) && g_r3_pressed.load(std::memory_order_relaxed))) {
-			is_toggle_button = true;
-		}
-	} else if (event.type == SDL_EVENT_GAMEPAD_BUTTON_UP) {
-		if (event.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_STICK) g_l3_pressed.store(false, std::memory_order_relaxed);
-		if (event.gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_STICK) g_r3_pressed.store(false, std::memory_order_relaxed);
-	}
-	if ((is_toggle_key || is_toggle_button) &&
+	    event.key.key == SDLK_F2);
+	if (is_toggle_key &&
 	    g_input_session.kind != OverlayKind::Ime && g_input_session.kind != OverlayKind::Dialog) {
 		SetSettingsOpen(!g_settings_open.load(std::memory_order_acquire));
 		return true;
@@ -1079,7 +1065,6 @@ struct SystemOverlay::Impl {
 		ImGui::SetNextWindowSizeConstraints({win_width, 100.0f}, {win_width, max_win_height});
 		if (focus_pending) {
 			ImGui::SetNextWindowFocus();
-			settings_saved_percent = static_cast<int>(Config::GetGpuTimestampScalePercent());
 		}
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {24.0f * scale, 20.0f * scale});
 		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {12.0f * scale, 12.0f * scale});
@@ -1087,43 +1072,20 @@ struct SystemOverlay::Impl {
 		constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
 		                                   ImGuiWindowFlags_NoSavedSettings;
 		ImGui::Begin("##KytySettings", nullptr, flags);
-		ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "Kyty Settings (Live Effective in Game)");
+		ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "Kyty Settings");
 		ImGui::Separator();
 
-		ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "Graphics Mode");
-		static int current_mode = 0; // 0 = Quality, 1 = Performance
-		const char* modes[] = { "Quality Mode (Max Fidelity)", "Performance Mode (Smooth Motion)" };
-		ImGui::SetNextItemWidth(-1.0f);
-		if (ImGui::Combo("##graphics_mode", &current_mode, modes, IM_ARRAYSIZE(modes))) {
-			if (current_mode == 0) {
-				// Quality Mode
-				Config::SetGpuTimestampScalePercent(115);
-				Config::SetAnisotropicFiltering(16);
-				Config::SetPipelineLibrariesEnabled(true);
-				Config::SetAsyncPipelinesEnabled(false);
-				Config::SetRelaxedReadbackEnabled(false);
-			} else {
-				// Performance Mode
-				Config::SetGpuTimestampScalePercent(135);
-				Config::SetAnisotropicFiltering(4);
-				Config::SetPipelineLibrariesEnabled(true);
-				Config::SetAsyncPipelinesEnabled(true);
-				Config::SetRelaxedReadbackEnabled(true);
-			}
+		bool ray_tracing = Config::RayTracingEnabledOnRestart();
+		if (ImGui::Checkbox("Enable ray tracing (experimental)", &ray_tracing)) {
+			Config::SetRayTracingEnabledOnRestart(ray_tracing);
 		}
 		ImGui::PushTextWrapPos(0.0f);
-		if (current_mode == 0) {
-			ImGui::TextDisabled("Quality Mode prioritizes maximum graphical fidelity and resolution.");
-		} else {
-			ImGui::TextDisabled("Performance Mode prioritizes smooth motion and frame rates.");
-		}
+		ImGui::TextDisabled("Ray tracing changes are saved when closing and apply after restarting the game. Disable any game patches that bypass ray tracing.");
 		ImGui::PopTextWrapPos();
-		ImGui::Separator();
-		ImGui::TextDisabled("Changes apply immediately and are saved when closing.");
 		const float button_width = std::min(160.0f * scale, ImGui::GetContentRegionAvail().x);
 		ImGui::SetCursorPosX(ImGui::GetWindowSize().x - button_width -
 		                     ImGui::GetStyle().WindowPadding.x);
-		const bool close = ImGui::Button("Close (F2 / Esc / Touchpad)", {button_width, 36.0f * scale});
+		const bool close = ImGui::Button("Close (F2 / Esc)", {button_width, 36.0f * scale});
 		ImGui::End();
 		ImGui::PopFont();
 		ImGui::PopStyleVar(2);
@@ -1165,7 +1127,7 @@ struct SystemOverlay::Impl {
 				ImGui::SetNextWindowPos(window_pos, ImGuiCond_Always, window_pos_pivot);
 				ImGui::SetNextWindowBgAlpha(0.50f);
 				if (ImGui::Begin("SettingsHint", nullptr, window_flags)) {
-					ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "[F2 / Touchpad]: Settings & Performance");
+					ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "[F2]: Settings");
 				}
 				ImGui::End();
 			}
@@ -1194,7 +1156,7 @@ struct SystemOverlay::Impl {
 			ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Total Compiled: %d", g_shaders_compiled.load(std::memory_order_relaxed));
 
 			ImGui::Separator();
-			ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "[F2 / Touchpad]: Settings");
+			ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "[F2]: Settings");
 			if (mode == 2) {
 				ImGui::Separator();
 				ImGui::Text("Frame Number: %llu", g_game_frame_num);
@@ -1227,7 +1189,6 @@ struct SystemOverlay::Impl {
 			if (!ec) {
 				if (g_last_settings_write_time != std::filesystem::file_time_type {} && write_time != g_last_settings_write_time) {
 					Config::ReloadFromSettingsFile();
-					Loader::GamePatch::ToggleRayTracingBypass(Config::RayTracingEnabled());
 				}
 				g_last_settings_write_time = write_time;
 			}
@@ -1343,7 +1304,6 @@ struct SystemOverlay::Impl {
 	bool                                  focus_pending      = true;
 	float                                 ui_scale           = 1.0f;
 	float                                 button_height      = 42.0f;
-	int                                   settings_saved_percent = 100;
 	int                                   record_thread_choice   = -1;
 	int                                   hardware_bounds_choice = -1;
 	ImVec2                                panel_offset {};

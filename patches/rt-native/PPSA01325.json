@@ -1,0 +1,32 @@
+{
+  "id": "PPSA01325",
+  "name": "PPSA01325: Native RT and GI (emulator trigger-state fix required)",
+  "version": "01.905.000",
+  "process": "eboot.bin",
+  "source_sha256": "8572cc581114dd71c75058554f5c26932d37e194f0b99d460ec661ffe15f0a41",
+  "mods": [
+    {
+      "name": "Select the existing non-tiled deferred-lighting renderer",
+      "enabled": false,
+      "memory": [
+        {
+          "offset": "0x1db4a79",
+          "off": "4c89b568ffffff4c89ad48ffffff84db0f846108000031db4c8d3568978e0041",
+          "on": "4c89b568ffffff4c89ad48ffffff84dbe9620800009031db4c8d3568978e0041"
+        }
+      ]
+    },
+    {
+      "name": "Select the common GI-unavailable state",
+      "enabled": false,
+      "memory": [
+        {
+          "offset": "0x1d62947",
+          "off": "4885c0740c83b844050000000f99c0eb0231c041884515",
+          "on": "4885c0740c83b8440500000030c090eb0231c041884515"
+        }
+      ]
+    }
+  ],
+  "notes": "Experimental native-rendering profile. All GI and renderer bypasses are disabled. Select this JSON instead of the original bypass patch and enable emulator ray tracing, or use tools/run-native-rt.ps1. Trigger gameplay correction is in the updated emulator, not game memory writes. Full RT startup still needs shader resource-planning fixes; this is not a verified optimized or crash-free RT patch."
+}

@@ -234,6 +234,12 @@
          </widget>
         </item>
 
+        <item row="11" column="1">
+         <widget class="QCheckBox" name="checkBox_ray_tracing">
+          <property name="toolTip"><string>Enable the ray tracing rendering path on the next game launch. Game patches that disable ray tracing must also be disabled.</string></property>
+          <property name="text"><string>Enable ray tracing (experimental)</string></property>
+         </widget>
+        </item>
        </layout>
       </widget>
      </item>

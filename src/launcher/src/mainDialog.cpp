@@ -147,6 +147,13 @@ void MainDialogPrivate::Setup(MainDialog* main_dialog) {
 	connect(&m_process, &QProcess::stateChanged, this, [this](QProcess::ProcessState state) {
 		if (state == QProcess::NotRunning) {
 			if (m_running_item != nullptr) {
+				// Retain an RT choice made in the game's F2 settings for its next launch.
+				QSettings settings(QDir(m_process.workingDirectory()).filePath("kyty_settings.ini"),
+				                   QSettings::IniFormat);
+				if (settings.contains("ray-tracing")) {
+					m_ui->widget->SetRayTracingForGame(*m_running_item,
+					                                 settings.value("ray-tracing").toBool());
+				}
 				m_running_item->SetRunning(false);
 			}
 			Update();
@@ -267,9 +274,7 @@ static QStringList CreateEmulatorArgs(const Configuration& info) {
 		args << "--playgo-hack";
 	}
 	args << "--ray-tracing" << BoolArg(info.ray_tracing);
-	if (info.auto_optimize) {
-		args << "--auto-optimize";
-	}
+	args << "--auto-optimize" << "false";
 	args << "--readback-linear-images" << BoolArg(info.readback_linear_images);
 	if (info.tessellation_enabled) {
 		args << "--tessellation";
@@ -432,8 +437,9 @@ static void WriteKytySettingsIni(const QDir& dir, const Configuration& info) {
 	}
 	QTextStream out(&file);
 	out << "# KytyPS5 Performance & Settings Configuration\n";
+	out << "auto-optimize = false\n";
 	int headroom = 125;
-	if (info.performance_profile == 1) headroom = 115;
+	if (info.performance_profile == 1) headroom = 100;
 	else if (info.performance_profile == 2) headroom = 125;
 	else if (info.performance_profile == 3) headroom = 135;
 	out << "gpu-timestamp-scale = " << headroom << "\n";

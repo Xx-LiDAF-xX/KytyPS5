@@ -32,14 +32,7 @@ static int KYTY_SYSV_ABI PadGetTriggerEffectState(int                           
 
 	LOGF("\t handle = %d\n", handle);
 
-	if (info == nullptr) {
-		return -2137653243; /* 0x80960005 */
-	}
-
-	info->state[0] = 0;
-	info->state[1] = 0;
-
-	return 0;
+	return Controller::PadGetTriggerEffectState(handle, info != nullptr ? info->state : nullptr);
 }
 
 static int KYTY_SYSV_ABI PadSetVibrationTriggerEffectWeakWhileEmbeddedMicInUse(bool enabled) {

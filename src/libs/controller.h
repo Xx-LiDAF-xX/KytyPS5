@@ -53,6 +53,7 @@ struct PadData;
 struct PadVibrationParam;
 struct PadLightBarParam;
 struct PadTriggerEffectParam;
+int KYTY_SYSV_ABI PadGetTriggerEffectState(int handle, int32_t* state);
 
 inline int controller_get_axis(int min, int max, int value) {
 	int v = (255 * (value - min)) / (max - min);

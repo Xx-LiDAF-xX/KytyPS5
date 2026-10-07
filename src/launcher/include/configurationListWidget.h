@@ -38,6 +38,7 @@ public:
 	}
 	[[nodiscard]] std::unique_ptr<Configuration>
 	CreateConfiguration(const ConfigurationItem& item) const;
+	void SetRayTracingForGame(const ConfigurationItem& item, bool enabled);
 
 	bool EnsureGameDirectory();
 	void ScanGameDirectory();

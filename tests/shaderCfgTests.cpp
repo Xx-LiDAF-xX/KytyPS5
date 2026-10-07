@@ -1022,14 +1022,14 @@ void SetIdentityInterpolatorSettings(ShaderPixelInputInfo *input_info) {
   }
 }
 
-void EnsureConfigInitialized() {
+void EnsureConfigInitialized(bool diagnostic_output = false) {
   static bool config_initialized = false;
   if (!config_initialized) {
     static Common::Subsystems subsystems;
     Common::InitializeThreads();
     subsystems.Initialize<Config::Lifecycle>();
     Config::ConfigOptions options;
-    options.printf_direction = Config::LogDirection::Silent;
+    options.printf_direction = diagnostic_output ? Config::LogDirection::Console : Config::LogDirection::Silent;
     Config::Load(options);
     subsystems.Initialize<Log::Lifecycle>();
     ShaderInit();
@@ -4948,10 +4948,11 @@ void TestGpuGuardedScalarPointerChain() {
   // resource refresh cannot eagerly follow a possibly null pointer on the CPU.
   const uint32_t shader[] = {
       EncodeVopc(0xc1, 256, 1),
-      EncodeSopp(0x06, 7),
+      EncodeSopp(0x06, 9),
       EncodeSmem0(0x01, 8, 0), 125u << 25u,
-      EncodeSmem0(0x01, 10, 4), (125u << 25u) | 48u,
-      EncodeVop1(0x01, 0, 10),
+      EncodeSmem0(0x02, 12, 4), (125u << 25u) | 48u,
+      EncodeSmem0(0x08, 16, 6), 125u << 25u,
+      EncodeVop1(0x01, 0, 16),
       EncodeExp0(0x00, 0x1), EncodeExp1(0, 0, 0, 0),
       EncodeSopp(0x01),
   };
@@ -4985,7 +4986,7 @@ void TestGpuGuardedScalarPointerChain() {
       ++loads;
     }
   }
-  Check(loads == 3u, "runtime scalar pointer chain lost its dependent address loads");
+  Check(loads == 6u, "runtime scalar pointer chain lost its dependent address loads");
 }
 
 void TestNewShaderRecompilerScalarMemoryBindingDomains() {
@@ -11768,6 +11769,7 @@ void TestWave32MaskProjection() {
     const auto high_half = thread_bit(e, ballot(e, active, 1u));
     const auto initial_mask = e.BitwiseAnd(active_mask, ballot(e, selected));
     const auto raw_consumer = e.Emit(ValueOpcode::IAdd32, {initial_mask, Value(3u)});
+    e.Emit(ValueOpcode::Reference, {e.INotEqual(U32(raw_consumer), zero)});
     const auto initial_predicate = e.LogicalAnd(active, selected);
     const auto entry_size = entry->Instructions().size();
     ConstantPropagationPass({entry}, wave_size);
@@ -11783,6 +11785,7 @@ void TestWave32MaskProjection() {
     const auto rejected_predicate = e.Emit(ValueOpcode::SelectU1,
                                           {selected, Value(false), combined_predicate});
     const auto gated_raw_consumer = e.Emit(ValueOpcode::IAdd32, {gated_mask, Value(3u)});
+    e.Emit(ValueOpcode::Reference, {e.INotEqual(U32(gated_raw_consumer), zero)});
     auto &mask = loop->AppendNewInst(ValueOpcode::Phi);
     mask.SetFlags(Type::U32);
     auto &predicate = loop->AppendNewInst(ValueOpcode::Phi);
@@ -14438,7 +14441,7 @@ int main(int argc, char** argv) {
     std::printf("%s", ShaderRecompiler::Decoder::ProgramToString(decoded).c_str());
     return 0;
   }
-  EnsureConfigInitialized();
+  EnsureConfigInitialized(argc == 4 && std::strcmp(argv[1], "--replay-srt") == 0);
   if (argc == 4 && std::strcmp(argv[1], "--replay-srt") == 0) {
     return ReplayCapturedSrt(argv[2], argv[3]);
   }
@@ -14455,6 +14458,7 @@ int main(int argc, char** argv) {
     return 0;
   }
   if (argc == 2 && std::strcmp(argv[1], "--resource-control-only") == 0) {
+    TestWave32MaskProjection();
     TestGpuGuardedScalarPointerChain();
     TestSharedExitPreservesNativeDescriptorSources();
     TestResourceBooleanUniformFactors();

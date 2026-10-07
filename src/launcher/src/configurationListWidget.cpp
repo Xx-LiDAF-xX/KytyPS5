@@ -332,11 +332,12 @@ void ConfigurationListWidget::WriteSettings() {
 		QTextStream out(&kyty_ini);
 		out << "# KytyPS5 Performance & Settings Configuration\n";
 		int headroom = 125;
-		if (m_global_info.performance_profile == 1) headroom = 115;
+		if (m_global_info.performance_profile == 1) headroom = 100;
 		else if (m_global_info.performance_profile == 2) headroom = 125;
 		else if (m_global_info.performance_profile == 3) headroom = 135;
 		out << "gpu-timestamp-scale = " << headroom << "\n";
 		out << "ray-tracing = " << (m_global_info.ray_tracing ? "true" : "false") << "\n";
+		out << "auto-optimize = false\n";
 		out << "master-volume = " << m_global_info.master_volume << "\n";
 		out << "audio-mute = " << (m_global_info.audio_muted ? "true" : "false") << "\n";
 		if (m_global_info.anisotropic_filtering >= 0) {
@@ -463,6 +464,19 @@ struct GameMetadata {
 
 static QString GetJsonString(const QJsonObject& obj, const QString& key) {
 	return obj.value(key).toString().trimmed();
+}
+
+void ConfigurationListWidget::SetRayTracingForGame(const ConfigurationItem& item, bool enabled) {
+	auto info = CreateConfiguration(item);
+	if (info->ray_tracing == enabled) {
+		return;
+	}
+	info->ray_tracing = enabled;
+	info->custom_settings = true;
+	const auto game_path = info->game_path;
+	delete m_custom_infos.take(game_path);
+	m_custom_infos.insert(game_path, info.release());
+	WriteSettings();
 }
 
 static QString GetLocalizedTitleName(const QJsonObject& root) {
