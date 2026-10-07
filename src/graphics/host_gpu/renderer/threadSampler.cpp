@@ -1,3 +1,4 @@
+#include "common/logging/log.h"
 #include "graphics/host_gpu/renderer/threadSampler.h"
 
 #include "common/common.h"
@@ -224,7 +225,7 @@ private:
 			for (const auto& [stack, count]: sorted) {
 				std::fprintf(file, "%u", count);
 				for (uint32_t i = 0; i < stack->count; i++) {
-					std::fprintf(file, "%c%s", i == 0 ? ' ' : ';', frame(stack->frames[i]).c_str());
+					std::fprintf(file, "%c%s", i == 0 ? ' ' : ';', Log::RedactPrivateInfo(frame(stack->frames[i])).c_str());
 				}
 				std::fputc('\n', file);
 			}
@@ -310,7 +311,7 @@ void DumpThreads(uint32_t index) {
 			ResumeThread(thread);
 		}
 		CloseHandle(thread);
-		std::fprintf(file, "# tid=%lu name=%s\n", id, name.empty() ? "-" : name.c_str());
+		std::fprintf(file, "# tid=%lu name=%s\n", id, name.empty() ? "-" : Log::RedactPrivateInfo(name).c_str());
 		if (size == 0) {
 			continue;
 		}
@@ -365,7 +366,7 @@ void StartThreadSampler(const char* name) {
 		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
 		sampler->Run();
 	}).detach();
-	std::printf("thread-sampler: sampling %s every %u us\n", name, period_us);
+	Log::Printf("thread-sampler: sampling %s every %u us\n", name, period_us);
 }
 
 void StartThreadDumper() {
@@ -380,7 +381,7 @@ void StartThreadDumper() {
 			DumpThreads(index);
 		}
 	}).detach();
-	std::printf("thread-dumper: dumping all threads every %lu s\n", period);
+	Log::Printf("thread-dumper: dumping all threads every %lu s\n", period);
 }
 
 } // namespace Libs::Graphics

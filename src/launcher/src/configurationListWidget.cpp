@@ -326,16 +326,20 @@ void ConfigurationListWidget::WriteSettings() {
 	}
 	s->endArray();
 
-	// Also sync active emulator settings to kyty_settings.ini so running emulator updates live
+	// The running game owns its settings file, including F2 choices for the next
+	// launch. Persist launcher settings above, but do not overwrite that file
+	// with global defaults when resizing or saving the launcher.
+	for (int index = 0; index < m_ui->cfgs_list->topLevelItemCount(); ++index) {
+		const auto* item = static_cast<ConfigurationItem*>(m_ui->cfgs_list->topLevelItem(index));
+		if (item->IsRunning()) {
+			return;
+		}
+	}
 	QFile kyty_ini(QStringLiteral("kyty_settings.ini"));
 	if (kyty_ini.open(QIODevice::WriteOnly | QIODevice::Text)) {
 		QTextStream out(&kyty_ini);
 		out << "# KytyPS5 Performance & Settings Configuration\n";
-		int headroom = 125;
-		if (m_global_info.performance_profile == 1) headroom = 100;
-		else if (m_global_info.performance_profile == 2) headroom = 125;
-		else if (m_global_info.performance_profile == 3) headroom = 135;
-		out << "gpu-timestamp-scale = " << headroom << "\n";
+		out << "gpu-timestamp-scale = 100\n";
 		out << "ray-tracing = " << (m_global_info.ray_tracing ? "true" : "false") << "\n";
 		out << "auto-optimize = false\n";
 		out << "master-volume = " << m_global_info.master_volume << "\n";

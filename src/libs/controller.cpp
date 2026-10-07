@@ -964,10 +964,12 @@ int KYTY_SYSV_ABI PadOpen(int user_id, int type, int index, const void* param) {
 int KYTY_SYSV_ABI PadGetHandle(int user_id, int type, int index) {
 	PRINT_NAME();
 
-	LOGF("\t user_id = %d\n"
+	if (Config::InputTraceEnabled()) {
+		LOGF("\t user_id = %d\n"
 	     "\t type    = %d\n"
 	     "\t index   = %d\n",
 	     user_id, type, index);
+	}
 
 	constexpr int pad_error_device_no_handle = -2137915384; /* 0x80920008 */
 

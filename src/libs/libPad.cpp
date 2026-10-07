@@ -1,4 +1,5 @@
 #include "common/abi.h"
+#include "common/emulatorConfig.h"
 #include "common/logging/log.h"
 #include "libs/controller.h"
 #include "libs/errno.h"
@@ -30,7 +31,9 @@ static int KYTY_SYSV_ABI PadGetTriggerEffectState(int                           
                                                   PadTriggerEffectStateInformation* info) {
 	PRINT_NAME();
 
-	LOGF("\t handle = %d\n", handle);
+	if (Config::InputTraceEnabled()) {
+		LOGF("\t handle = %d\n", handle);
+	}
 
 	return Controller::PadGetTriggerEffectState(handle, info != nullptr ? info->state : nullptr);
 }
@@ -272,10 +275,12 @@ static int KYTY_SYSV_ABI MouseClose(int32_t handle) {
 static int KYTY_SYSV_ABI MouseRead(int32_t handle, MouseData* data, int32_t num) {
 	PRINT_NAME();
 
-	LOGF("\t handle = %" PRId32 "\n"
+	if (Config::InputTraceEnabled()) {
+		LOGF("\t handle = %" PRId32 "\n"
 	     "\t data   = 0x%016" PRIx64 "\n"
 	     "\t num    = %" PRId32 "\n",
 	     handle, reinterpret_cast<uint64_t>(data), num);
+	}
 
 	if (handle <= 0) {
 		return MOUSE_ERROR_INVALID_HANDLE;
@@ -369,10 +374,12 @@ static int KYTY_SYSV_ABI KeyboardClose(int32_t handle) {
 static int KYTY_SYSV_ABI KeyboardRead(int32_t handle, KeyboardData* data, int32_t num) {
 	PRINT_NAME();
 
-	LOGF("\t handle = %" PRId32 "\n"
+	if (Config::InputTraceEnabled()) {
+		LOGF("\t handle = %" PRId32 "\n"
 	     "\t data   = 0x%016" PRIx64 "\n"
 	     "\t num    = %" PRId32 "\n",
 	     handle, reinterpret_cast<uint64_t>(data), num);
+	}
 
 	if (handle <= 0) {
 		return KEYBOARD_ERROR_INVALID_HANDLE;
@@ -389,9 +396,11 @@ static int KYTY_SYSV_ABI KeyboardRead(int32_t handle, KeyboardData* data, int32_
 static int KYTY_SYSV_ABI KeyboardReadState(int32_t handle, KeyboardData* data) {
 	PRINT_NAME();
 
-	LOGF("\t handle = %" PRId32 "\n"
+	if (Config::InputTraceEnabled()) {
+		LOGF("\t handle = %" PRId32 "\n"
 	     "\t data   = 0x%016" PRIx64 "\n",
 	     handle, reinterpret_cast<uint64_t>(data));
+	}
 
 	if (handle <= 0) {
 		return KEYBOARD_ERROR_INVALID_HANDLE;
@@ -410,13 +419,15 @@ static int KYTY_SYSV_ABI KeyboardGetKey2Char(int32_t handle, int32_t arrange, ui
                                              KeyboardCharData* char_data) {
 	PRINT_NAME();
 
-	LOGF("\t handle       = %" PRId32 "\n"
+	if (Config::InputTraceEnabled()) {
+		LOGF("\t handle       = %" PRId32 "\n"
 	     "\t arrange      = %" PRId32 "\n"
 	     "\t led          = %" PRIu32 "\n"
 	     "\t modifier_key = %" PRIu32 "\n"
 	     "\t key_code     = %" PRIu16 "\n"
 	     "\t char_data    = 0x%016" PRIx64 "\n",
 	     handle, arrange, led, modifier_key, key_code, reinterpret_cast<uint64_t>(char_data));
+	}
 
 	if (handle <= 0) {
 		return KEYBOARD_ERROR_INVALID_HANDLE;

@@ -1,4 +1,5 @@
 #include "common/directStorage.h"
+#include "common/logging/log.h"
 
 #if defined(_WIN32) && defined(KYTY_ENABLE_DIRECTSTORAGE)
 
@@ -73,7 +74,7 @@ public:
 			}
 		}
 		available = true;
-		std::fprintf(stderr, "DirectStorage: raw reads enabled (2 MiB page-locked ring).\n");
+		Log::Printf("DirectStorage: raw reads enabled (2 MiB page-locked ring).\n");
 	}
 
 	~StorageQueue() {
@@ -136,7 +137,7 @@ public:
 
 private:
 	static void Unavailable(const char* reason) {
-		std::fprintf(stderr, "DirectStorage: %s; using ordinary file I/O.\n", reason);
+		Log::Printf("DirectStorage: %s; using ordinary file I/O.\n", reason);
 	}
 	HMODULE m_module = nullptr;
 	uint8_t* m_ring = nullptr;

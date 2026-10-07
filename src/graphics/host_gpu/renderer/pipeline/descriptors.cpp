@@ -1055,10 +1055,10 @@ static void ReportImageGroupCheck(bool same, uint64_t address) {
 	static std::atomic<uint64_t> missed {0};
 	const auto                   count = checked.fetch_add(1, std::memory_order_relaxed) + 1;
 	if (!same && missed.fetch_add(1, std::memory_order_relaxed) < 32) {
-		std::printf("image-group verify: 0x%016" PRIx64 " kept binding differs\n", address);
+		Log::Printf("image-group verify: 0x%016" PRIx64 " kept binding differs\n", address);
 	}
 	if (count % 100000 == 0) {
-		std::printf("image-group verify: images=%" PRIu64 " missed=%" PRIu64 "\n", count,
+		Log::Printf("image-group verify: images=%" PRIu64 " missed=%" PRIu64 "\n", count,
 		            missed.load(std::memory_order_relaxed));
 		std::fflush(stdout);
 	}
@@ -1339,7 +1339,7 @@ static void CheckViewReuse(TextureCache& cache, const TextureBinding& binding) {
 	const char* kind    = storage ? "storage" : "texture";
 	const auto  count   = checked.fetch_add(1, std::memory_order_relaxed) + 1;
 	if (!same && missed.fetch_add(1, std::memory_order_relaxed) < 32) {
-		std::printf("%s-reuse verify: 0x%016" PRIx64
+		Log::Printf("%s-reuse verify: 0x%016" PRIx64
 		            " kept view would have missed a change (view %s, gpu %d->%d, buffer %d->%d, "
 		            "cpu %d->%d)\n",
 		            kind, image.info.data.address, view == binding.image_view ? "same" : "differs",
@@ -1347,7 +1347,7 @@ static void CheckViewReuse(TextureCache& cache, const TextureBinding& binding) {
 		            cpu_dirty, after.IsCpuDirty());
 	}
 	if (count % 100000 == 0) {
-		std::printf("%s-reuse verify: reuses=%" PRIu64 " missed=%" PRIu64 "\n", kind, count,
+		Log::Printf("%s-reuse verify: reuses=%" PRIu64 " missed=%" PRIu64 "\n", kind, count,
 		            missed.load(std::memory_order_relaxed));
 		std::fflush(stdout);
 	}

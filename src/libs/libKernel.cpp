@@ -2089,7 +2089,7 @@ uint64_t KYTY_SYSV_ABI cfwBSQyr5Ys(uint64_t a1, uint64_t a2, uint64_t a3, uint64
 
 static void LogExperimentalSyncOnAddress(std::atomic_bool& logged, const char* function_name) {
 	if (!logged.exchange(true, std::memory_order_relaxed)) {
-		::printf("WARNING: %s is experimental\n", function_name);
+		Log::Printf("WARNING: %s is experimental\n", function_name);
 		LOGF("WARNING: %s is experimental\n", function_name);
 	}
 }

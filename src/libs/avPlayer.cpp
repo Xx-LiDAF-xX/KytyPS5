@@ -844,7 +844,7 @@ public:
 			result = AVPLAYER_ERROR_OPERATION_FAILED;
 		}
 		if (result == 0 && video_id) {
-			::printf("AvPlayer video started playing\n");
+			Log::Printf("AvPlayer video started playing\n");
 		}
 		return result;
 	}
@@ -868,7 +868,7 @@ public:
 			}
 		}
 		if (was_playing_video) {
-			::printf("AvPlayer video stopped\n");
+			Log::Printf("AvPlayer video stopped\n");
 		}
 		emit_event(stop_event, AVPLAYER_EVENT_STATE_STOP);
 		return 0;

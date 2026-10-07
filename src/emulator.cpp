@@ -143,6 +143,8 @@ static void Init(const Config::ConfigOptions& cfg, const std::filesystem::path& 
 	}
 	if (Config::RayTracingEnabled()) {
 		Log::WriteToConsoleAndLog("Ray tracing: guest BVH intersections enabled through Vulkan compute.\n");
+	} else {
+		Log::WriteToConsoleAndLog("Ray tracing: OFF for this session; guest BVH dispatches are disabled.\n");
 	}
 
 	if (Common::File::IsFileExisting(param_json)) {
@@ -163,6 +165,7 @@ static void Init(const Config::ConfigOptions& cfg, const std::filesystem::path& 
 	subsystems.Initialize<Libs::Controller::Lifecycle>();
 	subsystems.Initialize<Libs::Audio::Lifecycle>();
 	subsystems.Initialize<Libs::Graphics::Lifecycle>();
+	subsystems.Initialize<Libs::AmprLifecycle>();
 }
 
 static void LoadElf(const std::filesystem::path& elf, bool dbg_print_reloc = false,

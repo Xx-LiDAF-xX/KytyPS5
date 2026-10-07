@@ -572,6 +572,10 @@ add_executable(ray_tracing_settings_tests EXCLUDE_FROM_ALL
 target_link_libraries(ray_tracing_settings_tests common fmt::fmt)
 target_include_directories(ray_tracing_settings_tests PRIVATE ${inc_headers})
 
+add_executable(log_privacy_tests EXCLUDE_FROM_ALL "${KYTY_TESTS_DIR}/LogPrivacyTests.cpp")
+target_link_libraries(log_privacy_tests common fmt::fmt)
+target_include_directories(log_privacy_tests PRIVATE ${inc_headers})
+
 add_executable(save_data_memory_tests EXCLUDE_FROM_ALL
 	"${KYTY_TESTS_DIR}/SaveDataMemoryTests.cpp"
 )
@@ -701,6 +705,7 @@ if(BUILD_TESTING)
 	add_test(NAME resource_tracking COMMAND $<TARGET_FILE:resource_tracking_tests>)
 	add_test(NAME event_queue_lifetime COMMAND $<TARGET_FILE:event_queue_lifetime_tests>)
 	add_test(NAME kernel_file_system COMMAND $<TARGET_FILE:kernel_file_system_tests>)
+	add_test(NAME apr_command_ordering COMMAND $<TARGET_FILE:kernel_file_system_tests> --apr-only)
 	add_test(NAME sync_on_address COMMAND $<TARGET_FILE:sync_on_address_tests>)
 	add_test(NAME audio_out2_port COMMAND $<TARGET_FILE:audio_out2_port_tests>)
 	add_test(NAME audio_out_timing COMMAND $<TARGET_FILE:audio_out_timing_tests>)
@@ -708,6 +713,7 @@ if(BUILD_TESTING)
 	add_test(NAME pad_haptics COMMAND $<TARGET_FILE:pad_haptics_tests>)
 	add_test(NAME controller_settings COMMAND $<TARGET_FILE:controller_settings_tests>)
 	add_test(NAME ray_tracing_settings COMMAND $<TARGET_FILE:ray_tracing_settings_tests>)
+	add_test(NAME log_privacy COMMAND $<TARGET_FILE:log_privacy_tests>)
 	add_test(NAME shader_ray_tracing
 		COMMAND $<TARGET_FILE:shader_ray_tracing_tests>)
 	add_test(NAME shader_ray_tracing_ir
@@ -812,6 +818,7 @@ if(BUILD_TESTING)
 		pad_haptics_tests
 		controller_settings_tests
 		ray_tracing_settings_tests
+		log_privacy_tests
 		shader_ray_tracing_tests
 		save_data_memory_tests
 		png_enc_tests

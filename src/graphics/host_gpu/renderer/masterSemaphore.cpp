@@ -14,7 +14,10 @@ MasterSemaphore::MasterSemaphore(GraphicContext& graphics): m_graphics(graphics)
 	create_info.pNext = &type_info;
 
 	const auto result = m_graphics.device.createSemaphore(&create_info, nullptr, &m_semaphore);
-	EXIT_NOT_IMPLEMENTED(result != vk::Result::eSuccess || m_semaphore == nullptr);
+	if (result != vk::Result::eSuccess || m_semaphore == nullptr) {
+		EXIT("vkCreateSemaphore (timeline) failed: %s (%d), null_handle=%d\n",
+		     vk::to_string(result).c_str(), static_cast<int>(result), m_semaphore == nullptr);
+	}
 }
 
 MasterSemaphore::~MasterSemaphore() {
@@ -26,7 +29,12 @@ MasterSemaphore::~MasterSemaphore() {
 void MasterSemaphore::Refresh() {
 	uint64_t   counter = 0;
 	const auto result  = m_graphics.device.getSemaphoreCounterValue(m_semaphore, &counter);
-	EXIT_NOT_IMPLEMENTED(result != vk::Result::eSuccess);
+	if (result != vk::Result::eSuccess) {
+		EXIT("vkGetSemaphoreCounterValue failed: %s (%d), known_gpu_tick=%llu next_tick=%llu\n",
+		     vk::to_string(result).c_str(), static_cast<int>(result),
+		     static_cast<unsigned long long>(KnownGpuTick()),
+		     static_cast<unsigned long long>(CurrentTick()));
+	}
 
 	auto known = m_gpu_tick.load(std::memory_order_acquire);
 	while (known < counter &&
@@ -50,7 +58,13 @@ void MasterSemaphore::Wait(uint64_t tick) {
 	wait_info.pValues        = &tick;
 
 	const auto result = m_graphics.device.waitSemaphores(&wait_info, UINT64_MAX);
-	EXIT_NOT_IMPLEMENTED(result != vk::Result::eSuccess);
+	if (result != vk::Result::eSuccess) {
+		EXIT("vkWaitSemaphores failed: %s (%d), requested_tick=%llu known_gpu_tick=%llu next_tick=%llu timeout=UINT64_MAX\n",
+		     vk::to_string(result).c_str(), static_cast<int>(result),
+		     static_cast<unsigned long long>(tick),
+		     static_cast<unsigned long long>(KnownGpuTick()),
+		     static_cast<unsigned long long>(CurrentTick()));
+	}
 	Refresh();
 }
 

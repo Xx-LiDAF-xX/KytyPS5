@@ -584,7 +584,7 @@ never used in the repository.
 
 ## References
 
-Local reference copies are in `C:\Users\Bryan\Documents\Chat\.tools\kytyps5\notes\raytracing\ref`:
+Local reference copies are in `local reference notes (not distributed)`:
 
 - AMD GPURT: `IntersectCommon.hlsl` (`image_bvh64_intersect_ray_base`, `IntersectNodeBvh4`,
   `fast_intersect_bbox`, `fast_intersect_triangle`, `SwizzleBarycentrics`), `TraceRay1_1.hlsl`, and

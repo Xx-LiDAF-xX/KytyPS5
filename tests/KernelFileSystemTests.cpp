@@ -12,6 +12,7 @@
 #include "graphics/presentation/window/windowInternal.h"
 #include "kernel/fileSystem.h"
 #include "libs/errno.h"
+#include "libs/libs.h"
 #include "libs/network.h"
 #include "loader/symbolDatabase.h"
 
@@ -738,6 +739,42 @@ void CheckAmprOrdering(Loader::SymbolDatabase &symbols, uint32_t file_id) {
   std::atomic_ref(cpu_fence).store(1, std::memory_order_release);
   Check(wait_amm(ids[0]) == OK && amm_done == 1,
         "AMM observes an external CPU fence store without a submission notification");
+
+  reset(0);
+  uint64_t resume_fence = 0, prefix_done = 0, tail_done = 0, witness_done = 0;
+  Check(write_address(buffers[0].header.data(), &prefix_done, 1) == OK &&
+            wait_address(buffers[0].header.data(), &resume_fence, 1, 0, 0) == OK &&
+            write_address(buffers[0].header.data(), &tail_done, 2) == OK &&
+            write_address(buffers[1].header.data(), &witness_done, 1) == OK &&
+            submit_amm(buffers[0].data.data(), static_cast<uint32_t>(offset(buffers[0].header.data())),
+                       0, &ids[0]) == OK &&
+            submit_amm(buffers[1].data.data(), static_cast<uint32_t>(offset(buffers[1].header.data())),
+                       1, &ids[1]) == OK && wait_amm(ids[1]) == OK,
+        "AMM executes a prefix and suspends its remaining commands");
+  Check(prefix_done == 1 && tail_done == 0 && witness_done == 1,
+        "wait does not execute the tail before release");
+  // Rebuilding the header after submit must not change the worker's captured commands.
+  construct(buffers[0].header.data());
+  construct_amm(buffers[0].header.data());
+  Check(set_buffer(buffers[0].header.data(), buffers[0].data.data(), sizeof(buffers[0].data)) == OK,
+        "reset header while its captured submission is waiting");
+  std::atomic_ref(prefix_done).store(99, std::memory_order_release);
+  std::atomic_ref(resume_fence).store(1, std::memory_order_release);
+  Check(wait_amm(ids[0]) == OK && prefix_done == 99 && tail_done == 2,
+        "resumption preserves the captured tail without replaying the prefix");
+
+  using SubmitAmmResult = int (KYTY_SYSV_ABI *)(void*, uint32_t, uint32_t, Result*, uint32_t*);
+  const auto submit_amm_result = reinterpret_cast<SubmitAmmResult>(find("OJf3vCckPAM"));
+  reset(0);
+  uint64_t shutdown_fence = 0;
+  Result cancelled {1234, 5678};
+  Check(wait_address(buffers[0].header.data(), &shutdown_fence, 1, 0, 0) == OK &&
+            submit_amm_result(buffers[0].data.data(), static_cast<uint32_t>(offset(buffers[0].header.data())),
+                              0, &cancelled, &ids[0]) == OK,
+        "submit a dependency that remains blocked until shutdown");
+  Libs::ShutdownAmpr();
+  Check(wait_amm(ids[0]) == OK && cancelled.result == Libs::LibKernel::KERNEL_ERROR_ECANCELED,
+        "shutdown cancels pending work and publishes completion before returning");
   for (auto &buffer : buffers) {
     destroy(buffer.header.data());
   }
@@ -1429,7 +1466,8 @@ void CheckWindowsReceiveFlags() {
 
 } // namespace
 
-int main(int, char**) {
+int main(int argc, char** argv) {
+	const bool apr_only = argc == 2 && std::string_view(argv[1]) == "--apr-only";
   Common::InitializeThreads();
   Common::Subsystems subsystems;
   subsystems.Initialize<Config::Lifecycle>();
@@ -1449,6 +1487,15 @@ int main(int, char**) {
 
   TempDirectory temporary;
   FileSystem::Initialize();
+  if (apr_only) {
+    CheckAprPaths(temporary.Path());
+    Libs::ShutdownAmpr();
+    FileSystem::Shutdown();
+    graphics.reset();
+    subsystems.Destroy();
+    std::printf("APR command ordering tests: all cases passed\n");
+    return 0;
+  }
   CheckMountRoot(temporary.Path());
   CheckUnmappedPaths(temporary.Path());
   CheckArchiveMount(temporary.Path());
@@ -1461,6 +1508,7 @@ int main(int, char**) {
   TestAioBatches();
   CheckSaveRename(temporary.Path(), "first-save");
   CheckSaveRename(temporary.Path(), "replacement-save");
+  Libs::ShutdownAmpr();
   FileSystem::Shutdown();
   CheckSocketWakeup();
 #if defined(_WIN32)

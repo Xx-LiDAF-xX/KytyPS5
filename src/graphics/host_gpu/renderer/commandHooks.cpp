@@ -1,3 +1,4 @@
+#include "common/logging/log.h"
 #include "graphics/host_gpu/renderer/commandHooks.h"
 
 #include "common/assert.h"
@@ -348,7 +349,7 @@ void Report() {
 	const auto calls   = g_calls.exchange(0, std::memory_order_relaxed);
 	// The share of the GPU thread's wall time spent inside the hooked calls.
 	const auto share = static_cast<double>(ticks) / static_cast<double>(tsc - tsc_start);
-	std::printf("vk-time: %.1fs calls/s=%.0f ms/s=%.1f\n", seconds,
+	Log::Printf("vk-time: %.1fs calls/s=%.0f ms/s=%.1f\n", seconds,
 	            static_cast<double>(calls) / seconds, share * 1000.0);
 	window_start = now;
 	tsc_start    = tsc;
@@ -1596,7 +1597,7 @@ void CommandStream::Wake() {
 			const std::array<uint64_t, 6> current {impl.packets.load(), impl.write.load(),
 			                                       impl.wakes.load(),   impl.drains.load(),
 			                                       impl.sleeps.load(),  g_fallback_calls.load()};
-			std::printf("command-stream: %.1fs packets/s=%.0f MB/s=%.1f wakes/s=%.0f drains/s=%.0f "
+			Log::Printf("command-stream: %.1fs packets/s=%.0f MB/s=%.1f wakes/s=%.0f drains/s=%.0f "
 			            "sleeps/s=%.0f direct/s=%.0f\n",
 			            seconds, static_cast<double>(current[0] - last[0]) / seconds,
 			            static_cast<double>(current[1] - last[1]) / seconds / 1e6,

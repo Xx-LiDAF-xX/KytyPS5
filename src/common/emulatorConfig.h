@@ -72,7 +72,7 @@ struct ConfigOptions {
 	bool                   command_buffer_dump_enabled = false;
 	std::filesystem::path  command_buffer_dump_folder  = "_Buffers";
 	bool                   graphics_debug_dump_enabled = false;
-	LogDirection           printf_direction            = LogDirection::Silent;
+	LogDirection           printf_direction            = LogDirection::File;
 	std::filesystem::path  printf_output_file          = "_kyty.txt";
 	bool                   profiler_enabled            = false;
 	bool                   spirv_debug_printf_enabled  = false;
@@ -159,6 +159,7 @@ bool TessellationEnabled();
 bool PlayGoHackEnabled();
 // Seconds between GPU wait reports; 0 disables the accounting.
 uint32_t GetDrainStatsInterval();
+[[nodiscard]] bool InputTraceEnabled();
 // Apply GPU-written DCC fast clears on the GPU instead of reading the keys back.
 bool DccGpuClearEnabled();
 // Submit the GPU thread's command buffers from a dedicated queue thread.
@@ -228,6 +229,7 @@ bool     RayTracingEnabled();
 void     SetRayTracingEnabled(bool enabled);
 bool     RayTracingEnabledOnRestart();
 void     SetRayTracingEnabledOnRestart(bool enabled);
+[[nodiscard]] bool SaveRayTracingEnabledOnRestart(bool enabled);
 
 bool     AutoSpecOptimizationEnabled();
 void     SetAutoSpecOptimizationEnabled(bool enabled);

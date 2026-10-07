@@ -334,7 +334,7 @@ bool ApplyAutoFixes(Program* main_program, const std::vector<Program*>& programs
 		plan.process = main_program->file_name.filename().string();
 		plan.mod_names = {Config::RayTracingEnabled()
 		                      ? "Asobi stability fixes (guest RT renderer preserved)"
-		                      : "Auto-Optimizer: Deferred Renderer, GI Bypass, Crash Fixes"};
+		                      : "Asobi stability fixes (guest RT/GI bypass enabled)"};
 
 		auto add_write = [&plan](uint64_t addr, const char* off, const char* on,
 		                         bool ray_tracing_bypass = false) {

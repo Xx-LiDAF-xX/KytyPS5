@@ -1,3 +1,4 @@
+#include "common/logging/log.h"
 #include "graphics/presentation/systemOverlay.h"
 
 #include <SDL3/SDL.h>
@@ -464,7 +465,7 @@ void InitializeSystemOverlayInput(SDL_Window* window) {
 	DialogIme::SetVisibilityCallback(OnDialogVisibilityChanged);
 	SystemDialog::SetVisibilityCallback(RefreshVisibility);
 	RefreshVisibility();
-	std::printf("Emulator settings: press F2 in the game window.\n");
+	Log::Printf("Emulator settings: press F2 in the game window.\n");
 }
 
 void ShutdownSystemOverlayInput() {
@@ -1075,12 +1076,26 @@ struct SystemOverlay::Impl {
 		ImGui::TextColored(ImVec4(0.3f, 0.85f, 1.0f, 1.0f), "Kyty Settings");
 		ImGui::Separator();
 
+		const bool active_ray_tracing = Config::RayTracingEnabled();
+		ImGui::Text("Ray tracing in this session: %s", active_ray_tracing ? "ON" : "OFF");
 		bool ray_tracing = Config::RayTracingEnabledOnRestart();
-		if (ImGui::Checkbox("Enable ray tracing (experimental)", &ray_tracing)) {
-			Config::SetRayTracingEnabledOnRestart(ray_tracing);
+		if (ImGui::Checkbox("Enable ray tracing on next launch (experimental)", &ray_tracing)) {
+			rt_settings_save_failed = !Config::SaveRayTracingEnabledOnRestart(ray_tracing);
+			if (!rt_settings_save_failed) {
+				Log::WriteToConsoleAndLog(fmt::format(
+				    "Ray tracing setting saved: next launch {}, current session {}. Restart the game to apply.\n",
+				    ray_tracing ? "ON" : "OFF", active_ray_tracing ? "ON" : "OFF"));
+			}
 		}
 		ImGui::PushTextWrapPos(0.0f);
-		ImGui::TextDisabled("Ray tracing changes are saved when closing and apply after restarting the game. Disable any game patches that bypass ray tracing.");
+		if (rt_settings_save_failed) {
+			ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Could not save the RT setting. Check that kyty_settings.ini is writable.");
+		}
+		if (Config::RayTracingEnabledOnRestart() != active_ray_tracing) {
+			ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "Restart required: ray tracing will be %s on the next launch.",
+			                   Config::RayTracingEnabledOnRestart() ? "ON" : "OFF");
+		}
+		ImGui::TextDisabled("Changes save immediately and take effect after restarting the game. FPS will not change in this session. Disable any game patches that bypass ray tracing.");
 		ImGui::PopTextWrapPos();
 		const float button_width = std::min(160.0f * scale, ImGui::GetContentRegionAvail().x);
 		ImGui::SetCursorPosX(ImGui::GetWindowSize().x - button_width -
@@ -1302,6 +1317,7 @@ struct SystemOverlay::Impl {
 	bool                                  shift              = false;
 	bool                                  symbol_mode        = false;
 	bool                                  focus_pending      = true;
+	bool                                  rt_settings_save_failed = false;
 	float                                 ui_scale           = 1.0f;
 	float                                 button_height      = 42.0f;
 	int                                   record_thread_choice   = -1;

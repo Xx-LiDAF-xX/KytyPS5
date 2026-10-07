@@ -1,3 +1,4 @@
+#include "common/logging/log.h"
 #ifndef KYTY_COMMON_SUBSYSTEMS_H_
 #define KYTY_COMMON_SUBSYSTEMS_H_
 
@@ -20,7 +21,7 @@ public:
 		Lifecycle::initialize();
 		m_active.push_back({ShutdownCallback<Lifecycle>(), EmergencyCallback<Lifecycle>()});
 		if (m_print) {
-			std::printf("Initialized: %s\n", Lifecycle::name);
+			Log::Printf("Initialized: %s\n", Lifecycle::name);
 		}
 	}
 

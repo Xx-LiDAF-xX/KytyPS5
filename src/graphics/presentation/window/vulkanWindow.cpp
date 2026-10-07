@@ -944,7 +944,7 @@ void WindowContext::CreateVulkan() {
 	if (Config::GpuAssistedValidationEnabled()) {
 		enabled_features[enabled_features_count++] = vk::ValidationFeatureEnableEXT::eGpuAssisted;
 		LOGF("Vulkan GPU-assisted validation is enabled; expect a large slowdown\n");
-		std::printf("Vulkan GPU-assisted validation is enabled; expect a large slowdown\n");
+		Log::Printf("Vulkan GPU-assisted validation is enabled; expect a large slowdown\n");
 		std::fflush(stdout);
 	}
 

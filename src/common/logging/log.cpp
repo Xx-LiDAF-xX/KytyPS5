@@ -5,6 +5,8 @@
 #include "common/emulatorConfig.h"
 
 #include <cstdio>
+#include <cstdarg>
+#include <vector>
 #include <filesystem>
 #include <fmt/format.h>
 #include <memory>
@@ -17,6 +19,8 @@
 #include <string_view>
 
 namespace {
+
+void WriteStdout(std::string_view text, fmt::text_style style = {});
 
 class RawFormatter final: public spdlog::formatter {
 public:
@@ -35,6 +39,9 @@ std::shared_ptr<spdlog::logger> MakeLogger(std::string name, spdlog::sink_ptr si
 
 	auto logger = std::make_shared<spdlog::logger>(std::move(name), std::move(sink));
 	logger->set_level(spdlog::level::trace);
+	logger->set_error_handler([](const std::string& error) {
+		WriteStdout("Diagnostic log write failed: " + error + "\n");
+	});
 	return logger;
 }
 
@@ -54,7 +61,9 @@ static bool HasStyle(fmt::text_style style) {
 	return style != fmt::text_style {};
 }
 
-void WriteStdout(std::string_view text, fmt::text_style style = {}) {
+void WriteStdout(std::string_view text, fmt::text_style style) {
+	const auto safe = Log::RedactPrivateInfo(text);
+	text = safe;
 	if (HasStyle(style)) {
 		fmt::print(stdout, style, "{}", text);
 	} else {
@@ -117,6 +126,8 @@ static void WriteImpl(std::string_view text, fmt::text_style style = {}) {
 	if (g_direction == Direction::Silent) {
 		return;
 	}
+	const auto safe = RedactPrivateInfo(text);
+	text = safe;
 
 	if (auto logger = GetLogger()) {
 		if (g_direction == Direction::Console && HasStyle(style)) {
@@ -164,8 +175,16 @@ void Initialize() {
 		case Config::LogDirection::File: g_direction = Direction::File; break;
 	}
 	g_output_file =
-	    (g_direction == Direction::File ? Config::GetPrintfOutputFile() : std::filesystem::path {});
-	SetupLogger();
+	    (g_direction == Direction::File ? ResolveOutputPath(Config::GetPrintfOutputFile()) : std::filesystem::path {});
+	try {
+		SetupLogger();
+	} catch (const std::exception& error) {
+		WriteStdout(std::string("Cannot initialize diagnostic logging: ") + error.what() + "\n");
+		std::_Exit(1);
+	}
+	if (g_direction == Direction::File && g_output_file != Config::GetPrintfOutputFile()) {
+		WriteToConsoleAndLog("Diagnostic log: " + g_output_file.filename().string() + "\n");
+	}
 }
 
 void Shutdown() {
@@ -188,8 +207,43 @@ void Write(std::string_view text) {
 	WriteImpl(text);
 }
 
+void WriteGuest(std::string_view text) {
+	// Guest stdout can split a path or identity across writes. Filter complete lines.
+	thread_local std::string pending;
+	thread_local bool discard = false;
+	for (const char c : text) {
+		if (c == '\n') {
+			if (!discard) { pending += c; WriteImpl(pending); }
+			pending.clear();
+			discard = false;
+		} else if (!discard) {
+			pending += c;
+			if (pending.size() >= 65536) {
+				pending.clear();
+				discard = true;
+				WriteImpl("[oversized guest diagnostic line omitted]\n");
+			}
+		}
+	}
+}
+
 void Write(fmt::text_style style, std::string_view text) {
 	WriteImpl(text, style);
+}
+
+int Printf(const char* format, ...) {
+	va_list args;
+	va_start(args, format);
+	va_list copy;
+	va_copy(copy, args);
+	const int length = std::vsnprintf(nullptr, 0, format, copy);
+	va_end(copy);
+	if (length < 0) { va_end(args); return length; }
+	std::vector<char> buffer(static_cast<size_t>(length) + 1);
+	std::vsnprintf(buffer.data(), buffer.size(), format, args);
+	va_end(args);
+	Write(std::string_view(buffer.data(), static_cast<size_t>(length)));
+	return length;
 }
 
 } // namespace Log

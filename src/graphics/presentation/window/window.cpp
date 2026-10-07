@@ -241,15 +241,16 @@ static void GameEventKeyboard(const EventKeyboard& key) {
 
 static void GameEventMouse([[maybe_unused]] const EventMouse& mb) {
 #ifdef KYTY_DBG_INPUT
-	if (mb.wheel) {
+	const bool trace_input = Config::InputTraceEnabled();
+	if (trace_input && mb.wheel) {
 		LOGF("Mouse wheel: time = %.04f, %s[%d, %d]\n", mb.timestamp_seconds,
 		     (mb.touch ? "touch, " : ""), mb.x, mb.y);
-	} else if (mb.motion) {
+	} else if (trace_input && mb.motion) {
 		LOGF("Mouse motion: time = %.04f, %s%s%s%s%s%s, [%d, %d], (%d, %d)\n", mb.timestamp_seconds,
 		     (mb.left ? "left" : ""), (mb.middle ? "middle" : ""), (mb.right ? "right" : ""),
 		     (mb.x1 ? "x1" : ""), (mb.x2 ? "x2" : ""), (mb.touch ? "_touch" : ""), mb.x, mb.y,
 		     mb.motion_x, mb.motion_y);
-	} else {
+	} else if (trace_input) {
 		LOGF("Mouse click: time = %.04f, %d, %s%s%s%s%s%s, %s%s, %s%s, [%d, %d]\n",
 		     mb.timestamp_seconds, mb.num_of_clicks, (mb.left ? "left" : ""),
 		     (mb.middle ? "middle" : ""), (mb.right ? "right" : ""), (mb.x1 ? "x1" : ""),
@@ -279,11 +280,12 @@ static void GameEventMouse([[maybe_unused]] const EventMouse& mb) {
 
 static void GameEventFinger([[maybe_unused]] const EventFinger& f) {
 #ifdef KYTY_DBG_INPUT
-	if (f.motion) {
+	const bool trace_input = Config::InputTraceEnabled();
+	if (trace_input && f.motion) {
 		LOGF("Finger motion: time = %.04f, %d, %d, (x,y) = [%f, %f], (dx,dy) = [%f, %f], pressure "
 		     "= %f\n",
 		     f.timestamp_seconds, f.touch_id, f.finger_id, f.x, f.y, f.dx, f.dy, f.pressure);
-	} else {
+	} else if (trace_input) {
 		LOGF("Finger press: time = %.04f, %d, %d, %s%s, (x,y) = [%f, %f], (dx,dy) = [%f, %f], "
 		     "pressure = %f\n",
 		     f.timestamp_seconds, f.touch_id, f.finger_id, (f.down ? "down" : ""),
@@ -299,10 +301,10 @@ static void GameEventController([[maybe_unused]] const EventController& f) {
 	if (f.added || f.removed) {
 		LOGF("Controller %s: %d, time = %.04f\n", (f.added ? "added" : "removed"), f.id,
 		     f.timestamp_seconds);
-	} else if (f.axis) {
+	} else if (f.axis && Config::InputTraceEnabled()) {
 		LOGF("Controller axis: %d, axis = %d, value = %d, time = %.04f\n", f.id, f.axis_id,
 		     f.axis_value, f.timestamp_seconds);
-	} else {
+	} else if (Config::InputTraceEnabled()) {
 		LOGF("Controller button: "
 		     "%d, %s%s, %s%s, button = %d, time = %.04f\n",
 		     f.id, (f.down ? "down" : ""), (f.up ? "up" : ""), (f.pressed ? "pressed" : ""),

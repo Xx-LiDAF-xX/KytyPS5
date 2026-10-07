@@ -133,7 +133,7 @@ public:
 	QString                shader_log_folder           = "_Shaders";
 	bool                   command_buffer_dump_enabled = false;
 	QString                command_buffer_dump_folder  = "_Buffers";
-	LogDirection           printf_direction            = LogDirection::Silent;
+	LogDirection           printf_direction            = LogDirection::File;
 	QString                printf_output_file          = "_kyty.txt";
 	bool                   profiler_enabled            = false;
 	bool                   renderdoc_enabled           = false;
@@ -297,7 +297,8 @@ public:
 		KYTY_CFG_GET(shader_log_folder);
 		KYTY_CFG_GET(command_buffer_dump_enabled);
 		KYTY_CFG_GET(command_buffer_dump_folder);
-		KYTY_CFG_GET(printf_direction);
+		// Migrate old profiles to automatic file logging for tester diagnostics.
+		printf_direction = LogDirection::File;
 		KYTY_CFG_GET(printf_output_file);
 		KYTY_CFG_GET(profiler_enabled);
 		KYTY_CFG_GET(renderdoc_enabled);

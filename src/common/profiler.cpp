@@ -1,3 +1,4 @@
+#include "common/logging/log.h"
 #include "common/profiler.h"
 
 #include "common/emulatorConfig.h"
@@ -19,7 +20,7 @@ void Initialize() {
 	if (Config::ProfilerEnabled() && !tracy::ProfilerAvailable()) {
 		tracy::StartupProfiler();
 		TracySetProgramName("KytyPS5");
-		::printf("Tracy profiler enabled: client %d.%d.%d, protocol %u, "
+		Log::Printf("Tracy profiler enabled: client %d.%d.%d, protocol %u, "
 		         "broadcast %u, connect to 127.0.0.1:8086\n",
 		         tracy::Version::Major, tracy::Version::Minor, tracy::Version::Patch,
 		         tracy::ProtocolVersion, tracy::BroadcastVersion);

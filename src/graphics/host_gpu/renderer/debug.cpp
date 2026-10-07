@@ -727,7 +727,7 @@ bool DebugSkipShader(uint64_t shader_hash, DebugShaderKind kind, bool bisect) no
 	const std::lock_guard        lock(mutex);
 	if (std::ranges::find(reported, shader_hash) == reported.end()) {
 		reported.push_back(shader_hash);
-		std::printf("skip-shader: %s %016" PRIx64 "\n",
+		Log::Printf("skip-shader: %s %016" PRIx64 "\n",
 		            kind == DebugShaderKind::Pixel    ? "ps"
 		            : kind == DebugShaderKind::Vertex ? "vs"
 		                                              : "cs",
@@ -859,7 +859,7 @@ void PrintUploadStats(double seconds) {
 	                    buckets[4], buckets[5], buckets[6]);
 	line += fmt::format(" | staged changed={:.0f}KiB/s of compared={:.0f}KiB/s",
 	                    stats.changed / 1024.0 / seconds, stats.compared / 1024.0 / seconds);
-	std::printf("%s\n", line.c_str());
+	Log::Printf("%s\n", line.c_str());
 	std::vector<std::pair<uint64_t, ImageUploadEntry>> images(stats.images.begin(),
 	                                                          stats.images.end());
 	std::sort(images.begin(), images.end(), [](const auto& a, const auto& b) {
@@ -867,7 +867,7 @@ void PrintUploadStats(double seconds) {
 	});
 	for (size_t i = 0; i < std::min<size_t>(images.size(), 10); i++) {
 		const auto& [address, image] = images[i];
-		std::printf("uploads: image 0x%" PRIx64 " size=0x%" PRIx64 " %ux%u fmt=%u tile=%u "
+		Log::Printf("uploads: image 0x%" PRIx64 " size=0x%" PRIx64 " %ux%u fmt=%u tile=%u "
 		            "uploads/s=%.1f KiB/s=%.0f buffer-modified=%" PRIu64 " changed=%.1f%%"
 		            " runs/upload=%.1f\n",
 		            address, image.size, image.width, image.height, image.guest_format,
@@ -1074,7 +1074,7 @@ void DrawPhaseTimer::End(uint64_t pixel_hash) {
 		line += fmt::format(" {}={:.2f}", ProbeNames[i],
 		                    draws != 0 ? probe_totals[i] * to_us / draws : 0.0);
 	}
-	std::printf("%s\n", line.c_str());
+	Log::Printf("%s\n", line.c_str());
 	if (auto_draws != 0) {
 		uint64_t auto_all = 0;
 		for (const auto ticks: auto_totals) {
@@ -1085,7 +1085,7 @@ void DrawPhaseTimer::End(uint64_t pixel_hash) {
 		for (uint32_t i = 0; i < Count; i++) {
 			auto_line += fmt::format(" {}={:.2f}", Names[i], auto_totals[i] * to_us / auto_draws);
 		}
-		std::printf("%s\n", auto_line.c_str());
+		Log::Printf("%s\n", auto_line.c_str());
 		auto_totals.fill(0);
 		auto_draws = 0;
 	}
@@ -1124,7 +1124,7 @@ void DrawPhaseTimer::End(uint64_t pixel_hash) {
 				}
 			}
 		}
-		std::printf("%s\n", pm4.c_str());
+		Log::Printf("%s\n", pm4.c_str());
 		ops = {};
 	}
 	if (AbEnabled()) {

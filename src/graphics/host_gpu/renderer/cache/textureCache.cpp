@@ -71,7 +71,7 @@ void LogZoneRefresh(const Image& image) {
 			return;
 		}
 	}
-	std::printf("gpu-zones: refresh image 0x%016" PRIx64 " size=0x%" PRIx64
+	Log::Printf("gpu-zones: refresh image 0x%016" PRIx64 " size=0x%" PRIx64
 	            " %ux%ux%u guest_format=%u tile=%u levels=%u layers=%u cause=%s via=%s\n",
 	            info.data.address, info.data.size, info.extent.width, info.extent.height,
 	            info.extent.depth, static_cast<uint32_t>(info.guest_format),
@@ -98,7 +98,7 @@ void LogZoneBufferWrite(const Image& image, uint64_t address, uint64_t size,
 	                                                                  : "shader-store";
 	const bool  whole = address <= info.data.address &&
 	                   address + size >= info.data.address + info.data.size;
-	std::printf("gpu-zones: buffer %s on image 0x%016" PRIx64 " %ux%u guest_format=%u tile=%u "
+	Log::Printf("gpu-zones: buffer %s on image 0x%016" PRIx64 " %ux%u guest_format=%u tile=%u "
 	            "write=0x%016" PRIx64 "+0x%" PRIx64 " %s pm4=0x%x image_gpu_modified=%d\n",
 	            kind, info.data.address, info.extent.width, info.extent.height,
 	            static_cast<uint32_t>(info.guest_format), static_cast<uint32_t>(info.tile_mode),
@@ -313,7 +313,7 @@ void LogImageChurn(const char* what, const Image& image) {
 		return;
 	}
 	const auto& info = image.info;
-	std::printf("image-churn: %s %s 0x%016" PRIx64 " size=0x%" PRIx64
+	Log::Printf("image-churn: %s %s 0x%016" PRIx64 " size=0x%" PRIx64
 	            " %ux%ux%u fmt=%u guest=%u type=%u tile=%u mips=%u layers=%u samples=%u"
 	            " usage=%s%s%s%s\n",
 	            what, t_churn_reason, info.data.address, info.data.size, info.extent.width,
@@ -1392,14 +1392,14 @@ void TextureCache::MaterializeColorClear(ImageId id, const ImageDesc& desc,
 		if (changed || outcome == ColorClearOutcome::Other) {
 			const auto index = missed.fetch_add(1, std::memory_order_relaxed);
 			if (index < 16) {
-				std::printf("color-clear verify: skip of 0x%016" PRIx64 " (metadata 0x%016" PRIx64
+				Log::Printf("color-clear verify: skip of 0x%016" PRIx64 " (metadata 0x%016" PRIx64
 				            ") would have missed a change (outcome %d, changed %d)\n",
 				            m_slot_images[id].info.data.address, desc.info.metadata.range.address,
 				            static_cast<int>(outcome), changed ? 1 : 0);
 			}
 		}
 		if (count % 100000 == 0) {
-			std::printf("color-clear verify: skips=%" PRIu64 " missed=%" PRIu64 "\n", count,
+			Log::Printf("color-clear verify: skips=%" PRIu64 " missed=%" PRIu64 "\n", count,
 			            missed.load(std::memory_order_relaxed));
 			std::fflush(stdout);
 		}
@@ -1854,13 +1854,13 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_format, uint64_t* un
 			static std::atomic<uint64_t> missed {0};
 			const auto count = checked.fetch_add(1, std::memory_order_relaxed) + 1;
 			if (!same && missed.fetch_add(1, std::memory_order_relaxed) < 32) {
-				std::printf("image-memo verify: 0x%016" PRIx64 " size 0x%" PRIx64
+				Log::Printf("image-memo verify: 0x%016" PRIx64 " size 0x%" PRIx64
 				            " remembered a different lookup (matches %d, mip %d, layer %d)\n",
 				            desc.info.data.address, desc.info.data.size, backing_matches, view_mip,
 				            view_layer);
 			}
 			if (count % 100000 == 0) {
-				std::printf("image-memo verify: hits=%" PRIu64 " missed=%" PRIu64 "\n", count,
+				Log::Printf("image-memo verify: hits=%" PRIu64 " missed=%" PRIu64 "\n", count,
 				            missed.load(std::memory_order_relaxed));
 				std::fflush(stdout);
 			}

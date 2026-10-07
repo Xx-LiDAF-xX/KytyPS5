@@ -56,6 +56,23 @@ int main() {
 	Config::ReloadFromSettingsFile();
 	Check(Config::RayTracingEnabled(), "settings reload changed active RT without a restart");
 	Check(!Config::RayTracingEnabledOnRestart(), "settings reload lost the pending RT disable");
+	Check(Config::SaveRayTracingEnabledOnRestart(true), "immediate RT enable save failed");
+	Check(Config::SaveRayTracingEnabledOnRestart(false), "immediate RT disable save failed");
+	Check(Config::RayTracingEnabled(), "immediate save changed the active renderer");
+	arguments.clear();
+	Check(Common::SettingsFile::LoadArguments(arguments), "immediately saved setting could not be read");
+	bool saved_disable = false;
+	for (size_t i = 0; i + 1 < arguments.size(); ++i) {
+		if (arguments[i] == "--ray-tracing") saved_disable = arguments[i + 1] == "false";
+	}
+	Check(saved_disable, "immediate RT disable was not persisted before closing the overlay");
+	std::filesystem::rename("kyty_settings.ini", "saved-settings.ini");
+	Check(std::filesystem::create_directory("kyty_settings.ini"), "could not simulate an unwritable settings path");
+	Check(!Config::SaveRayTracingEnabledOnRestart(true), "save reported success for a directory path");
+	Check(!Config::RayTracingEnabledOnRestart(), "failed save changed the pending RT state");
+	Check(Config::RayTracingEnabled(), "failed save changed the active RT state");
+	Check(std::filesystem::remove("kyty_settings.ini"), "could not remove simulated settings directory");
+	std::filesystem::rename("saved-settings.ini", "kyty_settings.ini");
 	std::filesystem::current_path(original_directory);
 	std::filesystem::remove_all(test_directory);
 	Config::Shutdown();

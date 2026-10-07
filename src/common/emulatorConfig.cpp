@@ -8,7 +8,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <memory>
+#include <string_view>
 #include <thread>
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 #ifndef WIN32_LEAN_AND_MEAN
@@ -19,6 +21,16 @@
 #endif
 
 namespace Config {
+
+bool InputTraceEnabled() {
+	// Polling APIs run every frame. Cache the opt-in once rather than looking
+	// up environment variables or formatting trace lines on their hot paths.
+	static const bool enabled = [] {
+		const char* value = std::getenv("KYTY_TRACE_INPUT");
+		return value != nullptr && std::string_view(value) == "1";
+	}();
+	return enabled;
+}
 
 static std::unique_ptr<ConfigOptions> g_config;
 static std::atomic<int> g_ray_tracing_on_restart {-1};
@@ -390,6 +402,14 @@ bool RayTracingEnabledOnRestart() {
 void SetRayTracingEnabledOnRestart(bool enabled) {
 	// Changing guest code patches and existing pipelines requires a fresh game launch.
 	g_ray_tracing_on_restart.store(enabled ? 1 : 0, std::memory_order_relaxed);
+}
+
+bool SaveRayTracingEnabledOnRestart(bool enabled) {
+	if (!Common::SettingsFile::Save("ray-tracing", enabled ? "true" : "false")) {
+		return false;
+	}
+	SetRayTracingEnabledOnRestart(enabled);
+	return true;
 }
 
 bool AutoSpecOptimizationEnabled() {

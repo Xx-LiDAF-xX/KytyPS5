@@ -280,7 +280,7 @@ BufferCache::BufferCache(GraphicContext& graphics, CommandScheduler& scheduler,
 		m_stream_device = std::make_unique<StreamBuffer>(graphics, scheduler, MemoryUsage::Stream,
 		                                                 64 * MiB, vk::BufferUsageFlags {}, false);
 		// Vulkan memory property bits: 1 device-local, 2 host-visible, 4 coherent, 8 cached.
-		std::printf("streamhost A/B: ring memory 0x%x, device ring memory 0x%x\n",
+		Log::Printf("streamhost A/B: ring memory 0x%x, device ring memory 0x%x\n",
 		            m_stream_buffer.MemoryProperties(), m_stream_device->MemoryProperties());
 		std::fflush(stdout);
 	}
@@ -700,12 +700,12 @@ bool BufferCache::VerifyStreamReuse(const StreamCopy& copy) {
 	const auto count = checked.fetch_add(1, std::memory_order_relaxed) + 1;
 	if ((!read || std::memcmp(bytes.data(), kept, copy.size) != 0) &&
 	    changed.fetch_add(1, std::memory_order_relaxed) < 16) {
-		std::printf("stream-reuse verify: 0x%016" PRIx64 " size 0x%" PRIx64
+		Log::Printf("stream-reuse verify: 0x%016" PRIx64 " size 0x%" PRIx64
 		            " changed within the epoch\n",
 		            copy.vaddr, copy.size);
 	}
 	if (count % 100000 == 0) {
-		std::printf("stream-reuse verify: reuses=%" PRIu64 " changed=%" PRIu64 "\n", count,
+		Log::Printf("stream-reuse verify: reuses=%" PRIu64 " changed=%" PRIu64 "\n", count,
 		            changed.load(std::memory_order_relaxed));
 		std::fflush(stdout);
 	}

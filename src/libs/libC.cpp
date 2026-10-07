@@ -473,7 +473,7 @@ static KYTY_SYSV_ABI void catchReturnFromMain(int status) {
 		}
 	}
 
-	::printf("return from main = %d\n", status);
+	Log::Printf("return from main = %d\n", status);
 }
 
 using execute_once_func_t = KYTY_SYSV_ABI int (*)(void*, void*, void**);

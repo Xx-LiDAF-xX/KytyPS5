@@ -136,7 +136,7 @@ static void Flush() {
 		std::memcpy(record, item.output + MeshIndirectArgs::RecordOffset, sizeof(record));
 		std::memcpy(command, item.output + MeshIndirectArgs::CommandOffset, sizeof(command));
 		// A plain (not mesh-emulated) draw's record is its VkDrawIndexedIndirectCommand.
-		std::printf("draw-log gpu: draw=%" PRIu64 " index_count=%u first_instance=%u groups=%u "
+		Log::Printf("draw-log gpu: draw=%" PRIu64 " index_count=%u first_instance=%u groups=%u "
 		            "instances=%u z=%u plain_instances=%u plain_first_index=%u "
 		            "plain_vertex_offset=%d plain_first_instance=%u\n",
 		            item.draw, record[0], record[2], command[0], command[1], command[2], record[1],
@@ -166,7 +166,7 @@ static void PrintStageKeys(const char* tag, const ShaderStageRuntime& stage) {
 		return;
 	}
 	const auto& r = *stage.resources;
-	std::printf(" %s_ud=%08x %s_buf=%08x %s_img=%08x %s_smp=%08x %s_srt=%08x", tag,
+	Log::Printf(" %s_ud=%08x %s_buf=%08x %s_img=%08x %s_smp=%08x %s_srt=%08x", tag,
 	            HashWords(r.user_data.data(), r.user_data.size()), tag, HashDescriptors(r.buffers),
 	            tag, HashDescriptors(r.images), tag, HashDescriptors(r.samplers), tag,
 	            HashWords(r.flattened_srt.data(), r.flattened_srt.size()));
@@ -207,14 +207,14 @@ static void Account(uint64_t pixel, uint64_t vertex, uint64_t restarts, uint64_t
 		all.restarts += row.restarts;
 		all.barriers += row.barriers;
 	}
-	std::printf("draw-stats: %.1fs draws/s=%.0f restarts/s=%.0f barriers/s=%.0f shaders=%zu\n",
+	Log::Printf("draw-stats: %.1fs draws/s=%.0f restarts/s=%.0f barriers/s=%.0f shaders=%zu\n",
 	            seconds, all.draws / seconds, all.restarts / seconds, all.barriers / seconds,
 	            rows.size());
 	const auto print_top = [&](const char* order, auto&& key) {
 		std::ranges::sort(rows, [&](const auto& a, const auto& b) { return key(a.second) > key(b.second); });
 		for (size_t i = 0; i < std::min<size_t>(rows.size(), 6); i++) {
 			const auto& [hash, row] = rows[i];
-			std::printf("draw-stats   by-%s ps=%016" PRIx64 " vs=%016" PRIx64
+			Log::Printf("draw-stats   by-%s ps=%016" PRIx64 " vs=%016" PRIx64
 			            " draws/s=%.0f restarts/s=%.0f barriers/s=%.0f\n",
 			            order, hash, row.vertex, row.draws / seconds, row.restarts / seconds,
 			            row.barriers / seconds);
@@ -766,11 +766,11 @@ static void CheckDepthReuse(TextureCache& cache, const RenderDepthInfo& depth,
 	static std::atomic<uint64_t> missed {0};
 	const auto count = checked.fetch_add(1, std::memory_order_relaxed) + 1;
 	if (field != nullptr && missed.fetch_add(1, std::memory_order_relaxed) < 32) {
-		std::printf("depth-reuse verify: 0x%016" PRIx64 " kept view would have missed a change: %s\n",
+		Log::Printf("depth-reuse verify: 0x%016" PRIx64 " kept view would have missed a change: %s\n",
 		            image.info.data.address, field);
 	}
 	if (count % 100000 == 0) {
-		std::printf("depth-reuse verify: reuses=%" PRIu64 " missed=%" PRIu64 "\n", count,
+		Log::Printf("depth-reuse verify: reuses=%" PRIu64 " missed=%" PRIu64 "\n", count,
 		            missed.load(std::memory_order_relaxed));
 		std::fflush(stdout);
 	}
@@ -1185,7 +1185,7 @@ static bool GetDrawTopology(const HW::UserConfig& ucfg, vk::PrimitiveTopology& t
 		default: {
 			static std::atomic_bool logged = false;
 			if (!logged.exchange(true, std::memory_order_relaxed)) {
-				std::printf("Skipping draw with unknown primitive type: %u\n",
+				Log::Printf("Skipping draw with unknown primitive type: %u\n",
 				            static_cast<uint32_t>(ucfg.GetPrimType()));
 			}
 			return false;
@@ -1584,9 +1584,9 @@ void NoteImageUsers(TextureCache& cache, std::span<PreparedBindings* const> stag
 			repeats++;
 		} else {
 			if (repeats != 0) {
-				std::printf("image-trace   x%" PRIu64 " more\n", repeats);
+				Log::Printf("image-trace   x%" PRIu64 " more\n", repeats);
 			}
-			std::printf("image-trace %s\n", call.c_str());
+			Log::Printf("image-trace %s\n", call.c_str());
 			previous_call = std::move(call);
 			repeats       = 0;
 		}
@@ -1596,9 +1596,9 @@ void NoteImageUsers(TextureCache& cache, std::span<PreparedBindings* const> stag
 		return;
 	}
 	window_start = now;
-	std::printf("image-users 0x%" PRIx64 ": %zu kinds\n", address, counts.size());
+	Log::Printf("image-users 0x%" PRIx64 ": %zu kinds\n", address, counts.size());
 	for (const auto& [key, count]: counts) {
-		std::printf("image-users   %6" PRIu64 " %s\n", count, key.c_str());
+		Log::Printf("image-users   %6" PRIu64 " %s\n", count, key.c_str());
 	}
 	std::fflush(stdout);
 	counts.clear();
@@ -1753,7 +1753,7 @@ void RenderExecutor::ExecutePreparedDraw(uint64_t submit_id, CommandBuffer& buff
 		static std::atomic_bool restart_warned = false;
 		if (primitive_restart_enable && (!draw.IsIndexed() || !MeshRestartSplitEnabled()) &&
 		    !restart_warned.exchange(true, std::memory_order_relaxed)) {
-			std::printf("Warning: primitive restart is not implemented for mesh shaders; "
+			Log::Printf("Warning: primitive restart is not implemented for mesh shaders; "
 			            "continuing draw (primitive=%u indexed=%u)\n",
 			            static_cast<uint32_t>(ucfg.GetPrimType()), draw.IsIndexed());
 		}
@@ -1895,7 +1895,7 @@ void RenderExecutor::ExecutePreparedDraw(uint64_t submit_id, CommandBuffer& buff
 		if (gpu_indices) {
 			static std::atomic_bool gpu_indices_warned = false;
 			if (!gpu_indices_warned.exchange(true, std::memory_order_relaxed)) {
-				std::printf("Warning: mesh draw with primitive restart reads GPU-written indices; "
+				Log::Printf("Warning: mesh draw with primitive restart reads GPU-written indices; "
 				            "drawn without restart (primitive=%u)\n",
 				            static_cast<uint32_t>(ucfg.GetPrimType()));
 			}
@@ -1916,7 +1916,7 @@ void RenderExecutor::ExecutePreparedDraw(uint64_t submit_id, CommandBuffer& buff
 			                      });
 			static std::atomic_uint split_logs = 0;
 			if (split_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
-				std::printf("mesh restart: prim=%u indices=%u index_bytes=%u split into %u draws\n",
+				Log::Printf("mesh restart: prim=%u indices=%u index_bytes=%u split into %u draws\n",
 				            static_cast<uint32_t>(ucfg.GetPrimType()), draw.index_count,
 				            index_source.guest_element_size, segments);
 			}
@@ -1933,7 +1933,7 @@ void RenderExecutor::ExecutePreparedDraw(uint64_t submit_id, CommandBuffer& buff
 		const auto  index_limit = index_source.guest_element_size != 0
 		                              ? index_source.size / index_source.guest_element_size
 		                              : 0;
-		std::printf("draw-log: t=%.3f draw=%" PRIu64 " vs=%016" PRIx64
+		Log::Printf("draw-log: t=%.3f draw=%" PRIu64 " vs=%016" PRIx64
 		            " mesh=%u gpu_args=%u indexed=%u prim=%u index_count=%u instances=%u"
 		            " index_limit=%" PRIu64 " index_bytes=%u per_group=%u groups=%u extent=%ux%u"
 		            " args=0x%" PRIx64 "\n",
@@ -2108,7 +2108,7 @@ void RenderExecutor::ExecutePreparedDraw(uint64_t submit_id, CommandBuffer& buff
 		SetDrawDebugPhase(buffer, submit_id, draw, 0x700u);
 	}
 	if (draw_logged) [[unlikely]] {
-		std::printf(
+		Log::Printf(
 		    "draw-log end: render_begins=%" PRIu64 " render_ends=%" PRIu64
 		    " image_barriers=%" PRIu64 " shader_writes=%u\n",
 		    g_render_debug_counters.render_begins.load(std::memory_order_relaxed) - counters_before[0],
@@ -2116,14 +2116,14 @@ void RenderExecutor::ExecutePreparedDraw(uint64_t submit_id, CommandBuffer& buff
 		    g_render_debug_counters.image_barriers.load(std::memory_order_relaxed) -
 		        counters_before[2],
 		    static_cast<uint32_t>(static_cast<bool>(shader_write_stages)));
-		std::printf("draw-log keys: pipeline=%p vertex_offset=%d first_vertex=%u first_instance=%u",
+		Log::Printf("draw-log keys: pipeline=%p vertex_offset=%d first_vertex=%u first_instance=%u",
 		            static_cast<const void*>(&pipeline), emit.vertex_offset, emit.first_vertex,
 		            emit.first_instance);
 		DrawLog::PrintStageKeys("vs", state.vertex_info[0].stage);
 		if (state.ps_active) {
 			DrawLog::PrintStageKeys("ps", state.ps_input_info.stage);
 		}
-		std::printf("\n");
+		Log::Printf("\n");
 	}
 	if (DrawLog::StatsEnabled()) [[unlikely]] {
 		const auto* pixel  = state.ps_active ? state.ps_input_info.stage.program : nullptr;

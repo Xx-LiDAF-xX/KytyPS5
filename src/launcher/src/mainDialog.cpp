@@ -275,6 +275,7 @@ static QStringList CreateEmulatorArgs(const Configuration& info) {
 	}
 	args << "--ray-tracing" << BoolArg(info.ray_tracing);
 	args << "--auto-optimize" << "false";
+	args << "--gpu-timestamp-scale" << "100";
 	args << "--readback-linear-images" << BoolArg(info.readback_linear_images);
 	if (info.tessellation_enabled) {
 		args << "--tessellation";
@@ -438,11 +439,7 @@ static void WriteKytySettingsIni(const QDir& dir, const Configuration& info) {
 	QTextStream out(&file);
 	out << "# KytyPS5 Performance & Settings Configuration\n";
 	out << "auto-optimize = false\n";
-	int headroom = 125;
-	if (info.performance_profile == 1) headroom = 100;
-	else if (info.performance_profile == 2) headroom = 125;
-	else if (info.performance_profile == 3) headroom = 135;
-	out << "gpu-timestamp-scale = " << headroom << "\n";
+	out << "gpu-timestamp-scale = 100\n";
 	out << "ray-tracing = " << (info.ray_tracing ? "true" : "false") << "\n";
 	out << "master-volume = " << info.master_volume << "\n";
 	out << "audio-mute = " << (info.audio_muted ? "true" : "false") << "\n";

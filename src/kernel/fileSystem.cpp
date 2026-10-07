@@ -355,7 +355,7 @@ std::filesystem::path MountPoints::ResolvePath(const std::string& mounted_name) 
 
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 		if (HasWindowsForbiddenFilenameCharacter(rel_path)) {
-			::printf("FileSystem: Windows-incompatible guest filename: %s\n", mounted_name.c_str());
+			Log::Printf("FileSystem: Windows-incompatible guest filename: %s\n", mounted_name.c_str());
 		}
 		return p.dir / native_rel_path;
 #else
@@ -660,15 +660,9 @@ int64_t KYTY_SYSV_ABI KernelWrite(int d, const void* buf, size_t nbytes) {
 	}
 
 	if (d == 1 || d == 2) {
-		auto*      out      = (d == 1 ? stdout : stderr);
-		const auto written  = std::fwrite(buf, 1, nbytes, out);
-		const auto flush_ok = std::fflush(out) == 0;
-
-		if (written != nbytes || !flush_ok) {
-			return KERNEL_ERROR_EIO;
-		}
-
-		return static_cast<int64_t>(written);
+		Log::WriteGuest(std::string_view(static_cast<const char*>(buf), nbytes));
+		Log::Flush();
+		return static_cast<int64_t>(nbytes);
 	}
 
 	if (d < DESCRIPTOR_MIN) {

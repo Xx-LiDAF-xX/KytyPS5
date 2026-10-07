@@ -473,7 +473,7 @@ struct PipelineCache::ProgramCache {
 	                            ShaderRecompiler::IR::ResourceSpecialization specialization,
 	                            CompiledModule                               compiled) {
 		if (PermutationLogEnabled()) [[unlikely]] {
-			std::printf("spirv: id=%llu %s hash=%016llx words=%zu\n",
+			Log::Printf("spirv: id=%llu %s hash=%016llx words=%zu\n",
 			            static_cast<unsigned long long>(next_shader_id + 1), StageName(options.stage),
 			            static_cast<unsigned long long>(options.shader_hash), compiled.spirv_words);
 		}
@@ -934,7 +934,7 @@ struct PipelineCache::ProgramCache {
 			counts[static_cast<size_t>(key.stage)] += program_source.permutations.size();
 		}
 		// Guest geometry shaders are compiled through the host mesh stage.
-		std::printf("Shaders: VS %zu | PS %zu | CS %zu | GS %zu | LS %zu | HS %zu | TES %zu\n",
+		Log::Printf("Shaders: VS %zu | PS %zu | CS %zu | GS %zu | LS %zu | HS %zu | TES %zu\n",
 		            counts[static_cast<size_t>(ShaderType::Vertex)],
 		            counts[static_cast<size_t>(ShaderType::Pixel)],
 		            counts[static_cast<size_t>(ShaderType::Compute)],
@@ -1018,7 +1018,7 @@ struct PipelineCache::ProgramCache {
 				    !ShaderRecompiler::IR::ReadsUnchanged(stage_result->reads, runtime)) {
 					const auto missed = ++speculation.reads_kept_changed;
 					if (missed <= 16 || missed % 1000 == 0) {
-						std::printf("speculation reads verify: kept reads changed (%llu of %llu)\n",
+						Log::Printf("speculation reads verify: kept reads changed (%llu of %llu)\n",
 						            static_cast<unsigned long long>(missed),
 						            static_cast<unsigned long long>(speculation.reads_kept));
 					}
@@ -1054,7 +1054,7 @@ struct PipelineCache::ProgramCache {
 			}
 		}
 		if (speculation_stats && (++speculation.stages % 100000u) == 0) {
-			std::printf("draw-speculation: stages=%llu adopted=%llu changed=%llu mismatched=%llu "
+			Log::Printf("draw-speculation: stages=%llu adopted=%llu changed=%llu mismatched=%llu "
 			            "unspeculated=%llu skipped=%llu inputs taken=%llu changed=%llu reads kept=%llu "
 			            "kept-changed=%llu\n",
 			            static_cast<unsigned long long>(speculation.stages),
@@ -1152,7 +1152,7 @@ struct PipelineCache::ProgramCache {
 			}
 		}
 		const auto now = std::chrono::steady_clock::now().time_since_epoch();
-		std::printf("permutation: stage=%u hash=%016llx t=%.3f%s\n", static_cast<uint32_t>(stage),
+		Log::Printf("permutation: stage=%u hash=%016llx t=%.3f%s\n", static_cast<uint32_t>(stage),
 		            static_cast<unsigned long long>(hash),
 		            std::chrono::duration<double>(now).count(), reason.c_str());
 	}
@@ -2108,7 +2108,7 @@ PipelineCache::Pipeline* PipelineCache::GetGraphicsPipeline(
 		} else if (!may_defer && Config::AsyncPipelinesEnabled()) {
 			deferral = " sync";
 		}
-		std::printf("pipeline: vs=%llu ps=%llu ms=%.1f libs=%s%s%s%s t=%.3f\n",
+		Log::Printf("pipeline: vs=%llu ps=%llu ms=%.1f libs=%s%s%s%s t=%.3f\n",
 		            static_cast<unsigned long long>(vs_id), static_cast<unsigned long long>(ps_id),
 		            std::chrono::duration<double, std::milli>(now - create_start).count(),
 		            library_parts < 0 ? "mono" : letters(bits & 0xfu, "VPFO").c_str(),
@@ -2391,7 +2391,7 @@ uint32_t PipelineCache::PrefetchComputePipeline(const HW::Context& ctx, const HW
 
 void PipelineCache::LogLookahead(uint32_t draws, uint32_t parts) const {
 	if (PermutationLogEnabled()) [[unlikely]] {
-		std::printf("lookahead: draws=%u prefetched parts=%u t=%.3f\n", draws, parts,
+		Log::Printf("lookahead: draws=%u prefetched parts=%u t=%.3f\n", draws, parts,
 		            std::chrono::duration<double>(
 		                std::chrono::steady_clock::now().time_since_epoch())
 		                .count());
@@ -2462,7 +2462,7 @@ PipelineCache::GetComputePipeline(const ShaderComputeInputInfo& input_info,
 	m_compute_pipelines_created++;
 	if (PermutationLogEnabled()) [[unlikely]] {
 		const auto now = std::chrono::steady_clock::now();
-		std::printf("pipeline: cs=%llu ms=%.1f%s t=%.3f\n",
+		Log::Printf("pipeline: cs=%llu ms=%.1f%s t=%.3f\n",
 		            static_cast<unsigned long long>(compute_program.id),
 		            std::chrono::duration<double, std::milli>(now - create_start).count(),
 		            prefetched ? " pre=C" : "",

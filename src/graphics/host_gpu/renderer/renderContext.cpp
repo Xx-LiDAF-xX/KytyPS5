@@ -311,7 +311,7 @@ void RenderContext::ReportMipStats(void* dst, uint32_t size, bool reset) {
 	}
 	const bool print = m_mip_stats_reports % 300 == 0 || (counting && m_mip_stats_reports % 30 == 0);
 	if (MipStatsDebugEnabled() && print) {
-		std::printf("mip-stats: report %llu marked=%d relief=%d unused=%u of %u\n",
+		Log::Printf("mip-stats: report %llu marked=%d relief=%d unused=%u of %u\n",
 		            static_cast<unsigned long long>(m_mip_stats_reports), marked_any ? 1 : 0,
 		            relief ? 1 : 0, unused, counters);
 		std::fflush(stdout);

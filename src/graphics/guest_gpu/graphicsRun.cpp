@@ -64,7 +64,7 @@ static void LogTimestampWrite(const char* kind, uint32_t event, uint64_t dst, ui
 	if (index < skip || index >= skip + 1200) {
 		return;
 	}
-	std::printf("ts #%" PRId64 " %s ev=0x%02" PRIx32 " dst=0x%016" PRIx64 " value=%" PRIu64 "\n",
+	Log::Printf("ts #%" PRId64 " %s ev=0x%02" PRIx32 " dst=0x%016" PRIx64 " value=%" PRIu64 "\n",
 	            index, kind, event, dst, value);
 }
 
@@ -724,7 +724,7 @@ void GuestGpu::ThreadRun(void* data) {
 				}
 				stats = {};
 			}
-			std::printf("%s\n", line.c_str());
+			Log::Printf("%s\n", line.c_str());
 			std::fflush(stdout);
 		}
 		if (!complete) {
@@ -1941,7 +1941,7 @@ void CommandProcessor::TriggerEvent(uint32_t event_type, uint32_t event_index,
 			DrainStats::Record(DrainStats::Kind::OcclusionQuery, 1);
 			static std::once_flag warning_once;
 			std::call_once(warning_once, [] {
-				std::printf("Warning: game uses occlusion queries, which are currently treated as "
+				Log::Printf("Warning: game uses occlusion queries, which are currently treated as "
 				            "always visible; GPU usage may be higher and FPS may be lower.\n");
 			});
 

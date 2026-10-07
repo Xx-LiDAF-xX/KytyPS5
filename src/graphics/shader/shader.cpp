@@ -113,7 +113,7 @@ void ShaderMapUserData(uint64_t addr, const ShaderMappedData& data) {
 			hash = XXH3_64bits(reinterpret_cast<const void*>(addr), data.code_size_bytes);
 		}
 		const auto now = std::chrono::steady_clock::now().time_since_epoch();
-		std::printf("agc-shader: type=%u hash=%016llx bytes=%u t=%.3f\n",
+		Log::Printf("agc-shader: type=%u hash=%016llx bytes=%u t=%.3f\n",
 		            static_cast<uint32_t>(data.type), static_cast<unsigned long long>(hash),
 		            data.code_size_bytes, std::chrono::duration<double>(now).count());
 	}

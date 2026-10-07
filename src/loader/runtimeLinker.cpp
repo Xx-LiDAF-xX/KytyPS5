@@ -203,14 +203,14 @@ static KYTY_SYSV_ABI uint64_t UnresolvedImportStub(uint64_t record_id) {
 	if (log_index < 1024) {
 		if (record_id < g_stubbed_imports.size()) {
 			const auto& record = g_stubbed_imports[record_id];
-			printf("Unresolved import stub called: %s\n", record.name.c_str());
+			Log::Printf("Unresolved import stub called: %s\n", record.name.c_str());
 			LOGF("Unresolved import stub called [%u]: patch_vaddr=0x%016" PRIx64
 			     " jmprela_index=%" PRIu32 " symbol=%s type=%s bind=%s program=%s\n",
 			     log_index, record.patch_vaddr, record.index, record.name.c_str(),
 			     magic_enum::enum_name(record.type), magic_enum::enum_name(record.bind),
 			     record.program.c_str());
 		} else {
-			printf("Unresolved import stub called: <bad-record>\n");
+			Log::Printf("Unresolved import stub called: <bad-record>\n");
 			LOGF("Unresolved import stub called [%u]: record_id=%" PRIu64 " symbol=<bad-record>\n",
 			     log_index, record_id);
 		}
@@ -713,23 +713,23 @@ static bool KytyExceptionHandler(const Common::HostException::ExceptionInfo& exc
 		              info->rax, info->rbx, info->rcx, info->rdx, info->rsi, info->rdi, info->rbp,
 		              info->rsp, info->r8, info->r9, info->r10, info->r11, info->r12, info->r13,
 		              info->r14, info->r15);
-		std::printf("%s", fault_buf);
+		Log::Printf("%s", fault_buf);
 		Log::WriteFatal(std::string_view(fault_buf));
 		if (IsReadableRange(info->exception_address - 48, 96)) {
 			const auto* code = reinterpret_cast<const uint8_t*>(info->exception_address - 48);
-			std::printf("code (pc-48 .. pc+48, fault at byte 48):");
+			Log::Printf("code (pc-48 .. pc+48, fault at byte 48):");
 			for (int i = 0; i < 96; i++) {
-				std::printf("%s%02x", (i % 16 == 0) ? "\n " : " ", code[i]);
+				Log::Printf("%s%02x", (i % 16 == 0) ? "\n " : " ", code[i]);
 			}
-			std::printf("\n");
+			Log::Printf("\n");
 		}
 		if (IsReadableRange(info->rsp, 32 * sizeof(uint64_t))) {
 			const auto* stack = reinterpret_cast<const uint64_t*>(info->rsp);
-			std::printf("stack:");
+			Log::Printf("stack:");
 			for (int i = 0; i < 32; i++) {
-				std::printf("%s %016" PRIx64, (i % 4 == 0) ? "\n " : "", stack[i]);
+				Log::Printf("%s %016" PRIx64, (i % 4 == 0) ? "\n " : "", stack[i]);
 			}
-			std::printf("\n");
+			Log::Printf("\n");
 		}
 		std::fflush(stdout);
 	}

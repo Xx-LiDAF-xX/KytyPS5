@@ -110,6 +110,13 @@ void                 TraceAllCalls(std::chrono::milliseconds duration) noexcept;
 }
 
 void InitAll(Loader::SymbolDatabase* s);
+void ShutdownAmpr();
+struct AmprLifecycle {
+	static constexpr const char* name = "Ampr";
+	static void initialize() {}
+	static constexpr auto shutdown = ShutdownAmpr;
+	static constexpr auto emergency_shutdown = ShutdownAmpr;
+};
 
 } // namespace Libs
 #endif /* EMULATOR_INCLUDE_EMULATOR_LIBS_LIBS_H_ */

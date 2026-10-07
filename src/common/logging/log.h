@@ -6,6 +6,8 @@
 #include <fmt/color.h>
 #include <fmt/printf.h>
 #include <string_view>
+#include <filesystem>
+#include <string>
 
 namespace Log {
 
@@ -24,11 +26,15 @@ enum class Direction { Silent, Console, File };
 Direction GetDirection();
 bool      IsSilent();
 void      Write(std::string_view text);
+void      WriteGuest(std::string_view text);
 void      Write(fmt::text_style style, std::string_view text);
 void      WriteToConsoleAndLog(std::string_view text);
 void      WriteFatal(std::string_view text);
 void      WriteFatal(fmt::text_style style, std::string_view text);
 void      Flush();
+int       Printf(const char* format, ...) KYTY_FORMAT_PRINTF(1, 2);
+std::string RedactPrivateInfo(std::string_view text);
+std::filesystem::path ResolveOutputPath(const std::filesystem::path& configured);
 
 namespace Color {
 

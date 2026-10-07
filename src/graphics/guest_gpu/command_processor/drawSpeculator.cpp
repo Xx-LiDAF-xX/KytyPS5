@@ -1,3 +1,4 @@
+#include "common/logging/log.h"
 #include "graphics/guest_gpu/command_processor/drawSpeculator.h"
 
 #include "common/assert.h"
@@ -252,7 +253,7 @@ void DrawSpeculator::PrintStats() {
 		stops += text;
 	}
 	const auto failures = m_renderer.GetPipelineCache().SpeculationFailures();
-	std::printf("draw-speculator: draws=%" PRIu64 " restarts=%" PRIu64 " walked=%" PRIu64
+	Log::Printf("draw-speculator: draws=%" PRIu64 " restarts=%" PRIu64 " walked=%" PRIu64
 	            " speculated=%" PRIu64 " behind=%" PRIu64 " taken=%" PRIu64 " missed=%" PRIu64
 	            " mismatched=%" PRIu64 " deferred=%" PRIu64 " (unread %" PRIu64 ", unknown %" PRIu64
 	            ") stops:%s failures: predict=%" PRIu64

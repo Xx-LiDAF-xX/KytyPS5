@@ -314,7 +314,7 @@ const void* Audio::PrepareOutputBuffer(const PortOut& port, const void* data,
 
 	bool volume_changed = false;
 	const float master_scale =
-	    Config::AudioMuted() ? 0.0f : (static_cast<float>(Config::GetMasterVolume()) / 100.0f);
+	    Config::AudioMuted() ? 0.0f : (static_cast<float>(Config::GetMasterVolume()) / 100.0f) * gain;
 	if (master_scale != 1.0f) {
 		volume_changed = true;
 	}

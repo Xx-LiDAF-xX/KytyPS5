@@ -94,7 +94,7 @@ void PrintCallCounts() {
 			line += fmt::format(" {}::{}={}", library != nullptr ? library : "?",
 			                    function != nullptr ? function : "?", calls[i].first);
 		}
-		std::printf("%s\n", line.c_str());
+		Log::Printf("%s\n", line.c_str());
 		std::fflush(stdout);
 	}
 }
@@ -128,7 +128,7 @@ void PrintTracedCall(const char* library, const char* function, void* return_slo
 		                    value - program->base_vaddr, slot - begin);
 		found++;
 	}
-	std::printf("%s\n", line.c_str());
+	Log::Printf("%s\n", line.c_str());
 	std::fflush(stdout);
 }
 

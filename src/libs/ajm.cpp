@@ -207,11 +207,11 @@ static bool AjmLogCodecSupport(uint32_t codec) {
 	if (supported) {
 		static std::atomic_bool logged {false};
 		if (!logged.exchange(true, std::memory_order_relaxed)) {
-			std::printf("AJM codec=%u, name=%s\n", codec, AjmCodecName(codec));
+			Log::Printf("AJM codec=%u, name=%s\n", codec, AjmCodecName(codec));
 		}
 	} else {
-		std::printf("AJM codec=%u, name=%s\n", codec, AjmCodecName(codec));
-		std::printf("AJM unsupported codec=%u (%s)\n", codec, AjmCodecName(codec));
+		Log::Printf("AJM codec=%u, name=%s\n", codec, AjmCodecName(codec));
+		Log::Printf("AJM unsupported codec=%u (%s)\n", codec, AjmCodecName(codec));
 	}
 	return supported;
 }

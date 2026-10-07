@@ -1057,7 +1057,7 @@ static void DumpPipelineStatistics(GraphicContext& graphics, const GraphicsPipel
 	if (graphics.device.createGraphicsPipelines(nullptr, 1, &info, nullptr, &pipeline) !=
 	        vk::Result::eSuccess ||
 	    pipeline == nullptr) {
-		std::printf("pipeline-stats: capture failed vs=%016llx ps=%016llx\n",
+		Log::Printf("pipeline-stats: capture failed vs=%016llx ps=%016llx\n",
 		            static_cast<unsigned long long>(vertex_hash),
 		            static_cast<unsigned long long>(pixel_hash));
 		return;
@@ -1129,7 +1129,7 @@ static void DumpPipelineStatistics(GraphicContext& graphics, const GraphicsPipel
 	if (file != nullptr) {
 		std::fclose(file);
 	}
-	std::printf("pipeline-stats: vs=%016llx ps=%016llx -> %s:%s\n",
+	Log::Printf("pipeline-stats: vs=%016llx ps=%016llx -> %s:%s\n",
 	            static_cast<unsigned long long>(vertex_hash),
 	            static_cast<unsigned long long>(pixel_hash), path.c_str(), summary.c_str());
 	graphics.device.destroyPipeline(pipeline, nullptr);

@@ -1,3 +1,4 @@
+#include "common/logging/log.h"
 #include "common/settingsFile.h"
 
 #include <algorithm>
@@ -72,7 +73,7 @@ bool LoadArguments(std::vector<std::string>& args) {
 		const auto separator = line.find('=');
 		const auto name      = Trim(line.substr(0, separator));
 		if (name.empty() || name.find_first_of(" \t") != std::string_view::npos) {
-			std::printf("%s:%zu: expected \"name = value\"\n", FileName, line_number);
+			Log::Printf("%s:%zu: expected \"name = value\"\n", FileName, line_number);
 			return false;
 		}
 		args.push_back("--" + std::string(name));

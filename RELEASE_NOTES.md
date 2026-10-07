@@ -1,18 +1,68 @@
-﻿# KytyPS5 - Initial Release (Xx-LiDAF-xX's Fork)
+# KytyPS5 Windows prerelease — 2026-10-07
 
-Welcome to **KytyPS5**, Xx-LiDAF-xX's optimized and streamlined fork of the PlayStation 5 emulator!
+This build preserves game touchpad input, persists RT settings across launcher
+sessions, and reports the active RT state separately from the next-launch state.
+It implements asynchronous APR address-wait ordering, applies fallback audio gain
+to the controller speaker, gates input tracing behind an explicit option, and
+records Vulkan semaphore error codes and timeline ticks.
 
-### 🎮 What makes this release unique?
-Unlike other forks that feature bloated, complicated graphics menus, this release focuses on a streamlined, plug-and-play console experience. We have:
-1. **Simplified "MODE" Presets:** Removed all confusing granular graphics settings (Anisotropy, Resolution Scale, etc.). The UI now features a single, clean dropdown: **MODE**, with strictly **Quality Mode** or **Performance Mode** options.
-2. **Built-in Shader Cache Progress:** Instead of guessing when shaders are compiling and dealing with unexpected stutters, the OSD Performance Overlay now natively tracks and displays **Shader Cache %**. You can finally see exactly when it hits `100%`!
-3. **Intel CPU Compatibility:** Many other releases crash instantly with "illegal instruction" errors on older Intel CPUs when booting modern PS5 titles. This build includes an active `x64InstructionEmulator` that safely intercepts and translates AMD-specific CPU instructions (like `SHA-NI` and `SSE4a`) on the fly, allowing Intel processors to run the emulator reliably!
-4. **ClangCL Optimizations:** Built entirely using the ClangCL compiler with full Link Time Optimizations (LTO) to extract the absolute maximum performance from the backend engine.
+## Install and settings
 
-### 🛠  Fixes & Upgrades
-* **Privacy & Path Stripping:** All absolute build paths (such as `C:\Users\...`) have been completely stripped from the final executable, crash reports, `__FILE__` macros, and PDB debug symbols to ensure maximum privacy for anyone downloading this release.
-* **Intel CPU Crashing & Performance Fixes:** Fixed a critical bug where the `x64InstructionEmulator` was not actually activating for Intel CPUs, which caused instant crashes. Additionally, the Auto-Optimizer's "Quality" profile thresholds have been recalibrated (now requiring >= 16 threads). This ensures mid-range Intel CPUs (like the i5 series) correctly default to the "Balanced" profile, re-enabling Async Shader Pipelines and Relaxed Readbacks to prevent brutal stuttering.
-* **Astro Bot Memory Stability Patch:** We've implemented a targeted runtime memory stability patch. Crucially, this patch now fully supports the **US Region (PPSA21564)** alongside the EU version (`PPSA21567`), dynamically rewriting the title memory during boot to prevent notorious memory allocation crashes.
-* **Astro's Playroom Framework:** The memory stability patch framework has been officially expanded to recognize and hook **Astro's Playroom (PPSA01325)**. The engine is now waiting for the community to provide the specific reverse-engineered hex offsets for this older Asobi Engine build to finalize the crash fixes!
-* **Auto-Update Feed Linked:** The built-in updater feed has been officially re-linked to point directly to `Xx-LiDAF-xX/KytyPS5`, ensuring that you will automatically receive any future patches pushed to this repository!
-* **Global Branding Overhaul:** All previous `BryKytyPS5` branding has been scrubbed from the emulator, Vulkan renderer, and crash handler to reflect the official **KytyPS5** name.
+Extract the entire ZIP into a fresh writable folder and run `launcher.exe`.
+The archive includes a fresh portable launcher profile and emulator settings.
+Select your own game directory. Preserve your existing saves before migrating.
+
+RT and automatic optimization default to off. Enable RT in Graphics settings or
+F2, then fully restart the game. RT uses guest BVH intersections through Vulkan
+compute; the setting does not establish native hardware RT use or visual parity.
+The touchpad no longer opens emulator quality settings. File logging defaults to
+unique UTC-dated `_kyty` files. CLI console/silent options remain available.
+
+## Validation
+
+The emulator, launcher, and all configured regression executables built with the
+Windows ClangCL Release configuration. All 73 CTest entries were run sequentially
+with a 90-second timeout: **64 passed; 9 failed or timed out**.
+
+Privacy logging, RT settings, APR ordering, controller settings, pad haptics, and
+focused shader RT tests passed. Earlier targeted APR ordering stress checks also
+passed. A short isolated Astro Bot startup with RT off completed without a fatal
+error; this is startup coverage, not sustained gameplay validation.
+
+Unresolved full-suite results:
+
+| Tests | Observed failure |
+| --- | --- |
+| `kernel_file_system` | Windows per-call nonblocking socket expectation |
+| `audio_out_timing` | Priming deadline assertion |
+| `shader_recompiler_compute`, `shader_recompiler_compute_hw_bounds`, `pm4_context_state` | Native target geometry register classification |
+| `gpu_command_lane` | 90-second timeout |
+| `gpu_tiler` | Scratch workspace reuse assertion |
+| `compute_meta_clear_classification`, `texture_cache_image_overlap` | GPU color metadata clear value |
+
+These failures remain open. Publication does not establish a stable build, a fix
+for every crash, complete RT correctness, or a guarantee of 60 FPS.
+
+## Privacy and archive contents
+
+Runtime diagnostics filter host paths, known host identities, network addresses,
+and sensitive fields. Guest diagnostic fragments are buffered before filtering.
+Freeform tester descriptions should still be reviewed before sharing.
+
+The runtime ZIP uses an explicit file allowlist. It excludes games, patches,
+saves, logs, caches, captures, build directories, research reports, and PDBs.
+It includes only executables, required DLL/plugin dependencies, fresh settings,
+documentation, component licenses, and a SHA-256 build manifest.
+
+Executable source paths are mapped to relative paths and PDB references use
+basenames. Signed Qt DLLs retain standard vendor build/debug paths and parser
+strings; their signatures are preserved. These are vendor data rather than
+developer or tester installation directories. No embedded personal host identity
+or credential was found in the audited current runtime files.
+
+Obsolete tracked release ZIPs were removed from the current repository tree,
+while local copies were preserved. Historical Git commits and previous releases
+were not rewritten or deleted and may retain earlier artifacts.
+
+`BUILD-MANIFEST.json` records source and package revisions and exact file hashes.
+The companion `.zip.sha256` verifies the archive.

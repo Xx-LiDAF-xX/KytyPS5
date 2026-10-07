@@ -15,6 +15,10 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <bit>
+#include <condition_variable>
+#include <deque>
+#include <thread>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -47,6 +51,7 @@ struct SubmissionState {
 	uint64_t result           = 0;
 	int32_t  execution_result = 0;
 	uint32_t error_offset     = 0;
+	bool     complete         = false;
 };
 
 struct ResolvedPathInfo {
@@ -58,6 +63,7 @@ struct ResolvedPathInfo {
 };
 
 static std::mutex                                        g_mutex;
+static std::condition_variable                           g_completed;
 static uint32_t                                          g_next_submission_id = 1;
 static std::unordered_map<uint32_t, SubmissionState>     g_submissions;
 static std::unordered_map<uint32_t, std::string>         g_files;
@@ -254,7 +260,7 @@ static int ResolveOnePath(const char* guest_path, uint32_t* id, uint64_t* size) 
 			LOGF("\tAPR resolve missing path: %s -> %s\n", guest_path, info.host_path.c_str());
 		}
 		if (AprDebugEnabled()) {
-			std::printf("apr-resolve: %s -> %s size=0x%llx result=0x%x\n", guest_path,
+			Log::Printf("apr-resolve: %s -> %s size=0x%llx result=0x%x\n", guest_path,
 			            info.host_path.c_str(), static_cast<unsigned long long>(info.file_size),
 			            static_cast<uint32_t>(info.result));
 			std::fflush(stdout);
@@ -376,11 +382,17 @@ static void SetSubmissionResult(uint32_t submission_id, int32_t execution_result
 	if (it != g_submissions.end()) {
 		it->second.execution_result = execution_result;
 		it->second.error_offset     = error_offset;
+		it->second.complete         = true;
+		g_completed.notify_all();
 	}
 }
 
 static bool CompleteSubmission(uint32_t submission_id, SubmissionState* state) {
-	std::scoped_lock lock(g_mutex);
+	std::unique_lock lock(g_mutex);
+	g_completed.wait(lock, [submission_id] {
+		const auto it = g_submissions.find(submission_id);
+		return it == g_submissions.end() || it->second.complete;
+	});
 	auto             it = g_submissions.find(submission_id);
 	if (it == g_submissions.end()) {
 		return false;
@@ -408,8 +420,8 @@ static int WriteResult(void* result, int32_t execution_result = 0, uint32_t erro
 } // namespace AprShared
 
 namespace LibAmpr::Ampr {
-static int ExecuteAprCommandBuffer(uint64_t command_buffer, int32_t* execution_result,
-                                   uint32_t* error_offset);
+static int SubmitAsync(uint64_t command_buffer, uint64_t priority, uint64_t result,
+                       uint32_t* out_submission_id);
 }
 
 namespace LibKernelApr {
@@ -555,75 +567,23 @@ static int KYTY_SYSV_ABI ResolveFilepathsWithPrefixToIdsAndFileSizesForEach(
 	    AprShared::ResolvePathsCommon(path_list, count, ids, sizes, nullptr, prefix, results));
 }
 
-static int KYTY_SYSV_ABI SubmitCommandBufferAndGetResult(void*     command_buffer, uint64_t,
-                                                         void*     result,
-                                                         uint32_t* out_submission_id) {
-	PRINT_NAME();
-
-	if (command_buffer == nullptr) {
-		return KernelSyscallResult(LibKernel::KERNEL_ERROR_EINVAL);
-	}
-
-	const auto command_buffer_addr = reinterpret_cast<uint64_t>(command_buffer);
-	const auto id =
-	    AprShared::AllocateSubmissionId(command_buffer_addr, reinterpret_cast<uint64_t>(result));
-
-	int32_t  execution_result = OK;
-	uint32_t error_offset     = 0;
-	auto submit_result = LibAmpr::Ampr::ExecuteAprCommandBuffer(command_buffer_addr,
-	                                                            &execution_result, &error_offset);
-	if (submit_result != OK) {
-		return KernelSyscallResult(submit_result);
-	}
-	AprShared::SetSubmissionResult(id, execution_result, error_offset);
-
-	if (out_submission_id != nullptr) {
-		if (!AprShared::WriteGuest(reinterpret_cast<uint64_t>(out_submission_id), id)) {
-			return KernelSyscallResult(LibKernel::KERNEL_ERROR_EFAULT);
-		}
-	}
-
-	return KernelSyscallResult(AprShared::WriteResult(result, execution_result, error_offset));
+static int KYTY_SYSV_ABI SubmitCommandBufferAndGetResult(void* command_buffer, uint64_t priority,
+                                                         void* result, uint32_t* out_submission_id) {
+    PRINT_NAME();
+    return KernelSyscallResult(LibAmpr::Ampr::SubmitAsync(reinterpret_cast<uint64_t>(command_buffer),
+        priority, reinterpret_cast<uint64_t>(result), out_submission_id));
 }
 
-static int KYTY_SYSV_ABI SubmitCommandBuffer(void* command_buffer, uint64_t) {
-	PRINT_NAME();
-
-	if (command_buffer == nullptr) {
-		return KernelSyscallResult(LibKernel::KERNEL_ERROR_EINVAL);
-	}
-
-	int32_t  execution_result = OK;
-	uint32_t error_offset     = 0;
-	return KernelSyscallResult(LibAmpr::Ampr::ExecuteAprCommandBuffer(
-	    reinterpret_cast<uint64_t>(command_buffer), &execution_result, &error_offset));
+static int KYTY_SYSV_ABI SubmitCommandBuffer(void* command_buffer, uint64_t priority) {
+    PRINT_NAME();
+    return KernelSyscallResult(LibAmpr::Ampr::SubmitAsync(reinterpret_cast<uint64_t>(command_buffer), priority, 0, nullptr));
 }
 
-static int KYTY_SYSV_ABI SubmitCommandBufferAndGetId(void*     command_buffer, uint64_t,
+static int KYTY_SYSV_ABI SubmitCommandBufferAndGetId(void* command_buffer, uint64_t priority,
                                                      uint32_t* out_submission_id) {
-	PRINT_NAME();
-
-	if (command_buffer == nullptr || out_submission_id == nullptr) {
-		return KernelSyscallResult(LibKernel::KERNEL_ERROR_EINVAL);
-	}
-
-	const auto command_buffer_addr = reinterpret_cast<uint64_t>(command_buffer);
-	const auto id                  = AprShared::AllocateSubmissionId(command_buffer_addr, 0);
-
-	int32_t  execution_result = OK;
-	uint32_t error_offset     = 0;
-	auto submit_result = LibAmpr::Ampr::ExecuteAprCommandBuffer(command_buffer_addr,
-	                                                            &execution_result, &error_offset);
-	if (submit_result != OK) {
-		return KernelSyscallResult(submit_result);
-	}
-	AprShared::SetSubmissionResult(id, execution_result, error_offset);
-
-	if (!AprShared::WriteGuest(reinterpret_cast<uint64_t>(out_submission_id), id)) {
-		return KernelSyscallResult(LibKernel::KERNEL_ERROR_EFAULT);
-	}
-
-	return OK;
+    PRINT_NAME();
+    if (out_submission_id == nullptr) { return KernelSyscallResult(LibKernel::KERNEL_ERROR_EINVAL); }
+    return KernelSyscallResult(LibAmpr::Ampr::SubmitAsync(reinterpret_cast<uint64_t>(command_buffer), priority, 0, out_submission_id));
 }
 
 static int KYTY_SYSV_ABI WaitCommandBuffer(uint32_t submission_id) {
@@ -751,10 +711,17 @@ struct CommandBufferState {
 		int32_t        prot          = 0;
 		uint8_t        gpu_mask_id   = 0;
 	};
+	struct WaitAddressCommand {
+		uint64_t record_offset = 0;
+		uint64_t address = 0;
+		uint64_t reference = 0;
+		uint8_t comparison = 0;
+	};
 	std::vector<ReadFileCommand>     read_file_commands;
 	std::vector<KernelEventCommand>  kernel_event_commands;
 	std::vector<WriteAddressCommand> write_address_commands;
 	std::vector<AmmMapCommand>       amm_map_commands;
+	std::vector<WaitAddressCommand> wait_address_commands;
 	bool                             gather_scatter_valid       = false;
 	uint32_t                         gather_scatter_file_id     = 0;
 	uint64_t                         gather_scatter_destination = 0;
@@ -778,7 +745,8 @@ using CommandBufferIterator = std::unordered_map<uint64_t, CommandBufferState>::
 
 static bool HasQueuedCommands(const CommandBufferState& state) {
 	return !state.read_file_commands.empty() || !state.kernel_event_commands.empty() ||
-	       !state.write_address_commands.empty() || !state.amm_map_commands.empty();
+	       !state.write_address_commands.empty() || !state.amm_map_commands.empty() ||
+	       !state.wait_address_commands.empty();
 }
 
 static void RegisterCommandBufferAliasLocked(uint64_t command_buffer, uint64_t buffer) {
@@ -1022,6 +990,7 @@ static bool WriteCommandBufferPointers(uint64_t command_buffer, uint64_t buffer,
 	state.kernel_event_commands.clear();
 	state.write_address_commands.clear();
 	state.amm_map_commands.clear();
+	state.wait_address_commands.clear();
 	state.gather_scatter_valid       = false;
 	state.gather_scatter_file_id     = 0;
 	state.gather_scatter_destination = 0;
@@ -1295,7 +1264,7 @@ static void DebugAprRead(const std::string& path, uint64_t offset, uint64_t size
 		const auto now = std::chrono::steady_clock::now();
 		if (now - window_start >= std::chrono::seconds(5)) {
 			const double seconds = std::chrono::duration<double>(now - window_start).count();
-			std::printf("apr-rate: t=%.0fs reads/s=%.1f MB/s=%.1f\n",
+			Log::Printf("apr-rate: t=%.0fs reads/s=%.1f MB/s=%.1f\n",
 			            static_cast<double>(Loader::Timer::GetTimeMs()) / 1000.0,
 			            static_cast<double>(window_reads) / seconds,
 			            static_cast<double>(window_bytes) / seconds / 1e6);
@@ -1306,7 +1275,7 @@ static void DebugAprRead(const std::string& path, uint64_t offset, uint64_t size
 		}
 	}
 	if ((count & (count - 1)) == 0) {
-		std::printf("apr-read x%llu tid=%d: %s\n", static_cast<unsigned long long>(count),
+		Log::Printf("apr-read x%llu tid=%d: %s\n", static_cast<unsigned long long>(count),
 		            Common::Thread::GetThreadIdUnique(), key.c_str());
 		std::fflush(stdout);
 	}
@@ -1354,8 +1323,8 @@ static void NoteRepeatedRead(uint32_t file_id, uint64_t offset, uint64_t size) {
 	}
 }
 
-static int ExecuteAprCommandBuffer(uint64_t command_buffer, int32_t* execution_result,
-                                   uint32_t* error_offset) {
+static int ExecuteAprCommandBuffer(const CommandBufferState& state, uint64_t* cursor,
+                                   bool* blocked, int32_t* execution_result, uint32_t* error_offset) {
 	if (execution_result == nullptr || error_offset == nullptr) {
 		return LibKernel::KERNEL_ERROR_EINVAL;
 	}
@@ -1363,16 +1332,14 @@ static int ExecuteAprCommandBuffer(uint64_t command_buffer, int32_t* execution_r
 	*execution_result = OK;
 	*error_offset     = 0;
 
-	CommandBufferState state {};
-	if (!TryGetCommandBufferState(command_buffer, &state)) {
-		return LibKernel::KERNEL_ERROR_EFAULT;
-	}
+	*blocked = false;
 
 	enum class CommandKind {
 		ReadFile,
 		KernelEvent,
 		WriteAddress,
 		AmmMap,
+		WaitAddress,
 	};
 
 	struct OrderedCommand {
@@ -1407,13 +1374,34 @@ static int ExecuteAprCommandBuffer(uint64_t command_buffer, int32_t* execution_r
 			ordered.push_back({state.amm_map_commands[i].record_offset, CommandKind::AmmMap, i});
 		}
 	}
+	for (size_t i = 0; i < state.wait_address_commands.size(); ++i) {
+		if (state.wait_address_commands[i].record_offset < state.write_offset) {
+			ordered.push_back({state.wait_address_commands[i].record_offset, CommandKind::WaitAddress, i});
+		}
+	}
 
 	std::sort(ordered.begin(), ordered.end(), [](const OrderedCommand& a, const OrderedCommand& b) {
 		return a.record_offset < b.record_offset;
 	});
 
 	for (const auto& entry: ordered) {
+		if (entry.record_offset < *cursor) { continue; }
 		switch (entry.kind) {
+			case CommandKind::WaitAddress: {
+				const auto& command = state.wait_address_commands[entry.index];
+				const auto value = std::atomic_ref(*reinterpret_cast<uint64_t*>(command.address)).load(std::memory_order_acquire);
+				bool ready = false;
+				switch (command.comparison) {
+					case 0: ready = value == command.reference; break;
+					case 1: ready = value > command.reference; break;
+					case 2: ready = value < command.reference; break;
+					case 3: ready = value != command.reference; break;
+					case 4: ready = std::bit_cast<int64_t>(value - command.reference) >= 0; break;
+					case 5: ready = std::bit_cast<int64_t>(value) > std::bit_cast<int64_t>(command.reference); break;
+					case 6: ready = std::bit_cast<int64_t>(value) < std::bit_cast<int64_t>(command.reference); break;
+				}
+				if (!ready) { *blocked = true; return OK; }
+			} break;
 			case CommandKind::ReadFile: {
 				const auto& command = state.read_file_commands[entry.index];
 				std::string host_path;
@@ -1456,7 +1444,8 @@ static int ExecuteAprCommandBuffer(uint64_t command_buffer, int32_t* execution_r
 			} break;
 			case CommandKind::WriteAddress: {
 				const auto& command = state.write_address_commands[entry.index];
-				if (!AprShared::WriteGuest(command.address, command.value)) {
+				if (!AprShared::IsValidGuestRange(command.address, sizeof(uint64_t), true) ||
+				    command.address % std::atomic_ref<uint64_t>::required_alignment != 0) {
 					LOGF("\tAMPR submit write-address failed: address=0x%016" PRIx64
 					     " value=0x%016" PRIx64 "\n",
 					     command.address, command.value);
@@ -1464,6 +1453,7 @@ static int ExecuteAprCommandBuffer(uint64_t command_buffer, int32_t* execution_r
 					*error_offset     = static_cast<uint32_t>(command.record_offset);
 					return OK;
 				}
+				std::atomic_ref(*reinterpret_cast<uint64_t*>(command.address)).store(command.value, std::memory_order_release);
 			} break;
 			case CommandKind::AmmMap: {
 				const auto& command = state.amm_map_commands[entry.index];
@@ -1487,9 +1477,134 @@ static int ExecuteAprCommandBuffer(uint64_t command_buffer, int32_t* execution_r
 				}
 			} break;
 		}
+		*cursor = entry.record_offset + 1;
 	}
 
 	return OK;
+}
+
+class SubmissionQueue {
+	struct Pending {
+		CommandBufferState state;
+		uint32_t id = 0;
+		uint64_t cursor = 0;
+		bool retain_id = false;
+		bool blocked = false;
+	};
+	std::mutex m_mutex;
+	std::condition_variable m_changed;
+	std::map<uint64_t, std::deque<Pending>> m_queues;
+	bool m_stopped = false;
+	std::jthread m_worker;
+
+	static void Complete(Pending& item, int32_t result, uint32_t offset) {
+		uint64_t result_address = 0;
+		{
+			std::scoped_lock lock(AprShared::g_mutex);
+			const auto it = AprShared::g_submissions.find(item.id);
+			if (it != AprShared::g_submissions.end()) { result_address = it->second.result; }
+		}
+		const int written = AprShared::WriteResult(reinterpret_cast<void*>(result_address), result, offset);
+		AprShared::SetSubmissionResult(item.id, written == OK ? result : written, offset);
+		if (!item.retain_id) { AprShared::CompleteSubmission(item.id, nullptr); }
+	}
+	void Run(std::stop_token stop) {
+		std::unique_lock lock(m_mutex);
+		while (!stop.stop_requested()) {
+			auto selected = std::find_if(m_queues.begin(), m_queues.end(), [](const auto& queue) {
+				return !queue.second.empty() && !queue.second.front().blocked;
+			});
+			if (selected == m_queues.end()) {
+				// CPU fence stores do not signal this CV; retry only blocked heads periodically.
+				const auto pending = [this] {
+					return std::any_of(m_queues.begin(), m_queues.end(), [](const auto& queue) {
+						return !queue.second.empty();
+					});
+				};
+				if (pending()) {
+					m_changed.wait_for(lock, std::chrono::milliseconds(1));
+				} else {
+					m_changed.wait(lock, [&] { return stop.stop_requested() || pending(); });
+				}
+				for (auto& [priority, queue] : m_queues) {
+					if (!queue.empty()) { queue.front().blocked = false; }
+				}
+				continue;
+			}
+			const auto priority = selected->first;
+			auto item = std::move(selected->second.front());
+			selected->second.pop_front();
+			lock.unlock();
+			int32_t result = OK;
+			uint32_t offset = 0;
+			try {
+				const int status = ExecuteAprCommandBuffer(item.state, &item.cursor, &item.blocked, &result, &offset);
+				if (status != OK) { result = status; item.blocked = false; }
+			} catch (const std::exception&) {
+				result = LibKernel::KERNEL_ERROR_EIO;
+				offset = static_cast<uint32_t>(item.cursor);
+				item.blocked = false;
+				LOGF("AMPR async execution failed: submission=%u offset=%u result=0x%08x\n",
+				     item.id, offset, static_cast<uint32_t>(result));
+			}
+			if (!item.blocked) { Complete(item, result, offset); }
+			lock.lock();
+			if (item.blocked) {
+				m_queues[priority].push_front(std::move(item));
+			} else {
+				// A producer may have released a previously blocked queue head.
+				for (auto& [key, queue] : m_queues) {
+					if (!queue.empty()) { queue.front().blocked = false; }
+				}
+			}
+		}
+		for (auto& [priority, queue] : m_queues) {
+			for (auto& item : queue) { Complete(item, LibKernel::KERNEL_ERROR_ECANCELED, 0); }
+		}
+		m_queues.clear();
+	}
+public:
+	SubmissionQueue() : m_worker([this](std::stop_token stop) { Run(stop); }) {}
+	~SubmissionQueue() { Stop(); }
+	void Stop() {
+		// Fatal reports on the worker must not try to join or lock their own queue.
+		if (m_worker.get_id() == std::this_thread::get_id()) {
+			m_worker.request_stop();
+			return;
+		}
+		{
+			std::scoped_lock lock(m_mutex);
+			m_stopped = true;
+			m_worker.request_stop();
+			m_changed.notify_all();
+		}
+		if (m_worker.joinable() && m_worker.get_id() != std::this_thread::get_id()) { m_worker.join(); }
+	}
+	int Submit(CommandBufferState state, uint64_t priority, uint64_t result, uint32_t* out_id) {
+		std::scoped_lock lock(m_mutex);
+		if (m_stopped) { return LibKernel::KERNEL_ERROR_ECANCELED; }
+		const auto id = AprShared::AllocateSubmissionId(0, result);
+		if (out_id != nullptr) { *out_id = id; }
+		m_queues[priority].push_back({std::move(state), id, 0, out_id != nullptr, false});
+		m_changed.notify_one();
+		return OK;
+	}
+};
+
+static SubmissionQueue& GetSubmissionQueue() {
+	static SubmissionQueue queue;
+	return queue;
+}
+
+static int SubmitAsync(uint64_t command_buffer, uint64_t priority, uint64_t result, uint32_t* out_id) {
+	if (command_buffer == 0 ||
+	    (result != 0 && !AprShared::IsValidGuestRange(result, sizeof(AprShared::ResultBuffer), true)) ||
+	    (out_id != nullptr && !AprShared::IsValidGuestRange(reinterpret_cast<uint64_t>(out_id), sizeof(*out_id), true))) {
+		return LibKernel::KERNEL_ERROR_EINVAL;
+	}
+	CommandBufferState state;
+	if (!TryGetCommandBufferState(command_buffer, &state)) { return LibKernel::KERNEL_ERROR_EFAULT; }
+	return GetSubmissionQueue().Submit(std::move(state), priority, result, out_id);
 }
 
 static bool AdvanceCommandBuffer(uint64_t command_buffer, uint64_t record_size) {
@@ -2042,11 +2157,27 @@ static int KYTY_SYSV_ABI CommandBufferPopMarker(void* command_buffer) {
 	return AppendNoOpCommand(command_buffer, sizeof(uint32_t));
 }
 
-static int KYTY_SYSV_ABI CommandBufferWaitOnAddress(void* command_buffer, volatile uint64_t*,
-                                                    uint64_t, uint8_t, uint8_t) {
-	PRINT_NAME();
-
-	return AppendNoOpCommand(command_buffer, 0x20);
+static int KYTY_SYSV_ABI CommandBufferWaitOnAddress(void* command_buffer, volatile uint64_t* address,
+                                                    uint64_t reference, uint8_t comparison, uint8_t) {
+    PRINT_NAME();
+    const auto addr = reinterpret_cast<uint64_t>(address);
+    if (command_buffer == nullptr || comparison > 6 ||
+        !AprShared::IsValidGuestRange(addr, sizeof(uint64_t)) ||
+        addr % std::atomic_ref<uint64_t>::required_alignment != 0) {
+        return LibKernel::KERNEL_ERROR_EINVAL;
+    }
+    std::scoped_lock lock(g_command_buffer_mutex);
+    CommandBufferIterator it;
+    const auto header = reinterpret_cast<uint64_t>(command_buffer);
+    if (!GetOrCreateCommandBufferStateLocked(header, &it) ||
+        !EnsureCommandBufferRecordSpace(header, &it->second, 0x20)) {
+        return LibKernel::KERNEL_ERROR_EBUSY;
+    }
+    auto& state = it->second;
+    const auto offset = state.write_offset;
+    std::memset(reinterpret_cast<void*>(state.buffer + offset), 0, 0x20);
+    state.wait_address_commands.push_back({offset, addr, reference, comparison});
+    return CommitCommandBufferRecord(header, &state, 0x20) ? OK : LibKernel::KERNEL_ERROR_EFAULT;
 }
 
 static int KYTY_SYSV_ABI CommandBufferWaitOnCounter(void* command_buffer, uint8_t, uint8_t,
@@ -2476,74 +2607,24 @@ static int KYTY_SYSV_ABI AmmSetPageTablePoolOccupancyNotificationThreshold(uint3
 	return OK;
 }
 
-static int KYTY_SYSV_ABI AmmSubmitCommandBuffer(void* command_buffer_base, uint32_t, uint32_t) {
-	PRINT_NAME();
-
-	if (command_buffer_base == nullptr) {
-		return LibKernel::KERNEL_ERROR_EINVAL;
-	}
-
-	int32_t  execution_result = OK;
-	uint32_t error_offset     = 0;
-	return ExecuteAprCommandBuffer(reinterpret_cast<uint64_t>(command_buffer_base),
-	                               &execution_result, &error_offset);
+static int KYTY_SYSV_ABI AmmSubmitCommandBuffer(void* command_buffer_base, uint32_t, uint32_t priority) {
+    PRINT_NAME();
+    return SubmitAsync(reinterpret_cast<uint64_t>(command_buffer_base), priority, 0, nullptr);
 }
 
 static int KYTY_SYSV_ABI AmmSubmitCommandBufferAndGetId(void* command_buffer_base, uint32_t,
-                                                        uint32_t, uint32_t* out_submission_id) {
-	PRINT_NAME();
-
-	if (command_buffer_base == nullptr || out_submission_id == nullptr) {
-		return LibKernel::KERNEL_ERROR_EINVAL;
-	}
-
-	const auto command_buffer_addr = reinterpret_cast<uint64_t>(command_buffer_base);
-	const auto id                  = AprShared::AllocateSubmissionId(command_buffer_addr, 0);
-
-	int32_t  execution_result = OK;
-	uint32_t error_offset     = 0;
-	auto     submit_result =
-	    ExecuteAprCommandBuffer(command_buffer_addr, &execution_result, &error_offset);
-	if (submit_result != OK) {
-		return submit_result;
-	}
-	AprShared::SetSubmissionResult(id, execution_result, error_offset);
-
-	if (!AprShared::WriteGuest(reinterpret_cast<uint64_t>(out_submission_id), id)) {
-		return LibKernel::KERNEL_ERROR_EFAULT;
-	}
-
-	return OK;
+                                                        uint32_t priority, uint32_t* out_submission_id) {
+    PRINT_NAME();
+    if (out_submission_id == nullptr) { return LibKernel::KERNEL_ERROR_EINVAL; }
+    return SubmitAsync(reinterpret_cast<uint64_t>(command_buffer_base), priority, 0, out_submission_id);
 }
 
 static int KYTY_SYSV_ABI AmmSubmitCommandBufferAndGetResult(void* command_buffer_base, uint32_t,
-                                                            uint32_t, void* result,
+                                                            uint32_t priority, void* result,
                                                             uint32_t* out_submission_id) {
-	PRINT_NAME();
-
-	if (command_buffer_base == nullptr) {
-		return LibKernel::KERNEL_ERROR_EINVAL;
-	}
-
-	const auto command_buffer_addr = reinterpret_cast<uint64_t>(command_buffer_base);
-	const auto id =
-	    AprShared::AllocateSubmissionId(command_buffer_addr, reinterpret_cast<uint64_t>(result));
-
-	int32_t  execution_result = OK;
-	uint32_t error_offset     = 0;
-	auto     submit_result =
-	    ExecuteAprCommandBuffer(command_buffer_addr, &execution_result, &error_offset);
-	if (submit_result != OK) {
-		return submit_result;
-	}
-	AprShared::SetSubmissionResult(id, execution_result, error_offset);
-
-	if (out_submission_id != nullptr &&
-	    !AprShared::WriteGuest(reinterpret_cast<uint64_t>(out_submission_id), id)) {
-		return LibKernel::KERNEL_ERROR_EFAULT;
-	}
-
-	return AprShared::WriteResult(result, execution_result, error_offset);
+    PRINT_NAME();
+    return SubmitAsync(reinterpret_cast<uint64_t>(command_buffer_base), priority,
+                       reinterpret_cast<uint64_t>(result), out_submission_id);
 }
 
 static int KYTY_SYSV_ABI AmmWaitCommandBufferCompletion(uint32_t submission_id) {
@@ -2661,5 +2742,9 @@ LIB_DEFINE(InitAmpr_1) {
 }
 
 } // namespace LibAmpr
+
+void ShutdownAmpr() {
+	LibAmpr::Ampr::GetSubmissionQueue().Stop();
+}
 
 } // namespace Libs
