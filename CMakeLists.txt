@@ -756,6 +756,10 @@ if(BUILD_TESTING)
 		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --hardware-buffer-bounds)
 	add_test(NAME gpu_command_lane
 		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --gpu-command-lane-only)
+	add_test(NAME gpu_suspend_point
+		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --suspend-point-only)
+	add_test(NAME shader_wave64
+		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --wave64-only)
 	add_test(NAME pm4_context_state
 		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --context-state-only)
 	add_test(NAME gpu_tiler

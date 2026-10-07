@@ -2966,6 +2966,12 @@ public:
   void CheckGpuSuspendPoint() {
     constexpr const char *name = "GpuSuspendPoint";
     EnsureRuntimeContext();
+    const auto previous_lead = Config::GetGpuFramesAhead();
+    Config::ConfigOptions lead;
+    lead.printf_direction = Config::LogDirection::Silent;
+    lead.label_flush_interval_us = 0;
+    lead.gpu_frames_ahead = 1;
+    Config::Load(lead);
     auto &context = Renderer();
     context.InitializeGpu(nullptr);
     auto &gpu = context.GetGpu();
@@ -3186,6 +3192,8 @@ public:
     m_runtime_context.device.destroySemaphore(gate, nullptr);
     Require(name, "shutdown native completion", !shutdown_overtook_native,
             "shutdown returned while the suspend point was still executing");
+    lead.gpu_frames_ahead = previous_lead;
+    Config::Load(lead);
     std::printf("[host]    %-32s ok\n", name);
   }
 
@@ -3331,6 +3339,37 @@ public:
               "failed to release the blocked GPU timeline");
       no_gpu_wait.join();
       gpu.SendCommandSync([&] { gpu_scheduler.Finish(); });
+      // Zero lead remains a native completion barrier, including when two
+      // callers insert boundaries concurrently and consume shared queue marks.
+      gpu.SendCommandSync([&] {
+        processor->BufferInit();
+        SubmitInfo blocked_submit;
+        blocked_submit.AddWait(blocked_timeline, 2);
+        gpu_scheduler.Flush(blocked_submit);
+      });
+      std::counting_semaphore<2> zero_entered{0};
+      std::counting_semaphore<2> zero_returned{0};
+      const auto zero_boundary = [&] {
+        zero_entered.release();
+        gpu.SuspendPoint();
+        zero_returned.release();
+      };
+      std::jthread zero_first(zero_boundary);
+      std::jthread zero_second(zero_boundary);
+      zero_entered.acquire();
+      zero_entered.acquire();
+      const bool zero_waited_native =
+          !zero_returned.try_acquire_for(std::chrono::milliseconds(100));
+      signal_info.value = 2;
+      Require("GpuCommandLane", "zero-lead timeline signal",
+              m_runtime_context.device.signalSemaphore(&signal_info) == vk::Result::eSuccess,
+              "failed to release zero-lead GPU work");
+      zero_first.join();
+      zero_second.join();
+      gpu.SendCommandSync([&] { gpu_scheduler.Finish(); });
+      Require("GpuCommandLane", "zero-lead native completion",
+              zero_waited_native,
+              "a concurrent zero-lead suspend point returned before native completion");
       m_runtime_context.device.destroySemaphore(blocked_timeline, nullptr);
       Require("GpuCommandLane", "nonblocking GPU packets",
               parser_did_not_wait_gpu && parser_kept_nonblocking_boundaries,
@@ -16519,8 +16558,8 @@ public:
       const vk::BufferCopy copy{result.offset, offset, result.size};
       scheduler.Current().Handle().copyBuffer(result.buffer, scratch_output.buffer, 1, &copy);
     };
-    // Keep all four conversions in flight to check growth, overwrite ordering,
-    // the requested span on reuse, and two simultaneously live workspaces.
+    // Keep all four conversions in flight. Pool entries are released only after
+    // their scheduler tick completes; live workspaces must remain distinct.
     const auto first = tile_manager.SwapBgra16({scratch_input.buffer, 0, 8});
     copy_scratch(first, 0);
     const auto grown = tile_manager.SwapBgra16({scratch_input.buffer, 0, 32});
@@ -16530,9 +16569,11 @@ public:
     const auto paired = tile_manager.SwapBgra16(reused);
     copy_scratch(paired, 48);
     Require(name, "scratch workspace reuse",
-            first.buffer != grown.buffer && grown.buffer == reused.buffer &&
-                reused.buffer != paired.buffer && reused.size == 8 && paired.size == 8,
-            "scratch growth, input exclusion, or requested span was lost");
+            first.buffer != grown.buffer && first.buffer != reused.buffer &&
+                first.buffer != paired.buffer && grown.buffer != reused.buffer &&
+                grown.buffer != paired.buffer && reused.buffer != paired.buffer &&
+                first.size == 8 && grown.size == 32 && reused.size == 8 && paired.size == 8,
+            "in-flight scratch isolation or requested span was lost");
     host_barrier(scratch_output.buffer, scratch_output.size,
                     vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferWrite);
     scheduler.Finish();
@@ -37139,8 +37180,9 @@ void CheckPm4NativeTargetGeometryRegisters(RenderContext &renderer) {
 
   // Removed GCN shader resource/checksum/queue registers. Numeric offsets keep
   // this check independent of the deleted legacy names.
-  constexpr std::array<uint32_t, 19> legacy_shader_slots{
-      0x000u, 0x001u, 0x002u, 0x003u, 0x030u, 0x0b0u, 0x0bcu, 0x130u,
+  // 0x002 and 0x003 are live native PS user-data address registers, not holes.
+  constexpr std::array<uint32_t, 17> legacy_shader_slots{
+      0x000u, 0x001u, 0x030u, 0x0b0u, 0x0bcu, 0x130u,
       0x14au, 0x14bu, 0x20eu, 0x20fu, 0x210u, 0x211u, 0x216u, 0x217u,
       0x219u, 0x21au, 0x27du,
   };
@@ -37173,6 +37215,28 @@ void CheckPm4NativeTargetGeometryRegisters(RenderContext &renderer) {
       g_hw_sh_indirect_func[Pm4::SPI_SHADER_PACE_ID_PS] != nullptr &&
       g_hw_sh_indirect_func[Pm4::SPI_SHADER_PACE_ID_GS] != nullptr &&
       g_hw_sh_indirect_func[Pm4::COMPUTE_PACE_ID] != nullptr;
+  const bool ps_address_handlers =
+      g_hw_sh_func[Pm4::SPI_SHADER_USER_DATA_ADDR_LO_PS] != nullptr &&
+      g_hw_sh_func[Pm4::SPI_SHADER_USER_DATA_ADDR_HI_PS] != nullptr &&
+      g_hw_sh_indirect_func[Pm4::SPI_SHADER_USER_DATA_ADDR_LO_PS] != nullptr &&
+      g_hw_sh_indirect_func[Pm4::SPI_SHADER_USER_DATA_ADDR_HI_PS] != nullptr;
+  Require("Pm4NativeTargetGeometry", "native PS address handlers", ps_address_handlers,
+          "native PS user-data address registers have no dispatch handler");
+  std::array<uint32_t, 4> ps_address_packet{
+      KYTY_PM4(4, Pm4::IT_SET_SH_REG, Pm4::R_ZERO),
+      Pm4::SPI_SHADER_USER_DATA_ADDR_LO_PS, 0x12345678u, 0x9abcdef0u};
+  Pm4Execution ps_address_execution;
+  const bool ps_address_packet_complete =
+      packet.Process(ps_address_execution, ps_address_packet) == Pm4ProcessResult::Complete;
+  g_hw_sh_indirect_func[Pm4::SPI_SHADER_USER_DATA_ADDR_HI_PS](
+      indirect, Pm4::SPI_SHADER_USER_DATA_ADDR_HI_PS, 0x9abcdef0u);
+  g_hw_sh_indirect_func[Pm4::SPI_SHADER_USER_DATA_ADDR_LO_PS](
+      indirect, Pm4::SPI_SHADER_USER_DATA_ADDR_LO_PS, 0x12345678u);
+  Require("Pm4NativeTargetGeometry", "native PS user-data address",
+          ps_address_packet_complete &&
+              packet.GetShCtx().GetPs().ps_regs.user_data_addr == 0x9abcdef012345678ull &&
+              indirect.GetShCtx().GetPs().ps_regs.user_data_addr == 0x9abcdef012345678ull,
+          "direct or indirect PS user-data address words were lost");
   Require("Pm4NativeTargetGeometry", "legacy register holes",
           legacy_slots_are_unhandled && native_pace_slots_are_handled &&
               native_index_size_packet_complete,

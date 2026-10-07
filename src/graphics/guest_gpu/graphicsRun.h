@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
+#include <future>
 #include <memory>
 #include <set>
 #include <mutex>
@@ -38,7 +39,7 @@ public:
 	            std::span<const uint32_t> constant_commands);
 	void SubmitCompute(uint32_t queue, std::span<const uint32_t> commands);
 	void SubmitFlipPreparation(uint64_t request_id);
-	// Insert an ordered graphics drain; only a previous suspend point can block the caller.
+	// Insert an ordered graphics drain and bound queued frames by the configured lead.
 	void SuspendPoint();
 	// Wait for guest command processing, including all compute queues (not native GPU completion).
 	void              WaitForIdle();
@@ -68,9 +69,16 @@ private:
 		bool                      constant_complete = false;
 		bool                      blocked           = false;
 		uint64_t                  flip_request_id   = 0;
+		std::shared_ptr<std::promise<void>> suspend_complete;
+		std::shared_future<void>            suspend_ready;
 	};
 
-	void              Enqueue(Submission submission);
+	struct SuspendMark {
+		uint64_t                 sequence = 0;
+		std::shared_future<void> ready;
+	};
+
+	uint64_t          Enqueue(Submission submission);
 	// Waits until every submission enqueued before `sequence` has completed.
 	void              WaitForSubmissionsBefore(uint64_t sequence);
 	void              ProcessCommands();
@@ -91,15 +99,12 @@ private:
 	// Sequence numbers of submissions not yet completed, and the next one to assign.
 	std::set<uint64_t>                             m_outstanding;
 	uint64_t                                       m_next_sequence     = 1;
-	// Next sequence at each recent suspend point (GuestGpu::Done), oldest first.
-	std::deque<uint64_t>                           m_done_marks;
+	// Completion marks at recent suspend points, oldest first.
+	std::deque<SuspendMark>                        m_done_marks;
 	bool                                           m_processing        = false;
 	bool                                           m_accepting         = true;
 	bool                                           m_stopping          = false;
 	bool                                           m_shutdown_complete = false;
-	// Completion callbacks can outlive GuestGpu during renderer shutdown.
-	std::shared_ptr<std::binary_semaphore> m_suspend_point_ready =
-	    std::make_shared<std::binary_semaphore>(1);
 
 	std::unique_ptr<CommandProcessor>                                m_gfx_cp;
 	std::array<std::unique_ptr<CommandProcessor>, ComputeQueueCount> m_compute_cp;

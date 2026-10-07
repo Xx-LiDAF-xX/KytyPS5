@@ -1444,7 +1444,9 @@ TextureCache::MaterializeColorClearNow(ImageId id, const ImageDesc& desc,
 		if (DrainStats::Enabled() && range.Valid()) {
 			m_dcc_metadata_seen.Add(range.address, range.size);
 		}
-		if (range.size == 0 || desc.info.resources.levels != 1 || image.info.resources.levels != 1) {
+		// A one-mip descriptor can reuse a cached mip chain. Clear only its view;
+		// the allocation's additional mip levels do not make its metadata invalid.
+		if (range.size == 0 || desc.info.resources.levels != 1) {
 			return ColorClearOutcome::NoSlices;
 		}
 	}

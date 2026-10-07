@@ -237,6 +237,14 @@ bool GraphicContext::CreateImage(const vk::ImageCreateInfo& image_info, VulkanIm
 	                   &alloc_info, &native_image, &image.allocation, nullptr));
 	image.image = native_image;
 	if (result != vk::Result::eSuccess) {
+		LOGF("Vulkan image allocation failed: result=%d extent=%ux%ux%u format=%d "
+		     "layers=%u levels=%u usage=0x%x flags=0x%x samples=0x%x\n",
+		     static_cast<int>(result), image_info.extent.width, image_info.extent.height,
+		     image_info.extent.depth, static_cast<int>(image_info.format),
+		     image_info.arrayLayers, image_info.mipLevels,
+		     static_cast<vk::ImageUsageFlags::MaskType>(image_info.usage),
+		     static_cast<vk::ImageCreateFlags::MaskType>(image_info.flags),
+		     static_cast<uint32_t>(image_info.samples));
 		LogMemoryBudget();
 		return false;
 	}

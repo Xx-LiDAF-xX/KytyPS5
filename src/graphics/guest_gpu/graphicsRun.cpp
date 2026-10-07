@@ -250,10 +250,32 @@ void GuestGpu::SubmitFlipPreparation(uint64_t request_id) {
 void GuestGpu::SuspendPoint() {
 	Submission submission;
 	submission.type = SubmissionType::SuspendPoint;
-	Enqueue(std::move(submission));
+	submission.suspend_complete = std::make_shared<std::promise<void>>();
+	submission.suspend_ready = submission.suspend_complete->get_future().share();
+	const auto ready = submission.suspend_ready;
+	const auto sequence = Enqueue(std::move(submission)) + 1;
 
 	if (!IsGpuThread()) {
-		WaitForIdle();
+		SuspendMark wait;
+		{
+			Common::LockGuard lock(m_queue_mutex);
+			const auto ahead = Config::GetGpuFramesAhead();
+			while (m_done_marks.size() > ahead) {
+				wait = std::move(m_done_marks.front());
+				m_done_marks.pop_front();
+			}
+			if (ahead == 0) {
+				// Concurrent callers can remove our mark; each zero-lead caller
+				// must still observe its own boundary's native completion.
+				wait = {sequence, ready};
+			}
+		}
+		if (wait.ready.valid()) {
+			// Include older compute queues before observing this graphics boundary's
+			// native completion. Never hold the queue lock while either wait runs.
+			WaitForSubmissionsBefore(wait.sequence);
+			wait.ready.wait();
+		}
 	}
 
 	m_done_num++;
@@ -559,15 +581,20 @@ void CommandProcessor::DmaData(uint8_t engine, uint8_t dst_sel, uint8_t dst_cach
 	                        dst_gds, src_gds);
 }
 
-void GuestGpu::Enqueue(Submission submission) {
+uint64_t GuestGpu::Enqueue(Submission submission) {
 	EXIT_IF(submission.queue_id >= QueueCount);
 	Common::LockGuard lock(m_queue_mutex);
 	EXIT_IF(!m_accepting);
 	submission.sequence = m_next_sequence++;
+	const auto sequence = submission.sequence;
 	m_outstanding.insert(submission.sequence);
+	if (submission.type == SubmissionType::SuspendPoint) {
+		m_done_marks.push_back({submission.sequence + 1, submission.suspend_ready});
+	}
 	m_queues[submission.queue_id].push_back(std::move(submission));
 	m_submission_count++;
 	m_work_available.Signal();
+	return sequence;
 }
 
 void GuestGpu::WaitForIdle() {
@@ -836,7 +863,7 @@ bool GuestGpu::Process(Submission& submission) {
 		case SubmissionType::SuspendPoint:
 			cp.EmitGlobalBarrier();
 			m_renderer.GetCommandScheduler().DeferPriorityOperation(
-			    [ready = m_suspend_point_ready] { ready->release(); });
+			    [complete = submission.suspend_complete] { complete->set_value(); });
 			cp.BufferFlush();
 			cp.Reset();
 			break;

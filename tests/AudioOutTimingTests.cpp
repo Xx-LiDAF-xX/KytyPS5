@@ -169,6 +169,10 @@ double GetTimeMs() {
 namespace {
 using Audio = Libs::Audio::Audio;
 
+// The output policy primes a 60 ms queue: twelve 256-frame blocks at 48 kHz.
+// The twelfth submission anchors the sample clock; the thirteenth starts waiting.
+constexpr int UnpacedPrimingBlocks = 12;
+
 struct Fixture {
 	Audio                   audio;
 	std::array<float, 2048> pcm {};
@@ -197,15 +201,15 @@ struct Fixture {
 
 	void Prime(Audio::Id port) {
 		const auto start = now;
-		for (int i = 0; i < 8; i++) {
+		for (int i = 0; i < UnpacedPrimingBlocks; i++) {
 			Output(port);
 		}
-		Check(now == start, "priming was paced before the 40 ms cushion filled");
+		Check(now == start, "priming was paced before the 60 ms cushion filled");
 		Output(port);
 		Check(now - start >= 5333 && now - start <= 5334,
 		      "priming accumulated a multi-block deadline");
 		Drain(*streams.front());
-		Check(streams.front()->frames >= uint64_t {7 * 256} * 1000000,
+		Check(streams.front()->frames >= uint64_t {(UnpacedPrimingBlocks - 1) * 256} * 1000000,
 		      "first paced output consumed the priming cushion");
 	}
 };
@@ -242,7 +246,7 @@ void TestUnderrunAndStalledQueueRecovery() {
 	Check(clears == 1, "stalled playback queue was not cleared");
 	stalled          = false;
 	const auto start = now;
-	for (int i = 0; i < 7; i++) {
+	for (int i = 0; i < UnpacedPrimingBlocks - 1; i++) {
 		f.Output(port);
 	}
 	Check(now == start, "queue clear did not restart unpaced priming");
@@ -276,7 +280,7 @@ void TestAsyncDoesNotAccumulateDeadlines() {
 	Fixture    f;
 	const auto port  = f.Open();
 	const auto start = now;
-	for (int i = 0; i < 8; i++) {
+	for (int i = 0; i < UnpacedPrimingBlocks; i++) {
 		f.Output(port, false);
 	}
 	Check(now == start, "asynchronous output slept");
@@ -288,7 +292,7 @@ void TestAsyncDoesNotAccumulateDeadlines() {
 	now += 1000000;
 	f.Output(port, false);
 	const auto resumed = now;
-	for (int i = 0; i < 7; i++) {
+	for (int i = 0; i < UnpacedPrimingBlocks - 1; i++) {
 		f.Output(port);
 	}
 	Check(now == resumed, "async-to-blocking transition did not reset an emptied queue");
@@ -302,7 +306,7 @@ void TestSynchronizedBatchAndInactivePorts() {
 	Audio::OutputParam batch[] {
 	    {vibration, f.pcm.data()}, {main, f.pcm.data()}, {background, f.pcm.data()}};
 	const auto start = now;
-	for (int i = 0; i < 8; i++) {
+	for (int i = 0; i < UnpacedPrimingBlocks; i++) {
 		f.audio.AudioOutOutputs(batch, 3);
 	}
 	Check(now == start, "vibration fallback slowed a device-backed batch's priming");

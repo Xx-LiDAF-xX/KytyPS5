@@ -679,7 +679,7 @@ uint32_t EmitConditionRef(ValueEmitContext& ctx, const IR::Inst& inst) {
 	// Argument 1 is the branch's emitted condition; argument 0 is only for analysis.
 	if (ctx.other_half == nullptr) return ctx.Arg(inst, 1);
 	// A native scalar branch makes one decision for both emulated wave halves.
-	if (ctx.half != 0) return ctx.other_half->Def(IR::Value(&inst));
+	if (ctx.half != 0) return ctx.other_half->Result(inst);
 	const auto kind = inst.Flags<CFG::BranchCondition>();
 	if (kind == CFG::BranchCondition::ScalarInstruction) return ctx.Arg(inst, 1);
 	const auto ballot = ctx.Ballot(inst.Arg(1));
@@ -699,11 +699,20 @@ uint32_t EmitConditionRef(ValueEmitContext& ctx, const IR::Inst& inst) {
 	return result;
 }
 
-uint32_t EmitBallot(ValueEmitContext& ctx, IR::Value predicate) {
-	return ctx.Ballot(predicate);
+uint32_t EmitBallot(ValueEmitContext& ctx, const IR::Inst& inst) {
+	// Ballot already combines both guest halves. Its whole-wave result is
+	// identical in the second emulated half, so reuse the first half's SSA value.
+	if (ctx.half != 0) {
+		return ctx.other_half->Result(inst);
+	}
+	return ctx.Ballot(inst.Arg(0));
 }
 
 uint32_t EmitReadFirstLane(ValueEmitContext& ctx, const IR::Inst& inst) {
+	// The first active guest lane belongs to the whole wave, not each half.
+	if (ctx.half != 0) {
+		return ctx.other_half->Result(inst);
+	}
 	const auto ballot   = ctx.Ballot(inst.Arg(1));
 	const auto lane     = ctx.FirstLane(ballot);
 	const auto shuffled = ctx.Shuffle(inst, 0, lane);
