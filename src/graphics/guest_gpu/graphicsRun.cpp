@@ -63,7 +63,9 @@ GuestGpu::GuestGpu(RenderContext& renderer): m_renderer(renderer) {
 	GraphicsInitJmpTables();
 	m_gfx_cp = std::make_unique<CommandProcessor>(renderer, 0);
 	m_gfx_cp->Reset();
-	m_thread = std::jthread(ThreadRun, this);
+	m_active_threads = 2;
+	m_thread = std::jthread(ThreadRun, this, false);
+	m_compute_thread = std::jthread(ThreadRun, this, true);
 }
 
 GuestGpu::~GuestGpu() {
@@ -83,6 +85,9 @@ void GuestGpu::Shutdown() {
 	}
 	if (m_thread.joinable()) {
 		m_thread.join();
+	}
+	if (m_compute_thread.joinable()) {
+		m_compute_thread.join();
 	}
 	m_shutdown_complete = true;
 }
@@ -434,15 +439,18 @@ void GuestGpu::Enqueue(Submission submission) {
 void GuestGpu::WaitForIdle() {
 	EXIT_IF(IsGpuThread() || CommandScheduler::InDeferredOperation());
 	Common::LockGuard lock(m_queue_mutex);
-	while (m_processing || !m_commands.empty() || m_submission_count != 0) {
+	while (m_active_threads > 0 || !m_commands.empty() || m_submission_count != 0) {
 		m_idle.Wait(&m_queue_mutex);
 	}
 }
 
-void GuestGpu::ThreadRun(void* data) {
-	auto* gpu = static_cast<GuestGpu*>(data);
+void GuestGpu::ThreadRun(GuestGpu* gpu, bool is_compute) {
 	EXIT_IF(gpu == nullptr);
-	KYTY_PROFILER_THREAD("Thread_Gpu");
+	if (is_compute) {
+		KYTY_PROFILER_THREAD("Thread_Compute");
+	} else {
+		KYTY_PROFILER_THREAD("Thread_Gpu");
+	}
 	g_gpu_thread = true;
 	g_gpu_state  = gpu;
 
@@ -454,49 +462,60 @@ void GuestGpu::ThreadRun(void* data) {
 		{
 			Common::LockGuard lock(gpu->m_queue_mutex);
 			while (gpu->m_commands.empty() && gpu->m_submission_count == 0 && !gpu->m_stopping) {
-				gpu->m_processing = false;
-				gpu->m_idle.Signal();
+				gpu->m_active_threads--;
+				if (gpu->m_active_threads == 0 && gpu->m_commands.empty() && gpu->m_submission_count == 0) {
+					gpu->m_idle.SignalAll();
+				}
 				gpu->m_work_available.Wait(&gpu->m_queue_mutex);
+				gpu->m_active_threads++;
 			}
 			if (gpu->m_stopping && gpu->m_commands.empty() && gpu->m_submission_count == 0) {
-				gpu->m_processing = false;
-				gpu->m_idle.SignalAll();
+				gpu->m_active_threads--;
+				if (gpu->m_active_threads == 0 && gpu->m_commands.empty() && gpu->m_submission_count == 0) {
+					gpu->m_idle.SignalAll();
+				}
 				should_stop = true;
-			} else if (!gpu->m_commands.empty()) {
+			} else if (!is_compute && !gpu->m_commands.empty()) {
 				command = std::move(gpu->m_commands.front());
 				gpu->m_commands.pop_front();
 				EXIT_IF(gpu->m_pending_commands.fetch_sub(1, std::memory_order_acq_rel) == 0);
-				gpu->m_processing = true;
 			} else {
+				uint32_t start_q = is_compute ? 1 : 0;
+				uint32_t end_q = is_compute ? QueueCount : 1;
 				int selected_queue = -1;
-				for (uint32_t offset = 0; offset < QueueCount; offset++) {
-					const auto id = (gpu->m_next_queue + offset) % QueueCount;
+				uint32_t num_qs = end_q - start_q;
+				for (uint32_t offset = 0; offset < num_qs; offset++) {
+					const auto id = start_q + ((gpu->m_next_queue + offset) % num_qs);
 					if (!gpu->m_queues[id].empty() && !gpu->m_queues[id].front().blocked) {
 						selected_queue = static_cast<int>(id);
 						break;
 					}
 				}
 				if (selected_queue < 0) {
-					gpu->m_processing = false;
+					gpu->m_active_threads--;
 					gpu->m_work_available.WaitFor(&gpu->m_queue_mutex, 100);
-					for (auto& queue: gpu->m_queues) {
-						if (!queue.empty()) {
-							queue.front().blocked = false;
+					for (uint32_t q = start_q; q < end_q; ++q) {
+						if (!gpu->m_queues[q].empty()) {
+							gpu->m_queues[q].front().blocked = false;
 						}
 					}
+					gpu->m_active_threads++;
 					continue;
 				}
 				auto& queue = gpu->m_queues[static_cast<uint32_t>(selected_queue)];
 				submission  = std::move(queue.front());
 				queue.pop_front();
 				gpu->m_submission_count--;
-				gpu->m_next_queue = (static_cast<uint32_t>(selected_queue) + 1) % QueueCount;
-				gpu->m_processing = true;
+				if (num_qs > 0) {
+					gpu->m_next_queue = start_q + ((static_cast<uint32_t>(selected_queue) - start_q + 1) % num_qs);
+				}
 				has_submission    = true;
 			}
 		}
 		if (should_stop) {
-			gpu->m_gfx_cp->BufferWait();
+			if (!is_compute) {
+				gpu->m_gfx_cp->BufferWait();
+			}
 			g_gpu_state  = nullptr;
 			g_gpu_thread = false;
 			return;
@@ -507,8 +526,7 @@ void GuestGpu::ThreadRun(void* data) {
 			command();
 
 			Common::LockGuard lock(gpu->m_queue_mutex);
-			gpu->m_processing = false;
-			if (gpu->m_commands.empty() && gpu->m_submission_count == 0) {
+			if (gpu->m_active_threads == 1 && gpu->m_commands.empty() && gpu->m_submission_count == 0) {
 				gpu->m_idle.SignalAll();
 			}
 			continue;
@@ -523,14 +541,15 @@ void GuestGpu::ThreadRun(void* data) {
 			gpu->m_queues[submission.queue_id].push_front(std::move(submission));
 			gpu->m_submission_count++;
 		} else {
-			for (auto& queue: gpu->m_queues) {
-				if (!queue.empty()) {
-					queue.front().blocked = false;
+			uint32_t start_q = is_compute ? 1 : 0;
+			uint32_t end_q = is_compute ? QueueCount : 1;
+			for (uint32_t q = start_q; q < end_q; ++q) {
+				if (!gpu->m_queues[q].empty()) {
+					gpu->m_queues[q].front().blocked = false;
 				}
 			}
 		}
-		gpu->m_processing = false;
-		if (gpu->m_commands.empty() && gpu->m_submission_count == 0) {
+		if (gpu->m_active_threads == 1 && gpu->m_commands.empty() && gpu->m_submission_count == 0) {
 			gpu->m_idle.SignalAll();
 		}
 	}

@@ -71,7 +71,7 @@ private:
 	void              Enqueue(Submission submission);
 	void              ProcessCommands();
 	bool              Process(Submission& submission);
-	static void       ThreadRun(void* data);
+	static void       ThreadRun(GuestGpu* gpu, bool is_compute);
 	CommandProcessor& GetProcessor(uint32_t queue_id);
 
 	RenderContext&                                 m_renderer;
@@ -84,7 +84,7 @@ private:
 	std::atomic_uint32_t                           m_pending_commands {0};
 	uint32_t                                       m_next_queue        = 0;
 	uint32_t                                       m_submission_count  = 0;
-	bool                                           m_processing        = false;
+	int                                            m_active_threads    = 0;
 	bool                                           m_accepting         = true;
 	bool                                           m_stopping          = false;
 	bool                                           m_shutdown_complete = false;
@@ -98,6 +98,7 @@ private:
 	uint64_t        m_submit_id = 0;
 	std::atomic_int m_done_num  = 0;
 	std::jthread    m_thread;
+	std::jthread    m_compute_thread;
 
 	friend class CommandProcessor;
 };
