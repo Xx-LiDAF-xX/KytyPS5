@@ -331,10 +331,12 @@ struct PipelineCache::ProgramCache {
 		}
 
 		const auto user_data = std::span(params.user_data).first(params.user_data_count);
+		std::unique_lock lock(mutex);
 		lookup_key.stage           = stage;
 		lookup_key.hash            = params.hash;
 		lookup_key.user_data_count = params.user_data_count;
 		lookup_key.code_size       = static_cast<uint32_t>(params.code.size());
+		lookup_key.static_state.clear();
 		BuildStageStaticKey(input_info, lookup_key.static_state);
 		auto                                         entry = programs.find(lookup_key);
 		ShaderRecompiler::IR::SrtRuntime             runtime {
@@ -469,6 +471,7 @@ struct PipelineCache::ProgramCache {
 	}
 
 	std::unordered_map<ProgramKey, SourceEntry, ProgramKeyHash> programs;
+	mutable std::mutex                                          mutex;
 	ProgramKey                                                  lookup_key;
 	vk::Device                                                  device;
 	uint64_t                                                    next_shader_id = 0;
@@ -927,8 +930,11 @@ PipelineCache::Pipeline& PipelineCache::GetGraphicsPipeline(
 		}
 	}
 
-	if (auto iter = m_graphics_pipelines.find(key); iter != m_graphics_pipelines.end()) {
-		return *iter->second;
+	{
+		std::shared_lock lock(m_mutex);
+		if (auto iter = m_graphics_pipelines.find(key); iter != m_graphics_pipelines.end()) {
+			return *iter->second;
+		}
 	}
 
 	if (graphics_debug_dump_enabled()) {
@@ -950,8 +956,13 @@ PipelineCache::Pipeline& PipelineCache::GetGraphicsPipeline(
 	EXIT_NOT_IMPLEMENTED(cached->pipeline == nullptr);
 	EXIT_NOT_IMPLEMENTED(cached->pipeline_layout == nullptr);
 
+	std::unique_lock lock(m_mutex);
 	auto [iter, inserted] = m_graphics_pipelines.emplace(std::move(key), std::move(cached));
-	EXIT_IF(!inserted);
+	if (!inserted) {
+		m_graphics.device.destroyPipeline(cached->pipeline, nullptr);
+		m_graphics.device.destroyPipelineLayout(cached->pipeline_layout, nullptr);
+		m_graphics.device.destroyDescriptorSetLayout(cached->descriptor_set_layout, nullptr);
+	}
 
 	return *iter->second;
 }
@@ -963,9 +974,12 @@ PipelineCache::GetComputePipeline(const ShaderComputeInputInfo& input_info,
 
 	EXIT_IF(!compute_program);
 
-	if (auto iter = m_compute_pipelines.find(compute_program.id);
-	    iter != m_compute_pipelines.end()) {
-		return *iter->second;
+	{
+		std::shared_lock lock(m_mutex);
+		if (auto iter = m_compute_pipelines.find(compute_program.id);
+		    iter != m_compute_pipelines.end()) {
+			return *iter->second;
+		}
 	}
 
 	if (graphics_debug_dump_enabled()) {
@@ -978,8 +992,13 @@ PipelineCache::GetComputePipeline(const ShaderComputeInputInfo& input_info,
 	EXIT_NOT_IMPLEMENTED(cached->pipeline == nullptr);
 	EXIT_NOT_IMPLEMENTED(cached->pipeline_layout == nullptr);
 
+	std::unique_lock lock(m_mutex);
 	auto [iter, inserted] = m_compute_pipelines.emplace(compute_program.id, std::move(cached));
-	EXIT_IF(!inserted);
+	if (!inserted) {
+		m_graphics.device.destroyPipeline(cached->pipeline, nullptr);
+		m_graphics.device.destroyPipelineLayout(cached->pipeline_layout, nullptr);
+		m_graphics.device.destroyDescriptorSetLayout(cached->descriptor_set_layout, nullptr);
+	}
 
 	return *iter->second;
 }

@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <memory>
+#include <shared_mutex>
 #include <span>
 #include <type_traits>
 #include <unordered_map>
@@ -173,6 +174,7 @@ private:
 	std::unique_ptr<ProgramCache> m_program_cache;
 	vk::PipelineCache             m_driver_cache = nullptr;
 	std::filesystem::path         m_driver_cache_path;
+	mutable std::shared_mutex     m_mutex;
 	std::unordered_map<GraphicsPipelineKey, std::unique_ptr<Pipeline>, GraphicsPipelineKeyHash>
 	                                                        m_graphics_pipelines;
 	std::unordered_map<uint64_t, std::unique_ptr<Pipeline>> m_compute_pipelines;
