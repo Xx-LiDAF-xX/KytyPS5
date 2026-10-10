@@ -144,7 +144,7 @@ public:
 	Pipeline& GetComputePipeline(const ShaderComputeInputInfo& input_info,
 	                             const ShaderProgram&          compute_program);
 
-	Kyty::Graphics::Pipeline::TextureSyncManager& GetTextureSyncManager() { return m_texture_sync_manager; }
+	TextureSyncManager& GetTextureSyncManager() { return m_texture_sync_manager; }
 
 private:
 	struct ProgramCache;

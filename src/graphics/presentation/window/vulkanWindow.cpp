@@ -910,11 +910,37 @@ void WindowContext::CreateVulkan() {
 	inst_info.ppEnabledLayerNames =
 	    (r.enable_validation_layers ? r.required_layers.data() : nullptr);
 
-	const vk::Result result = vk::createInstance(&inst_info, nullptr, &graphic_ctx.instance);
+	vk::Result result = vk::createInstance(&inst_info, nullptr, &graphic_ctx.instance);
+	
+	if (result != vk::Result::eSuccess && r.enable_validation_layers) {
+		LOGF("Failed to create Vulkan instance with validation layers (result=%d). Retrying without validation...\n", static_cast<int>(result));
+		r.enable_validation_layers = false;
+		inst_info.pNext = nullptr;
+		inst_info.enabledLayerCount = 0;
+		inst_info.ppEnabledLayerNames = nullptr;
+		
+		std::vector<const char*> fallback_exts;
+		for (const char* ext : r.required_extensions) {
+			if (strcmp(ext, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) != 0 &&
+			    strcmp(ext, VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME) != 0) {
+				fallback_exts.push_back(ext);
+			}
+		}
+		r.required_extensions = fallback_exts;
+		inst_info.enabledExtensionCount = static_cast<uint32_t>(r.required_extensions.size());
+		inst_info.ppEnabledExtensionNames = r.required_extensions.data();
+		
+		result = vk::createInstance(&inst_info, nullptr, &graphic_ctx.instance);
+	}
+
 	switch (result) {
 		case vk::Result::eSuccess: break;
 		case vk::Result::eErrorIncompatibleDriver:
 			EXIT("Unable to find a compatible Vulkan Driver");
+		case vk::Result::eErrorExtensionNotPresent:
+			EXIT("Could not find a required Vulkan extension");
+		case vk::Result::eErrorLayerNotPresent:
+			EXIT("Validation layer not present; try disabling validation\n");
 		default: EXIT("Could not create a Vulkan instance (for unknown reasons)");
 	}
 	VULKAN_HPP_DEFAULT_DISPATCHER.init(graphic_ctx.instance);

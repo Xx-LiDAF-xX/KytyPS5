@@ -172,18 +172,7 @@ uint32_t EmitConvertU32F32(EmitterState& state, uint32_t arg0) {
 
 uint32_t EmitConvertF32F64(EmitterState& state, uint32_t arg0) {
 	const auto converted = Unary(state, spv::OpFConvert, TypeF32(state), arg0);
-	const auto source    = EmitNative<spv::OpCompositeExtract, IR::Type::U32>(
-	    state, Unary(state, spv::OpBitcast, TypeU32Vector(state, 2), arg0), 1u);
-	const auto exponent = EmitAndConstant(state, source, 0x7ff00000u);
-	const auto overflow =
-	    Binary(state, spv::OpLogicalAnd, TypeBool(state),
-	           EmitCompareU32Constant(state, spv::OpUGreaterThan, exponent, 0x47e00000u),
-	           EmitCompareU32Constant(state, spv::OpULessThan, exponent, 0x7ff00000u));
-	const auto clamped = EmitOrU32(state, EmitAndConstant(state, source, 0x80000000u),
-	                               ConstantU32(state, 0x7f7fffffu));
-	return EmitFlushF32DenormToSignedZero(
-	    state, Select(state, TypeF32(state), overflow,
-	                  Unary(state, spv::OpBitcast, TypeF32(state), clamped), converted));
+	return EmitFlushF32DenormToSignedZero(state, converted);
 }
 
 uint32_t EmitConvertF64F32(EmitterState& state, uint32_t arg0) {

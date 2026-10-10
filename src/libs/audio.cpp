@@ -5,6 +5,9 @@
 #include "common/logging/log.h"
 #include "common/threads.h"
 #include "kernel/pthread.h"
+
+#include <thread>
+
 #include "libs/audio_internal.h"
 #include "libs/controller.h"
 #include "libs/dualSenseHaptics.h"

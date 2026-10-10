@@ -5,7 +5,7 @@
 #include <unordered_map>
 #include <atomic>
 
-namespace Kyty::Graphics::Pipeline {
+namespace Libs::Graphics {
 
 class TextureSyncManager {
 public:
@@ -16,8 +16,19 @@ public:
     }
 
     void FlushToGPU(vk::CommandBuffer cmd, vk::Image image) {
-        std::shared_lock lock(m_sync_mutex);
-        if (m_dirty_images.contains(image)) {
+        bool needs_flush = false;
+        vk::ImageSubresourceRange range;
+        
+        {
+            std::shared_lock lock(m_sync_mutex);
+            auto it = m_dirty_images.find(image);
+            if (it != m_dirty_images.end()) {
+                needs_flush = true;
+                range = it->second;
+            }
+        }
+        
+        if (needs_flush) {
             // Dispatch a pipeline barrier to flush CPU caches to Device Local memory
             vk::ImageMemoryBarrier barrier;
             barrier.srcAccessMask = vk::AccessFlagBits::eHostWrite;
@@ -27,9 +38,9 @@ public:
             barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             barrier.image = image;
-            barrier.subresourceRange = m_dirty_images.at(image);
+            barrier.subresourceRange = range;
             
-            cmd.pipelineBarrier(vk::PipelineStageFlagBits::eHost, vk::PipelineStageFlagBits::eFragmentShader,
+            cmd.pipelineBarrier(vk::PipelineStageFlagBits::eHost, vk::PipelineStageFlagBits::eAllCommands,
                                 {}, nullptr, nullptr, barrier);
         }
     }
@@ -45,4 +56,4 @@ private:
     std::atomic<uint32_t> m_stale_readbacks{0};
 };
 
-} // namespace Kyty::Graphics::Pipeline
+} // namespace Libs::Graphics

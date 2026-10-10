@@ -738,21 +738,29 @@ void Translator::AddBranchCondition(const CFG::Graph& graph, const CFG::BasicBlo
                                     IR::Block& info) {
 	const auto native_condition = [&](CFG::BranchCondition kind) -> IR::U1 {
 		IR::U1 condition;
+		auto check_zero_64 = [&](IR::U32 lo, IR::U32 hi) {
+			return ir.LogicalAnd(ir.IEqual(lo, IR::U32(IR::Value(0u))),
+			                     ir.IEqual(hi, IR::U32(IR::Value(0u))));
+		};
+		auto check_nonzero_64 = [&](IR::U32 lo, IR::U32 hi) {
+			return ir.LogicalOr(ir.INotEqual(lo, IR::U32(IR::Value(0u))),
+			                    ir.INotEqual(hi, IR::U32(IR::Value(0u))));
+		};
 		switch (kind) {
 			case CFG::BranchCondition::Always: condition = IR::U1(IR::Value(true)); break;
 			case CFG::BranchCondition::SccZero: condition = ir.LogicalNot(ir.GetScc()); break;
 			case CFG::BranchCondition::SccNonZero: condition = ir.GetScc(); break;
-			case CFG::BranchCondition::VccZero: condition = ir.LogicalNot(ir.GetVcc()); break;
-			case CFG::BranchCondition::VccNonZero: condition = ir.GetVcc(); break;
-			case CFG::BranchCondition::ExecZero: condition = ir.LogicalNot(ir.GetExec()); break;
-			case CFG::BranchCondition::ExecNonZero: condition = ir.GetExec(); break;
+			case CFG::BranchCondition::VccZero: condition = check_zero_64(ir.GetVccLo(), ir.GetVccHi()); break;
+			case CFG::BranchCondition::VccNonZero: condition = check_nonzero_64(ir.GetVccLo(), ir.GetVccHi()); break;
+			case CFG::BranchCondition::ExecZero: condition = check_zero_64(ir.GetExecLo(), ir.GetExecHi()); break;
+			case CFG::BranchCondition::ExecNonZero: condition = check_nonzero_64(ir.GetExecLo(), ir.GetExecHi()); break;
 			case CFG::BranchCondition::ScalarInstruction:
 				EXIT_IF(instruction_branch_condition.IsEmpty());
 				condition = instruction_branch_condition;
 				break;
 			default: EXIT("block %u has an invalid native branch condition", source.id);
 		}
-		return IR::U1(ir.Emit(IR::ValueOpcode::ConditionRef, {condition}, kind));
+		return IR::U1(ir.Emit(IR::ValueOpcode::ConditionRef, {condition}, CFG::BranchCondition::ScalarInstruction));
 	};
 	const auto expression = [&](auto&& self, uint32_t index) -> IR::U1 {
 		const auto& value = graph.expressions.at(index);

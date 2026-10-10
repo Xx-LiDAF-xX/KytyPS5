@@ -107,7 +107,7 @@ void GuestGpu::SendCommand(Common::UniqueFunction<void>&& command) {
 	EXIT_IF(!m_accepting);
 	m_commands.push_back(std::move(command));
 	m_pending_commands.fetch_add(1, std::memory_order_release);
-	m_work_available.Signal();
+	m_work_available.SignalAll();
 }
 
 void GuestGpu::ProcessCommands() {
@@ -433,7 +433,7 @@ void GuestGpu::Enqueue(Submission submission) {
 	EXIT_IF(!m_accepting);
 	m_queues[submission.queue_id].push_back(std::move(submission));
 	m_submission_count++;
-	m_work_available.Signal();
+	m_work_available.SignalAll();
 }
 
 void GuestGpu::WaitForIdle() {
