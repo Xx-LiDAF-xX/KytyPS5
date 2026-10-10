@@ -14,6 +14,8 @@
 #include <shared_mutex>
 #include <span>
 #include <type_traits>
+
+#include "textureSyncManager.h"
 #include <unordered_map>
 
 namespace Libs::Graphics {
@@ -142,6 +144,8 @@ public:
 	Pipeline& GetComputePipeline(const ShaderComputeInputInfo& input_info,
 	                             const ShaderProgram&          compute_program);
 
+	Kyty::Graphics::Pipeline::TextureSyncManager& GetTextureSyncManager() { return m_texture_sync_manager; }
+
 private:
 	struct ProgramCache;
 
@@ -178,6 +182,7 @@ private:
 	std::unordered_map<GraphicsPipelineKey, std::unique_ptr<Pipeline>, GraphicsPipelineKeyHash>
 	                                                        m_graphics_pipelines;
 	std::unordered_map<uint64_t, std::unique_ptr<Pipeline>> m_compute_pipelines;
+	TextureSyncManager            m_texture_sync_manager;
 
 	void InitializeDriverCache();
 };
