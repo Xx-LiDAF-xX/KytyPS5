@@ -101,6 +101,17 @@ struct GraphicContext {
 	[[nodiscard]] bool     CreateImage(const vk::ImageCreateInfo& info, VulkanImage& image);
 	void                   DeleteImage(VulkanImage& image);
 
+	[[nodiscard]] bool IsUMA() const {
+		for (uint32_t i = 0; i < physical_device_memory_properties.memoryTypeCount; i++) {
+			auto flags = physical_device_memory_properties.memoryTypes[i].propertyFlags;
+			if ((flags & vk::MemoryPropertyFlagBits::eDeviceLocal) &&
+				(flags & vk::MemoryPropertyFlagBits::eHostVisible)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	uint32_t screen_width  = 0;
 	uint32_t screen_height = 0;
 
