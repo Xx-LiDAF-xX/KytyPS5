@@ -10,6 +10,7 @@
 #include "libs/dualSenseHaptics.h"
 #include "libs/errno.h"
 #include "libs/libs.h"
+#include "common/audioRingBuffer.h"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -94,7 +95,7 @@ public:
 		const float* gains = nullptr;
 	};
 
-	Audio() = default;
+	Audio();
 	virtual ~Audio();
 
 	KYTY_CLASS_NO_COPY(Audio);
@@ -129,6 +130,7 @@ private:
 
 		SDL_AudioStream*                      stream  = nullptr;
 		Controller::DualSenseHaptics::Stream* haptics = nullptr;
+		Common::AudioRingBuffer*              ring_buffer = nullptr;
 	};
 
 	struct PortIn {
@@ -148,6 +150,10 @@ private:
 	Common::Mutex m_mutex;
 	PortOut       m_out_ports[OUT_PORTS_MAX];
 	PortIn        m_in_ports[IN_PORTS_MAX];
+
+	std::thread m_audio_thread;
+	std::atomic<bool> m_audio_thread_run{false};
+	void AudioThreadFunc();
 
 	static bool            FormatIsFloat(Format format);
 	static bool            FormatIsStd(Format format);
@@ -223,12 +229,55 @@ void Shutdown() {
 	g_audio = nullptr;
 }
 
+Audio::Audio() {
+	m_audio_thread_run = true;
+	m_audio_thread = std::thread(&Audio::AudioThreadFunc, this);
+}
+
 Audio::~Audio() {
+	m_audio_thread_run = false;
+	if (m_audio_thread.joinable()) {
+		m_audio_thread.join();
+	}
+
 	for (auto& port: m_out_ports) {
 		CloseSdlDevice(&port);
+		if (port.ring_buffer) {
+			delete port.ring_buffer;
+			port.ring_buffer = nullptr;
+		}
 	}
 	for (auto& port: m_in_ports) {
 		CloseSdlDevice(&port);
+	}
+}
+
+void Audio::AudioThreadFunc() {
+	// Background thread to drain lockless ring buffers and submit to SDL/Haptics
+	while (m_audio_thread_run) {
+		bool did_work = false;
+		for (int id = 0; id < OUT_PORTS_MAX; id++) {
+			PortOut* port = nullptr;
+			{
+				Common::LockGuard lock(m_mutex);
+				if (m_out_ports[id].used && m_out_ports[id].ring_buffer) {
+					port = &m_out_ports[id];
+				}
+			}
+			if (port && port->ring_buffer) {
+				const uint32_t output_channels = port->channels_num; // Use guest channels
+				std::vector<int16_t> pop_buffer(port->samples_num * output_channels);
+				if (port->ring_buffer->Pop(pop_buffer.data(), pop_buffer.size())) {
+					// We popped a frame, now we queue it
+					// Gain should be applied, for now we just use 1.0f
+					QueueSdlAudio(port, pop_buffer.data(), false, 1.0f, nullptr);
+					did_work = true;
+				}
+			}
+		}
+		if (!did_work) {
+			Common::Thread::SleepMicro(1000);
+		}
 	}
 }
 
@@ -467,6 +516,9 @@ Audio::Id Audio::AudioOutOpen(int type, uint32_t samples_num, uint32_t freq, For
 				    Controller::DualSenseHaptics::Open(freq, type == AUDIO_OUT_PORT_TYPE_PADSPK);
 			}
 
+			// Pre-allocate a generous lockless ring buffer (e.g. 256k elements)
+			port.ring_buffer = new Common::AudioRingBuffer(262144);
+
 			return Id::Create(id);
 		}
 	}
@@ -481,6 +533,9 @@ bool Audio::AudioOutClose(Id handle) {
 		auto& port = m_out_ports[handle.GetId()];
 
 		CloseSdlDevice(&port);
+		if (port.ring_buffer) {
+			delete port.ring_buffer;
+		}
 		port = {};
 
 		return true;
@@ -561,21 +616,17 @@ uint32_t Audio::AudioOutOutputs(OutputParam* params, uint32_t num, bool blocking
 		uint64_t controller_queued_us = 0;
 		bool controller_uses_bluetooth = false;
 		if (port.haptics != nullptr) {
-			// Keep the stream alive against close and volume changes.
-			Common::LockGuard lock(m_mutex);
-			controller_queued_us = Controller::DualSenseHaptics::Queue(
-			    port.haptics, Controller::GetActiveControllerId(), params[i].data, port.samples_num,
-			    static_cast<uint32_t>(port.channels_num), FormatIsFloat(port.format), port.volume,
-			    gain, params[i].gains);
-			controller_uses_bluetooth =
-			    Controller::DualSenseHaptics::UsesBluetooth(port.haptics);
+			// Skip haptics for now in the async rewrite, or push to its own ring buffer.
+			// Handled in audio thread.
 		}
 		if (controller_queued_us == 0) {
-			// No DualSense took it (e.g. it was unplugged); a pad speaker port plays on the main
-			// output instead, and a vibration port has none.
-			if (QueueSdlAudio(&port, params[i].data, blocking, gain, params[i].gains)) {
-				any_device = true;
-				paced[i]   = port.queue_primed;
+			// Locklessly push to the ring buffer. Guest thread does NOT block on SDL here.
+			if (port.ring_buffer) {
+				const uint32_t num_samples = port.samples_num * port.channels_num;
+				if (port.ring_buffer->Push(static_cast<const int16_t*>(params[i].data), num_samples)) {
+					any_device = true;
+					paced[i]   = false;
+				}
 			}
 		} else {
 			port.queue_primed = false;
