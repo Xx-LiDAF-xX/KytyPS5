@@ -54,6 +54,7 @@ struct ConfigOptions {
 	int32_t                gpu_index                   = -1;
 	bool                   fullscreen_enabled          = false;
 	bool                   hide_cursor_enabled         = false;
+	bool                   splash_enabled              = true;
 	bool                   vr_enabled                  = false;
 	bool                   amd_cpu_enabled             = false;
 	uint32_t               vblank_frequency            = 60;

@@ -11,6 +11,7 @@
 #include "common/subsystems.h"
 #include "common/systemInfo.h"
 #include "common/threads.h"
+#include "graphics/presentation/systemOverlay.h"
 #include "graphics/presentation/window.h"
 #include "kernel/fileSystem.h"
 #include "kernel/memory.h"
@@ -137,6 +138,9 @@ static void Init(const Config::ConfigOptions& cfg, const std::filesystem::path& 
 		    flexible_memory_size != 0) {
 			Libs::LibKernel::Memory::SetFlexibleMemorySize(flexible_memory_size);
 		}
+	}
+	if (cfg.splash_enabled) {
+		Libs::Graphics::InitializeSplashScreen(param_json.parent_path());
 	}
 
 	// Initialization order is explicit; destruction is automatic and reversed.

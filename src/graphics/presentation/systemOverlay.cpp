@@ -3,9 +3,12 @@
 #include <SDL3/SDL.h>
 
 #include "common/assert.h"
+#include "common/emulatorConfig.h"
+#include "common/file.h"
 #include "common/logging/log.h"
 #include "common/stringUtils.h"
 #include "graphics/host_gpu/graphicContext.h"
+#include "graphics/presentation/ddsImage.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "imgui_impl_vulkan.h"
@@ -13,6 +16,7 @@
 #include "libs/dialog.h"
 #include "libs/ime.h"
 #include "libs/imeDialog.h"
+#include "loader/systemContent.h"
 #include "stb_image.h"
 
 #include <algorithm>
@@ -23,6 +27,7 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <fmt/format.h>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -36,6 +41,8 @@
 namespace Libs::Graphics {
 
 namespace {
+
+using Clock = std::chrono::steady_clock;
 
 namespace CoreIme      = Libs::Ime;
 namespace DialogIme    = Libs::Dialog::ImeDialog;
@@ -194,6 +201,10 @@ struct TrophyNotification {
 std::mutex                     g_trophy_notification_mutex;
 std::deque<TrophyNotification> g_trophy_notifications;
 std::atomic<bool>              g_trophy_notification_active {false};
+std::array<std::filesystem::path, 2> g_splash_paths;
+std::atomic<bool>                    g_splash_active {false};
+std::atomic<Clock::duration::rep>    g_splash_hidden_at {0};
+bool                                 g_splash_fast = false;
 
 std::vector<std::string_view> WrapTrophyTitle(std::string_view text, float font_size, float width) {
 	std::vector<std::string_view> lines;
@@ -464,6 +475,29 @@ void CheckVulkanResult(VkResult result) {
 
 } // namespace
 
+void InitializeSplashScreen(const std::filesystem::path& sce_sys) {
+	const auto language = Config::GetConsoleLanguage();
+	for (size_t i = 0; i < g_splash_paths.size(); ++i) {
+		auto& path = g_splash_paths[i];
+		path       = sce_sys / fmt::format("pic{}_{:02}.dds", i + 1, language);
+		if (!Common::File::IsFileExisting(path)) {
+			path = sce_sys / fmt::format("pic{}.dds", i + 1);
+		}
+	}
+	int32_t attribute = 0;
+	Loader::SystemContentParamSfoGetInt("ATTRIBUTE3", &attribute);
+	g_splash_fast = (attribute & 0x1000) != 0;
+	g_splash_hidden_at.store(0, std::memory_order_release);
+	g_splash_active.store(Common::File::IsFileExisting(g_splash_paths[0]) &&
+	                          Common::File::IsFileExisting(g_splash_paths[1]),
+	                      std::memory_order_release);
+}
+
+void HideSplashScreen() {
+	Clock::duration::rep expected = 0;
+	g_splash_hidden_at.compare_exchange_strong(expected, Clock::now().time_since_epoch().count());
+}
+
 void InitializeSystemOverlayInput(SDL_Window* window) {
 	EXIT_IF(window == nullptr);
 	const Uint32 type = SDL_RegisterEvents(1);
@@ -481,6 +515,7 @@ void InitializeSystemOverlayInput(SDL_Window* window) {
 }
 
 void ShutdownSystemOverlayInput() {
+	g_splash_active.store(false, std::memory_order_release);
 	CoreIme::SetVisibilityCallback(nullptr);
 	DialogIme::SetVisibilityCallback(nullptr);
 	SystemDialog::SetVisibilityCallback(nullptr);
@@ -515,8 +550,10 @@ SystemOverlayVisualState GetSystemOverlayVisualState() noexcept {
 	const auto dialog = DialogIme::GetVisualState();
 	const auto system = SystemDialog::GetVisualState();
 	const bool trophy_active = g_trophy_notification_active.load(std::memory_order_acquire);
-	return {core.active || dialog.active || system.active || trophy_active,
-	        core.revision + dialog.revision + system.revision + (trophy_active ? 1u : 0u)};
+	const bool splash        = g_splash_active.load(std::memory_order_acquire);
+	return {core.active || dialog.active || system.active || trophy_active || splash,
+	        core.revision + dialog.revision + system.revision + (trophy_active ? 1u : 0u) +
+	            (splash ? 2u : 0u)};
 }
 
 bool ProcessSystemOverlayInput(const SDL_Event& event) {
@@ -656,8 +693,6 @@ void NotifyTrophyUnlocked(std::string_view name, int32_t grade,
 }
 
 struct SystemOverlay::Impl {
-	using Clock = std::chrono::steady_clock;
-
 	explicit Impl(GraphicContext& context): graphics(context) {}
 
 	~Impl() {
@@ -768,6 +803,65 @@ struct SystemOverlay::Impl {
 		stbi_image_free(pixels);
 		ImGui::RegisterUserTexture(texture.get());
 		return texture;
+	}
+
+	void FinishSplash() {
+		g_splash_active.store(false, std::memory_order_release);
+		if (splash_dds[0] || splash_dds[1]) {
+			Common::LockGuard lock(graphics.queue_mutex);
+			RequireVulkanSuccess(graphics.queue.waitIdle(), "retire splash images");
+			splash_dds = {};
+		}
+	}
+
+	void DrawSplash(vk::Extent2D frame_extent) {
+		if (!g_splash_active.load(std::memory_order_acquire)) {
+			return;
+		}
+		for (size_t i = 0; i < g_splash_paths.size(); ++i) {
+			if (splash_dds[i]) {
+				continue;
+			}
+			const auto& path = g_splash_paths[i];
+			auto image = std::make_unique<DdsImage>(graphics);
+			if (!image->Load(path)) {
+				LOGF("[Splash] could not load %s\n", path.string().c_str());
+				FinishSplash();
+				return;
+			}
+			splash_dds[i] = std::move(image);
+		}
+		const auto now = Clock::now();
+		if (splash_born == Clock::time_point {}) {
+			splash_born = now;
+		}
+		const auto  hidden = g_splash_hidden_at.load(std::memory_order_acquire);
+		const float fade =
+		    hidden == 0
+		        ? 0.0f
+		        : std::chrono::duration<float>(now.time_since_epoch() - Clock::duration {hidden})
+		                  .count() /
+		              0.3f;
+		const float alpha = 1.0f - std::clamp(fade, 0.0f, 1.0f);
+		if (alpha == 0.0f) {
+			FinishSplash();
+			return;
+		}
+		const float  age  = std::chrono::duration<float>(now - splash_born).count();
+		const float  logo = g_splash_fast ? 1.0f : std::clamp((age - 1.4f) / 2.2f, 0.0f, 1.0f);
+		const ImVec2 screen {static_cast<float>(frame_extent.width),
+		                     static_cast<float>(frame_extent.height)};
+		const float  fit = std::min(screen.x / 3840.0f, screen.y / 2160.0f);
+		const ImVec2 size {3840.0f * fit, 2160.0f * fit};
+		const ImVec2 begin {(screen.x - size.x) * 0.5f, (screen.y - size.y) * 0.5f};
+		const ImVec2 end {begin.x + size.x, begin.y + size.y};
+		auto*        draw = ImGui::GetBackgroundDrawList();
+		draw->AddRectFilled({0, 0}, screen, IM_COL32(0, 0, 0, static_cast<int>(255.0f * alpha)));
+		for (size_t i = 0; i < g_splash_paths.size(); ++i) {
+			draw->AddImage(
+			    splash_dds[i]->Texture(), begin, end, {0, 0}, {1, 1},
+			    IM_COL32(255, 255, 255, static_cast<int>(255.0f * alpha * (i == 0 ? 1.0f : logo))));
+		}
 	}
 
 	void EnsureVulkan(vk::Format format, uint32_t image_count) {
@@ -1215,7 +1309,8 @@ struct SystemOverlay::Impl {
 		OverlaySnapshot snapshot;
 		const bool      has_overlay = GetOverlaySnapshot(&snapshot);
 		const auto now = Clock::now();
-		if (!has_overlay && !g_trophy_notification_active.load(std::memory_order_acquire)) {
+		if (!has_overlay && !g_trophy_notification_active.load(std::memory_order_acquire) &&
+		    !g_splash_active.load(std::memory_order_acquire)) {
 			return false;
 		}
 		const auto prepared_session = snapshot.session;
@@ -1245,12 +1340,9 @@ struct SystemOverlay::Impl {
 		last_frame     = now;
 		ImGui_ImplVulkan_NewFrame();
 		ImGui::NewFrame();
+		DrawSplash(frame_extent);
 		GetOverlaySnapshot(&snapshot);
-		if (snapshot.session != prepared_session) {
-			ImGui::EndFrame();
-			return false;
-		}
-		if (has_overlay) {
+		if (has_overlay && snapshot.session == prepared_session) {
 			if (snapshot.session.kind == OverlayKind::Dialog) {
 				DrawDialog(snapshot.dialog, frame_extent);
 			} else {
@@ -1264,6 +1356,11 @@ struct SystemOverlay::Impl {
 	}
 
 	void Record(vk::CommandBuffer command, vk::ImageView target) {
+		for (const auto& image: splash_dds) {
+			if (image) {
+				image->Upload(command);
+			}
+		}
 		vk::RenderingAttachmentInfo color {};
 		color.sType       = vk::StructureType::eRenderingAttachmentInfo;
 		color.imageView   = target;
@@ -1290,6 +1387,7 @@ struct SystemOverlay::Impl {
 			return;
 		}
 		ImGui::SetCurrentContext(imgui_context);
+		splash_dds = {};
 		ImGui_ImplVulkan_Shutdown();
 		vulkan_initialized = false;
 	}
@@ -1309,6 +1407,8 @@ struct SystemOverlay::Impl {
 	std::optional<TrophyNotification>           trophy_notification;
 	Clock::time_point                           trophy_notification_born;
 	std::vector<std::unique_ptr<ImTextureData>> retired_trophy_images;
+	std::array<std::unique_ptr<DdsImage>, 2>      splash_dds;
+	Clock::time_point                             splash_born;
 	SDL_AudioStream*                            trophy_sound_stream      = nullptr;
 	uint8_t*                                    trophy_sound_data        = nullptr;
 	uint32_t                                    trophy_sound_size        = 0;

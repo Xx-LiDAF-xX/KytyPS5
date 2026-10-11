@@ -4,6 +4,7 @@
 #include "common/emulatorConfig.h"
 #include "common/logging/log.h"
 #include "common/stringUtils.h"
+#include "graphics/presentation/systemOverlay.h"
 #include "libs/dialog.h"
 #include "libs/errno.h"
 #include "libs/libs.h"
@@ -94,7 +95,7 @@ struct SystemServiceHdrToneMapLuminance {
 
 static int KYTY_SYSV_ABI SystemServiceHideSplashScreen() {
 	PRINT_NAME();
-
+	Graphics::HideSplashScreen();
 	return OK;
 }
 

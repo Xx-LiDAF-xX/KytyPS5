@@ -63,6 +63,7 @@ static void PrintUsage() {
 	::printf("  --fullscreen                         Run in borderless desktop fullscreen.\n");
 	::printf(
 	    "  --hide-cursor                        Hide the cursor after 2 s idle. Default: off.\n");
+	::printf("  --no-splash                          Disable the startup splash screen.\n");
 	::printf("  --vr                                 Enable the virtual VR headset.\n");
 	::printf("  --amd-cpu                            Apply AMD CPU instruction patches.\n");
 	::printf("  --vblank-frequency <num>             Virtual vblank frequency. Default: 60.\n");
@@ -216,6 +217,11 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 
 		if (arg == "--hide-cursor") {
 			options.config.hide_cursor_enabled = true;
+			continue;
+		}
+
+		if (arg == "--no-splash") {
+			options.config.splash_enabled = false;
 			continue;
 		}
 
