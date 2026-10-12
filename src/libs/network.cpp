@@ -1075,9 +1075,12 @@ static int ConvertSocketOptionName(int level, int option) {
 			case 0x0020: return SO_BROADCAST;
 			case 0x1001: return SO_SNDBUF;
 			case 0x1002: return SO_RCVBUF;
+#if defined(_WIN32)
+			case 0x1006: return SO_RCVTIMEO;
+#endif
 			case 0x1007: return SO_ERROR;
 			case 0x1105: return SO_SNDTIMEO;
-			default: break;
+			default: return -1;
 		}
 	} else if (level == 6 && option == 1) {
 		return TCP_NODELAY;
