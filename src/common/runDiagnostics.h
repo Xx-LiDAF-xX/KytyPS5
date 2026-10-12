@@ -8,6 +8,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Diagnostics {
@@ -51,6 +52,14 @@ struct RunReport {
 [[nodiscard]] std::string Serialize(const RunReport& report);
 [[nodiscard]] bool        WriteReport(const RunReport& report, const std::filesystem::path& file,
                                       std::string* error);
+
+void               Initialize(const std::filesystem::path& file, RunMetadata metadata);
+[[nodiscard]] bool Enabled() noexcept;
+void Record(std::string_view category, std::string_view code, std::string_view message) noexcept;
+void SetGpu(std::string_view name, uint32_t vendor_id, uint32_t device_id,
+            uint32_t driver_version) noexcept;
+void Finish(Outcome outcome, std::string_view detail) noexcept;
+void Shutdown() noexcept;
 
 } // namespace Diagnostics
 

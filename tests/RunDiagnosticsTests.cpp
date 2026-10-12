@@ -7,6 +7,8 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
+#include <vector>
 
 namespace {
 
@@ -100,6 +102,102 @@ void TestDoesNotSerializeSourcePaths() {
         "sanitized executable leaf was not serialized");
 }
 
+std::filesystem::path LifecycleRoot() {
+  return std::filesystem::temp_directory_path() /
+         "kyty_run_diagnostics_lifecycle_tests";
+}
+
+nlohmann::json ReadJson(const std::filesystem::path &file) {
+  std::ifstream input(file, std::ios::binary);
+  Check(static_cast<bool>(input), "diagnostics report could not be opened");
+  return nlohmann::json::parse(input);
+}
+
+void ResetLifecycleRoot() {
+  Diagnostics::Shutdown();
+  std::error_code error;
+  std::filesystem::remove_all(LifecycleRoot(), error);
+}
+
+void TestDisabledCallsAreNoops() {
+  ResetLifecycleRoot();
+  const auto file = LifecycleRoot() / "disabled.json";
+
+  Check(!Diagnostics::Enabled(), "diagnostics unexpectedly started enabled");
+  Diagnostics::Record("disabled", "record", "must be ignored");
+  Diagnostics::SetGpu("ignored", 1, 2, 3);
+  Diagnostics::Finish(Diagnostics::Outcome::Fatal, "must be ignored");
+  Diagnostics::Shutdown();
+
+  Check(!std::filesystem::exists(file),
+        "disabled diagnostics created a report");
+}
+
+void TestConcurrentEventsAreRetained() {
+  ResetLifecycleRoot();
+  const auto file = LifecycleRoot() / "concurrent.json";
+  Diagnostics::Initialize(file, MakeReport().metadata);
+
+  constexpr int kThreadCount = 4;
+  constexpr int kEventsPerThread = 50;
+  std::vector<std::thread> threads;
+  for (int thread = 0; thread < kThreadCount; ++thread) {
+    threads.emplace_back([thread]() {
+      for (int event = 0; event < kEventsPerThread; ++event) {
+        Diagnostics::Record("concurrency", std::to_string(thread),
+                            std::to_string(event));
+      }
+    });
+  }
+  for (auto &thread : threads) {
+    thread.join();
+  }
+  Diagnostics::Finish(Diagnostics::Outcome::Completed, "threads joined");
+
+  const auto json = ReadJson(file);
+  Check(json.at("events").size() == kThreadCount * kEventsPerThread,
+        "concurrent events were lost");
+  Diagnostics::Shutdown();
+}
+
+void TestFinishIsIdempotent() {
+  ResetLifecycleRoot();
+  const auto file = LifecycleRoot() / "idempotent.json";
+  Diagnostics::Initialize(file, MakeReport().metadata);
+
+  Diagnostics::Finish(Diagnostics::Outcome::Fatal, "first outcome");
+  Diagnostics::Finish(Diagnostics::Outcome::Completed, "second outcome");
+
+  const auto json = ReadJson(file);
+  Check(json.at("outcome") == "fatal", "second finish replaced the outcome");
+  Check(json.at("outcome_detail") == "first outcome",
+        "second finish replaced the outcome detail");
+  Diagnostics::Shutdown();
+}
+
+void TestFatalBeforeInitializeIsSafe() {
+  ResetLifecycleRoot();
+  Diagnostics::Finish(Diagnostics::Outcome::Fatal,
+                      "fatal before initialization");
+  Check(!Diagnostics::Enabled(),
+        "finish before initialization enabled diagnostics");
+}
+
+void TestShutdownFlushesRunningReport() {
+  ResetLifecycleRoot();
+  const auto file = LifecycleRoot() / "shutdown.json";
+  Diagnostics::Initialize(file, MakeReport().metadata);
+  Diagnostics::Record("lifecycle", "initialized", "ready");
+  Diagnostics::Shutdown();
+
+  const auto json = ReadJson(file);
+  Check(json.at("outcome") == "running",
+        "shutdown changed an unfinished run outcome");
+  Check(json.at("events").size() == 1,
+        "shutdown did not flush recorded events");
+  Check(!Diagnostics::Enabled(), "shutdown left diagnostics enabled");
+}
+
 } // namespace
 
 int main() {
@@ -107,6 +205,12 @@ int main() {
   TestOmitsEmptyOptionalGpuFields();
   TestCreatesParentDirectoryAndReplacesFile();
   TestDoesNotSerializeSourcePaths();
+  TestDisabledCallsAreNoops();
+  TestConcurrentEventsAreRetained();
+  TestFinishIsIdempotent();
+  TestFatalBeforeInitializeIsSafe();
+  TestShutdownFlushesRunningReport();
+  ResetLifecycleRoot();
   std::puts("RunDiagnosticsTests: all cases passed");
   return 0;
 }

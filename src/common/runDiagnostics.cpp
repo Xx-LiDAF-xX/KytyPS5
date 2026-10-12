@@ -1,9 +1,13 @@
 #include "common/runDiagnostics.h"
 
+#include <chrono>
 #include <exception>
 #include <fstream>
+#include <functional>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <system_error>
+#include <thread>
 
 #if defined(_WIN32)
 #include <Windows.h>
@@ -12,6 +16,29 @@
 namespace Diagnostics {
 
 using Json = nlohmann::ordered_json;
+
+namespace {
+
+struct LifecycleState {
+	std::mutex                            mutex;
+	bool                                  enabled  = false;
+	bool                                  finished = false;
+	std::filesystem::path                 file;
+	RunReport                             report;
+	std::chrono::steady_clock::time_point started;
+};
+
+LifecycleState& State() {
+	static LifecycleState state;
+	return state;
+}
+
+void WriteCurrentReport(const LifecycleState& state) {
+	std::string ignored_error;
+	(void)WriteReport(state.report, state.file, &ignored_error);
+}
+
+} // namespace
 
 static const char* OutcomeName(Outcome outcome) {
 	switch (outcome) {
@@ -141,6 +168,106 @@ bool WriteReport(const RunReport& report, const std::filesystem::path& file, std
 			*error = exception.what();
 		}
 		return false;
+	}
+}
+
+void Initialize(const std::filesystem::path& file, RunMetadata metadata) {
+	try {
+		metadata.executable_name =
+		    std::filesystem::path(metadata.executable_name).filename().string();
+
+		auto&           state = State();
+		std::lock_guard lock(state.mutex);
+		state.file            = file;
+		state.report          = {};
+		state.report.metadata = std::move(metadata);
+		state.report.outcome  = Outcome::Running;
+		state.started         = std::chrono::steady_clock::now();
+		state.finished        = false;
+		state.enabled         = true;
+		WriteCurrentReport(state);
+	} catch (...) {
+		try {
+			auto&           state = State();
+			std::lock_guard lock(state.mutex);
+			state.enabled  = false;
+			state.finished = false;
+		} catch (...) {
+		}
+	}
+}
+
+bool Enabled() noexcept {
+	try {
+		auto&           state = State();
+		std::lock_guard lock(state.mutex);
+		return state.enabled;
+	} catch (...) {
+		return false;
+	}
+}
+
+void Record(std::string_view category, std::string_view code, std::string_view message) noexcept {
+	try {
+		auto&           state = State();
+		std::lock_guard lock(state.mutex);
+		if (!state.enabled || state.finished) {
+			return;
+		}
+
+		const auto now = std::chrono::steady_clock::now();
+		const auto offset =
+		    std::chrono::duration_cast<std::chrono::microseconds>(now - state.started).count();
+		const auto thread_id = std::hash<std::thread::id> {}(std::this_thread::get_id());
+		state.report.events.push_back({static_cast<uint64_t>(offset),
+		                               static_cast<uint64_t>(thread_id), std::string(category),
+		                               std::string(code), std::string(message)});
+	} catch (...) {
+	}
+}
+
+void SetGpu(std::string_view name, uint32_t vendor_id, uint32_t device_id,
+            uint32_t driver_version) noexcept {
+	try {
+		auto&           state = State();
+		std::lock_guard lock(state.mutex);
+		if (!state.enabled || state.finished) {
+			return;
+		}
+		state.report.metadata.gpu =
+		    GpuMetadata {std::string(name), vendor_id, device_id, driver_version};
+	} catch (...) {
+	}
+}
+
+void Finish(Outcome outcome, std::string_view detail) noexcept {
+	try {
+		auto&           state = State();
+		std::lock_guard lock(state.mutex);
+		if (!state.enabled || state.finished) {
+			return;
+		}
+		state.report.outcome        = outcome;
+		state.report.outcome_detail = std::string(detail);
+		state.finished              = true;
+		WriteCurrentReport(state);
+	} catch (...) {
+	}
+}
+
+void Shutdown() noexcept {
+	try {
+		auto&           state = State();
+		std::lock_guard lock(state.mutex);
+		if (!state.enabled) {
+			return;
+		}
+		WriteCurrentReport(state);
+		state.enabled  = false;
+		state.finished = false;
+		state.file.clear();
+		state.report = {};
+	} catch (...) {
 	}
 }
 
