@@ -989,23 +989,29 @@ ResourcePlan ExtractResourcePlan(const Program& program) {
 	// Keep only that Boolean structure, never the varying shader dependency graph.
 	Value unknown;
 	bool capture_control_reads = false;
+	std::unordered_map<const Inst*, Value> predicates;
 	std::function<Value(Value)> ClonePredicate = [&](Value value) -> Value {
 		value = value.Resolve();
 		if (value.IsEmpty()) return {};
+		const auto* inst = value.TryInstruction();
+		if (inst == nullptr)
+			return ValidateRuntimeValue(program, value, RuntimeValueType::Integer) ? value : Value {};
+		// Preserve shared EXEC predicates, including subgraphs with no uniform factor.
+		const auto [found, inserted] = predicates.try_emplace(inst);
+		if (!inserted) return found->second;
+		auto& result = found->second;
 		if (ValidateRuntimeValue(program, value, RuntimeValueType::Integer)) {
 			capture_control_reads |=
 			    !ValidateRuntimeValue(program, value, RuntimeValueType::ImmutableInteger);
-			return Clone(value);
+			return result = Clone(value);
 		}
-		const auto* inst = value.TryInstruction();
-		if (inst == nullptr) return {};
 		const auto op = inst->GetOpcode();
 		if (op == ValueOpcode::ConditionRef || op == ValueOpcode::LogicalNot) {
 			const auto operand = ClonePredicate(inst->Arg(0));
-			if (operand.IsEmpty() || op == ValueOpcode::ConditionRef) return operand;
+			if (operand.IsEmpty() || op == ValueOpcode::ConditionRef) return result = operand;
 			auto& node = plan.value_storage.emplace_back(op);
 			node.SetArg(0, operand);
-			return Value(&node);
+			return result = Value(&node);
 		}
 		if (op != ValueOpcode::LogicalAnd && op != ValueOpcode::LogicalOr) return {};
 		auto left = ClonePredicate(inst->Arg(0));
@@ -1019,7 +1025,7 @@ ResourcePlan ExtractResourcePlan(const Program& program) {
 		auto& node = plan.value_storage.emplace_back(op);
 		node.SetArg(0, left);
 		node.SetArg(1, right);
-		return Value(&node);
+		return result = Value(&node);
 	};
 	plan.control_flow = ResourceControlFlow(program, ClonePredicate);
 	plan.uniform_fill = AnalyzeUniformFill(program);
@@ -1064,6 +1070,7 @@ ResourcePlan ExtractResourcePlan(const Program& program) {
 	}
 	if (capture_indirect_reads || !plan.source_reads.empty())
 		plan.resource_tracking_complete &= !program.has_address_writes;
+	CompileSrtWalker(plan);
 	return plan;
 }
 
@@ -1405,6 +1412,7 @@ void ApplyResourceSpecialization(Program& program, const ResourceSpecialization&
 			}
 			EXIT_IF(image.indirect_root == memory.resource &&
 			        inst.GetOpcode() != ValueOpcode::ImageSampleRaw &&
+			        inst.GetOpcode() != ValueOpcode::ImageGatherRaw &&
 			        inst.GetOpcode() != ValueOpcode::ImageRead);
 		}
 	}

@@ -1934,13 +1934,7 @@ KYTY_CP_OP_PARSER(CpOpIndirectBuffer) {
 
 	auto* indirect_buffer =
 	    reinterpret_cast<const uint32_t*>(buffer[0] | (static_cast<uint64_t>(buffer[1]) << 32u));
-	uint32_t                     indirect_num_dw = control & 0xfffffu;
-	static std::atomic<uint32_t> indirect_log_count {0};
-	if (indirect_log_count.fetch_add(1) < 128) {
-		LOGF("\t indirect buffer: addr=0x%016" PRIx64 ", num_dw=%" PRIu32 ", control=0x%08" PRIx32
-		     "\n",
-		     reinterpret_cast<uint64_t>(indirect_buffer), indirect_num_dw, control);
-	}
+	const uint32_t indirect_num_dw = control & 0xfffffu;
 
 	if (indirect_num_dw == 0) {
 		return 3;

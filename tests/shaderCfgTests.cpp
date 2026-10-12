@@ -1316,7 +1316,7 @@ void TestShaderFeatureCollection() {
                        {Value(0u), Value(0u), Value(0u)});
   block->AppendNewInst(ValueOpcode::ImageGatherRaw,
                        {Value(0u), Value(0u), Value(0u), Value(0u),
-                        Value(0u), Value(0u), Value(0u)});
+                        Value(0u), Value(0u), Value(0u), Value(true)});
   auto &shared = block->AppendNewInst(ValueOpcode::LoadSharedU32,
                                       {Value(0u), Value(true)});
   shared.SetFlags(MemoryFlags{.index = 0});

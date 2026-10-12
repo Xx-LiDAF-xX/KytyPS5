@@ -39,13 +39,7 @@ enum class CommandBufferDebugOp : uint32_t {
 	DispatchDirect,
 	DrawIndex,
 	DrawIndexAuto,
-	EopWrite,
-	EopInterrupt,
-	EopWriteBack,
-	EopFlip,
-	EopWriteBackFlip,
-	EopOnlyFlip,
-	DispatchIndirect,
+	DispatchIndirect = 9,
 	Unknown,
 };
 
@@ -186,6 +180,8 @@ private:
 	                              bool ignore_target_mask = false, bool exact_format = false);
 	void ResolveRenderDepthTarget(CommandBuffer& buffer, RenderDepthInfo& target);
 	[[nodiscard]] bool DepthStencilCopy(CommandBuffer& buffer);
+	[[nodiscard]] bool CopyDepthToColor(CommandBuffer& buffer, const DrawCallInfo& draw,
+	                                   const DrawEmitInfo& emit, DrawRenderState& state);
 	[[nodiscard]] bool PrepareDrawRenderState(CommandBuffer& buffer,
 	                                          const DrawCallInfo& draw,
 	                                          uint32_t            render_target_slice_offset,

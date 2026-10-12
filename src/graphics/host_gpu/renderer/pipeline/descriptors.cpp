@@ -179,7 +179,9 @@ static void ValidateSampledDepthBinding(const ShaderRecompiler::IR::ImageResourc
                                         const ShaderTextureResource& descriptor, const Image& image,
                                         vk::Format view_format, uint64_t size) {
 	const bool resource_ok = IsSupportedSampledDepthResource(resource);
-	const bool encoding_ok = IsSupportedDepthTextureEncoding(descriptor, resource.r128);
+	// Comparison sampling changes the host format, not the guest metadata encoding.
+	const bool encoding_ok = descriptor.TileMode() != Prospero::TileMode::kDepth ||
+	                         IsSupportedDepthTextureEncoding(descriptor, resource.r128);
 	const bool view_ok =
 	    IsSupportedSampledDepthView(image.info.pixel_format, view_format, descriptor.DstSelXYZW());
 	if (resource_ok && encoding_ok && view_ok) {
@@ -622,8 +624,7 @@ TextureBinding RenderExecutor::ResolveTexture(const ShaderRecompiler::IR::ImageR
 	if (storage) {
 		ValidateStorageTexture(resource, descriptor, desc.info.data.size);
 	}
-	if (!resource.r128 && descriptor.MetaCompress() && tile != Prospero::TileMode::kDepth &&
-	    !desc.info.IsDepth()) {
+	if (!resource.r128 && descriptor.MetaCompress() && tile != Prospero::TileMode::kDepth) {
 		TileSizeAlign metadata_size {};
 		(void)TileGetDccSize(width, height, volume ? depth : image_layers,
 		                     desc.info.bytes_per_block, physical_levels, tile, metadata_size,

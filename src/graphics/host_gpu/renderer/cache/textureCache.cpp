@@ -36,7 +36,9 @@ constexpr uint64_t NumFramesBeforeRemoval = 32;
 [[nodiscard]] bool DecodeColorClear(const TextureCache::ImageDesc& desc, uint8_t code,
                                   vk::ClearColorValue& clear) {
 	const auto& metadata = desc.info.metadata;
-	const auto  format   = desc.view_info.format;
+	const auto  format   = desc.info.IsDepth()
+	                           ? TextureGetSurfaceFormatInfo(desc.info.guest_format).vk_format
+	                           : desc.view_info.format;
 	const bool  cmask    = metadata.kind == ImageMetadataKind::Cmask;
 	if (cmask ? code == 0 : code == 0x20) {
 		// Register clears belong to the color buffer; the texture pipe cannot decode them.
@@ -631,6 +633,9 @@ void TextureCache::CopyImage(ImageId destination_id, ImageId source_id) {
 void TextureCache::CopyImageMip(ImageId destination_id, ImageId source_id, uint32_t mip,
                                 uint32_t layer) {
 	RefreshCopySource(source_id);
+	if (m_slot_images[destination_id].IsBufferModified()) {
+		RefreshImage(destination_id);
+	}
 	auto& destination = m_slot_images[destination_id];
 	auto& source      = m_slot_images[source_id];
 	TrackImage(destination_id);
@@ -751,11 +756,63 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested, BindingTyp
 	return replacement_id;
 }
 
+namespace BcAlias {
+
+bool Matches(const ImageInfo& requested, const ImageInfo& cached) {
+	return requested.guest_format != cached.guest_format &&
+	       requested.IsBlock() != cached.IsBlock() &&
+	       requested.tile_mode == cached.tile_mode &&
+	       requested.bytes_per_block == cached.bytes_per_block &&
+	       requested.samples == 1 && cached.samples == 1 &&
+	       (requested.data != cached.data || requested.resources != cached.resources ||
+	        requested.BlockExtent() != cached.BlockExtent()) &&
+	       !TextureCache::SameBacking(cached, requested, false);
+}
+
+bool Publish(TextureCache& cache, Image& image) {
+	if (!cache.CanDownload(image)) {
+		return false;
+	}
+	// ObtainBuffer preserves padding and records ownership before the GPU-only transfer.
+	auto [buffer, offset] =
+	    cache.m_buffer_cache.ObtainBuffer(image.info.data.address, image.info.data.size, true);
+	cache.DownloadImage(image, *buffer, offset, image.info.data.size, image.info.resources.levels);
+	image.ClearGpuModified();
+	image.MarkBufferModified();
+	return true;
+}
+
+void Resolve(TextureCache& cache, ImageId cached_id, ImageId merged_id) {
+	auto& cached = cache.m_slot_images[cached_id];
+	auto* merged = merged_id ? &cache.m_slot_images[merged_id] : nullptr;
+	// PS5 raw block images can span several packed BC mips. Transfer their complete
+	// guest bytes, including tail padding, before retiring the incompatible backing.
+	if (cached.SafeToDownload()) {
+		if (merged && merged->SafeToDownload() && !Publish(cache, *merged)) {
+			return;
+		}
+		if (!Publish(cache, cached)) {
+			return;
+		}
+		if (merged) {
+			merged->MarkBufferModified();
+		}
+	}
+	cached.binding.needs_rebind |= cached.binding.is_bound || cached.binding.is_target;
+	cache.FreeImage(cached_id);
+}
+
+} // namespace BcAlias
+
 TextureCache::OverlapResult TextureCache::ResolveOverlap(const ImageInfo& requested,
                                                          BindingType binding, ImageId cached_id,
                                                          ImageId merged_id) {
 	auto owner = m_slot_images.try_get(cached_id);
-	if (owner == nullptr) {
+	if (owner == nullptr || !owner->registered) {
+		return {merged_id};
+	}
+	if (BcAlias::Matches(requested, owner->info) && !owner->IsCpuDirty()) {
+		BcAlias::Resolve(*this, cached_id, merged_id);
 		return {merged_id};
 	}
 	auto&      cached       = *owner;
@@ -1059,8 +1116,15 @@ void TextureCache::MaterializeColorClear(ImageId id, const ImageDesc& desc,
 		}
 		{
 			std::scoped_lock lock {m_lock};
-			ClearImage(m_scheduler.Current(), id, view.format,
-			           {vk::ImageAspectFlagBits::eColor, view.base_level, view.level_count,
+			const auto& image = m_slot_images[id];
+			const bool depth = image.info.IsDepth();
+			if (depth) {
+				const auto value = clear.color.float32[0];
+				clear.depthStencil = {value, 0u};
+			}
+			ClearImage(m_scheduler.Current(), id, depth ? image.backing.format : view.format,
+			           {depth ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor,
+			            view.base_level, view.level_count,
 			            image_first + slice, 1}, clear);
 		}
 		// Publish the conversion's expanded keys without treating them as guest writes
@@ -1166,6 +1230,7 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_format) {
 		std::scoped_lock lock {m_lock};
 		const auto       candidates =
 		    FindImagesInRegion(desc.info.data.address, desc.info.data.size, false);
+		bool block_alias = false;
 
 		for (const auto id: candidates) {
 			const auto& image = m_slot_images[id];
@@ -1184,6 +1249,9 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_format) {
 			}
 			if (SameBacking(image.info, desc.info, exact_format)) {
 				result = id;
+			} else if (image.SafeToDownload() &&
+			           BcAlias::Matches(desc.info, image.info)) {
+				block_alias = true;
 			}
 		}
 
@@ -1199,6 +1267,15 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_format) {
 					result     = overlap.image;
 					view_mip   = overlap.mip;
 					view_layer = overlap.layer;
+				}
+			}
+		} else if (block_alias) {
+			for (const auto candidate: candidates) {
+				const auto* owner = m_slot_images.try_get(candidate);
+				if (candidate != result && owner != nullptr && owner->registered &&
+				    !owner->IsCpuDirty() &&
+				    BcAlias::Matches(m_slot_images[result].info, owner->info)) {
+					BcAlias::Resolve(*this, candidate, result);
 				}
 			}
 		}
@@ -1923,6 +2000,9 @@ void TextureCache::RunGarbageCollector() {
 }
 
 void TextureCache::ProcessDownloadImages() {
+	if (!m_readback_linear_images) {
+		return;
+	}
 	std::scoped_lock lock {m_lock};
 	for (const auto id: m_download_images) {
 		const auto owner = m_slot_images.try_get(id);
