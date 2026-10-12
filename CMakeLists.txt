@@ -645,7 +645,7 @@ if(BUILD_TESTING)
 	add_test(NAME compat_corpus_tool
 	         COMMAND ${Python3_EXECUTABLE} -m unittest discover
 	                 -s "${CMAKE_SOURCE_DIR}/tools/compat/tests"
-	                 -p test_run_corpus.py -v)
+	                 -p "test_*.py" -v)
 	set_tests_properties(compat_corpus_tool PROPERTIES LABELS core)
 	add_test(NAME shader_vertex_metadata COMMAND $<TARGET_FILE:shader_vertex_metadata_tests>)
 	add_test(NAME resource_materialization COMMAND $<TARGET_FILE:resource_materialization_tests>)
