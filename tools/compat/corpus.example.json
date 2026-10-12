@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "titles": [
+    {
+      "title_id": "PPSA01325",
+      "game_path": "C:/replace/with/your/owned/game/directory",
+      "timeout_seconds": 120,
+      "repeat": 1,
+      "arguments": [
+        "--vulkan-validation",
+        "true",
+        "--shader-validation",
+        "true"
+      ]
+    }
+  ]
+}

@@ -6,3 +6,7 @@ _Build/vscode-clang/
 _Build/
 cmake-build-debug/
 _PipelineCache/
+/tools/compat/corpus.local.json
+/_CompatibilityRuns/
+__pycache__/
+*.py[cod]

@@ -53,6 +53,10 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 include("${KYTY_SOURCE_DIR}/utils.cmake")
 include(CTest)
 
+if(BUILD_TESTING)
+	find_package(Python3 REQUIRED COMPONENTS Interpreter)
+endif()
+
 option(KYTY_ENABLE_CLANG_TIDY "Run clang-tidy checks during builds" OFF)
 
 set(KYTY_BUILD_ORIGIN "Source" CACHE STRING "Build provenance shown in diagnostics")
@@ -638,6 +642,11 @@ if(BUILD_TESTING)
 	add_test(NAME lru_cache COMMAND $<TARGET_FILE:lru_cache_tests>)
 	add_test(NAME run_diagnostics COMMAND $<TARGET_FILE:run_diagnostics_tests>)
 	set_tests_properties(run_diagnostics PROPERTIES LABELS core)
+	add_test(NAME compat_corpus_tool
+	         COMMAND ${Python3_EXECUTABLE} -m unittest discover
+	                 -s "${CMAKE_SOURCE_DIR}/tools/compat/tests"
+	                 -p test_run_corpus.py -v)
+	set_tests_properties(compat_corpus_tool PROPERTIES LABELS core)
 	add_test(NAME shader_vertex_metadata COMMAND $<TARGET_FILE:shader_vertex_metadata_tests>)
 	add_test(NAME resource_materialization COMMAND $<TARGET_FILE:resource_materialization_tests>)
 	add_test(NAME resource_tracking COMMAND $<TARGET_FILE:resource_tracking_tests>)
