@@ -6,14 +6,14 @@ only; `sce_sys/param.json` is authoritative, and every unverified field remains
 
 | Title ID | Expected title | Local metadata | Windows | Linux | PS5 route |
 | --- | --- | --- | --- | --- | --- |
-| PPSA01325 | Astro's Playroom | recorded | fatal | not tested | pending |
+| PPSA01325 | Astro's Playroom | recorded | timeout | not tested | pending |
 | PPSA01859 | Resident Evil Village: Maiden | recorded | fatal | not tested | pending |
-| PPSA02100 | Stray | recorded | fatal | not tested | pending |
+| PPSA02100 | Stray | recorded | timeout | not tested | pending |
 | PPSA21567 | Astro Bot | recorded | fatal | not tested | pending |
-| PPSA25991 | Senua's Saga: Hellblade II | recorded | fatal | not tested | pending |
-| PPSA26223 | The Mound: Omen of Cthulhu | recorded | fatal | not tested | pending |
-| PPSA27624 | Bendy and the Dark Revival | recorded | fatal | not tested | pending |
-| PPSA31162 | Super Meat Boy 3D | recorded | fatal | not tested | pending |
+| PPSA25991 | Senua's Saga: Hellblade II | recorded | timeout | not tested | pending |
+| PPSA26223 | The Mound: Omen of Cthulhu | recorded | timeout | not tested | pending |
+| PPSA27624 | Bendy and the Dark Revival | recorded | timeout | not tested | pending |
+| PPSA31162 | Super Meat Boy 3D | recorded | timeout | not tested | pending |
 
 ## Private setup
 
