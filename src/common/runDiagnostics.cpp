@@ -125,150 +125,117 @@ bool WriteReport(const RunReport& report, const std::filesystem::path& file, std
 		error->clear();
 	}
 
-	try {
-		std::error_code directory_error;
-		if (const auto parent = file.parent_path(); !parent.empty()) {
-			std::filesystem::create_directories(parent, directory_error);
-		}
-		if (directory_error) {
-			if (error != nullptr) {
-				*error = "failed to create report directory: " + directory_error.message();
-			}
-			return false;
-		}
-
-		auto temporary = file;
-		temporary += ".tmp";
-		{
-			std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-			if (!output) {
-				if (error != nullptr) {
-					*error = "failed to open temporary report file";
-				}
-				return false;
-			}
-			output << Serialize(report);
-			output.flush();
-			if (!output) {
-				if (error != nullptr) {
-					*error = "failed to write temporary report file";
-				}
-				return false;
-			}
-		}
-
-		if (!ReplaceFile(temporary, file, error)) {
-			std::error_code remove_error;
-			std::filesystem::remove(temporary, remove_error);
-			return false;
-		}
-		return true;
-	} catch (const std::exception& exception) {
+	std::error_code directory_error;
+	if (const auto parent = file.parent_path(); !parent.empty()) {
+		std::filesystem::create_directories(parent, directory_error);
+	}
+	if (directory_error) {
 		if (error != nullptr) {
-			*error = exception.what();
+			*error = "failed to create report directory: " + directory_error.message();
 		}
 		return false;
 	}
+
+	auto temporary = file;
+	temporary += ".tmp";
+	{
+		std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+		if (!output) {
+			if (error != nullptr) {
+				*error = "failed to open temporary report file";
+			}
+			return false;
+		}
+		output << Serialize(report);
+		output.flush();
+		if (!output) {
+			if (error != nullptr) {
+				*error = "failed to write temporary report file";
+			}
+			return false;
+		}
+	}
+
+	if (!ReplaceFile(temporary, file, error)) {
+		std::error_code remove_error;
+		std::filesystem::remove(temporary, remove_error);
+		return false;
+	}
+	return true;
 }
 
 void Initialize(const std::filesystem::path& file, RunMetadata metadata) {
-	try {
-		metadata.executable_name =
-		    std::filesystem::path(metadata.executable_name).filename().string();
+	metadata.executable_name =
+	    std::filesystem::path(metadata.executable_name).filename().string();
 
-		auto&           state = State();
-		std::lock_guard lock(state.mutex);
-		state.file            = file;
-		state.report          = {};
-		state.report.metadata = std::move(metadata);
-		state.report.outcome  = Outcome::Running;
-		state.started         = std::chrono::steady_clock::now();
-		state.finished        = false;
-		state.enabled         = true;
-		WriteCurrentReport(state);
-	} catch (...) {
-		try {
-			auto&           state = State();
-			std::lock_guard lock(state.mutex);
-			state.enabled  = false;
-			state.finished = false;
-		} catch (...) {
-		}
-	}
+	auto&           state = State();
+	std::lock_guard lock(state.mutex);
+	state.file            = file;
+	state.report          = {};
+	state.report.metadata = std::move(metadata);
+	state.report.outcome  = Outcome::Running;
+	state.started         = std::chrono::steady_clock::now();
+	state.finished        = false;
+	state.enabled         = true;
+	WriteCurrentReport(state);
 }
 
 bool Enabled() noexcept {
-	try {
-		auto&           state = State();
-		std::lock_guard lock(state.mutex);
-		return state.enabled;
-	} catch (...) {
-		return false;
-	}
+	auto&           state = State();
+	std::lock_guard lock(state.mutex);
+	return state.enabled;
 }
 
 void Record(std::string_view category, std::string_view code, std::string_view message) noexcept {
-	try {
-		auto&           state = State();
-		std::lock_guard lock(state.mutex);
-		if (!state.enabled || state.finished) {
-			return;
-		}
-
-		const auto now = std::chrono::steady_clock::now();
-		const auto offset =
-		    std::chrono::duration_cast<std::chrono::microseconds>(now - state.started).count();
-		const auto thread_id = std::hash<std::thread::id> {}(std::this_thread::get_id());
-		state.report.events.push_back({static_cast<uint64_t>(offset),
-		                               static_cast<uint64_t>(thread_id), std::string(category),
-		                               std::string(code), std::string(message)});
-	} catch (...) {
+	auto&           state = State();
+	std::lock_guard lock(state.mutex);
+	if (!state.enabled || state.finished) {
+		return;
 	}
+
+	const auto now = std::chrono::steady_clock::now();
+	const auto offset =
+	    std::chrono::duration_cast<std::chrono::microseconds>(now - state.started).count();
+	const auto thread_id = std::hash<std::thread::id> {}(std::this_thread::get_id());
+	state.report.events.push_back({static_cast<uint64_t>(offset),
+	                               static_cast<uint64_t>(thread_id), std::string(category),
+	                               std::string(code), std::string(message)});
 }
 
 void SetGpu(std::string_view name, uint32_t vendor_id, uint32_t device_id,
             uint32_t driver_version) noexcept {
-	try {
-		auto&           state = State();
-		std::lock_guard lock(state.mutex);
-		if (!state.enabled || state.finished) {
-			return;
-		}
-		state.report.metadata.gpu =
-		    GpuMetadata {std::string(name), vendor_id, device_id, driver_version};
-	} catch (...) {
+	auto&           state = State();
+	std::lock_guard lock(state.mutex);
+	if (!state.enabled || state.finished) {
+		return;
 	}
+	state.report.metadata.gpu =
+	    GpuMetadata {std::string(name), vendor_id, device_id, driver_version};
 }
 
 void Finish(Outcome outcome, std::string_view detail) noexcept {
-	try {
-		auto&           state = State();
-		std::lock_guard lock(state.mutex);
-		if (!state.enabled || state.finished) {
-			return;
-		}
-		state.report.outcome        = outcome;
-		state.report.outcome_detail = std::string(detail);
-		state.finished              = true;
-		WriteCurrentReport(state);
-	} catch (...) {
+	auto&           state = State();
+	std::lock_guard lock(state.mutex);
+	if (!state.enabled || state.finished) {
+		return;
 	}
+	state.report.outcome        = outcome;
+	state.report.outcome_detail = std::string(detail);
+	state.finished              = true;
+	WriteCurrentReport(state);
 }
 
 void Shutdown() noexcept {
-	try {
-		auto&           state = State();
-		std::lock_guard lock(state.mutex);
-		if (!state.enabled) {
-			return;
-		}
-		WriteCurrentReport(state);
-		state.enabled  = false;
-		state.finished = false;
-		state.file.clear();
-		state.report = {};
-	} catch (...) {
+	auto&           state = State();
+	std::lock_guard lock(state.mutex);
+	if (!state.enabled) {
+		return;
 	}
+	WriteCurrentReport(state);
+	state.enabled  = false;
+	state.finished = false;
+	state.file.clear();
+	state.report = {};
 }
 
 } // namespace Diagnostics
