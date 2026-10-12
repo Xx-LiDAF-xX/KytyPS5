@@ -36,15 +36,13 @@ bool SrtReadCapture::ReadStrict(void* userdata, uint64_t address, std::span<uint
 
 bool SrtReadCapture::ReadOrdinary(void* userdata, uint64_t address, std::span<uint32_t> values) {
 	auto& capture = *static_cast<SrtReadCapture*>(userdata);
-	if (address < 0x1000) {
-		std::ranges::fill(values, 0u);
-		return true;
-	}
 	if (capture.m_source.read_memory != nullptr) {
 		if (!capture.m_source.read_memory(capture.m_source.userdata, address, values)) return false;
-	} else if (capture.m_source.read_specialization_memory != nullptr) {
-		if (!capture.m_source.read_specialization_memory(capture.m_source.userdata, address, values)) return false;
 	} else {
+		if (address == 0) {
+			std::ranges::fill(values, 0u);
+			return true;
+		}
 		std::memcpy(values.data(), reinterpret_cast<const void*>(address), values.size_bytes());
 	}
 	capture.m_ranges.emplace_back(address, values.size_bytes());
@@ -689,21 +687,17 @@ bool SrtWalker::EvaluateRawRead(const Inst& inst, uint64_t& result) {
 			return false;
 		}
 	}
-	if (base == 0 || address < 0x1000) {
-		result = 0u;
-		return true;
-	}
 	uint32_t word = 0;
 	const auto reader = vector ? m_runtime.read_specialization_memory : m_runtime.read_memory;
 	if (reader != nullptr) {
 		if (!reader(m_runtime.userdata, address, {&word, 1})) {
 			return false;
 		}
-	} else if (m_runtime.read_specialization_memory != nullptr) {
-		if (!m_runtime.read_specialization_memory(m_runtime.userdata, address, {&word, 1})) {
-			return false;
-		}
 	} else {
+		if (address == 0) {
+			result = 0u;
+			return true;
+		}
 		if (vector || address < 0x1000) return false;
 		std::memcpy(&word, reinterpret_cast<const void*>(address), sizeof(word));
 	}
