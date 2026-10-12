@@ -44,27 +44,27 @@
 - `Event` contains a monotonic microsecond offset, category, code, message, and numeric thread identifier.
 - `Outcome` is one of `Running`, `Completed`, `Fatal`, `HostException`, `Timeout`, or `LaunchError`.
 
-- [ ] **Step 1: Write the serialization tests**
+- [x] **Step 1: Write the serialization tests**
 
   Add tests named `serializes_required_metadata`, `omits_empty_optional_gpu_fields`, `creates_parent_directory`, and `does_not_serialize_source_paths`. Assert schema version `1`, stable field names, atomic replacement of the destination file, and absence of the supplied absolute test path.
 
-- [ ] **Step 2: Run the new test target and verify it fails**
+- [x] **Step 2: Run the new test target and verify it fails**
 
   Run: `cmake --build <build-dir> --target run_diagnostics_tests && ctest --test-dir <build-dir> -R '^run_diagnostics$' --output-on-failure`
 
   Expected: build failure because `common/runDiagnostics.h` does not exist.
 
-- [ ] **Step 3: Implement the report data model and JSON serialization**
+- [x] **Step 3: Implement the report data model and JSON serialization**
 
   Implement the exact interfaces above using `nlohmann::ordered_json`. Write through a sibling temporary file and rename it only after the complete JSON document is flushed.
 
-- [ ] **Step 4: Register and run the test**
+- [x] **Step 4: Register and run the test**
 
   Add `run_diagnostics_tests`, register CTest name `run_diagnostics`, label it `core`, and run the command from Step 2.
 
   Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
   git add CMakeLists.txt src/common/runDiagnostics.h src/common/runDiagnostics.cpp tests/RunDiagnosticsTests.cpp
@@ -83,23 +83,23 @@
 - Produces: `Diagnostics::Initialize(const std::filesystem::path&, RunMetadata)`, `Diagnostics::Enabled() -> bool`, `Diagnostics::Record(std::string_view, std::string_view, std::string_view)`, `Diagnostics::SetGpu(std::string_view, uint32_t, uint32_t, uint32_t)`, `Diagnostics::Finish(Outcome, std::string_view)`, and `Diagnostics::Shutdown()`.
 - Calls before initialization and after shutdown are no-ops. `Finish` is idempotent and best-effort.
 
-- [ ] **Step 1: Write lifecycle and concurrency tests**
+- [x] **Step 1: Write lifecycle and concurrency tests**
 
   Add tests named `disabled_calls_are_noops`, `concurrent_events_are_retained`, `finish_is_idempotent`, `fatal_before_initialize_is_safe`, and `shutdown_flushes_running_report`.
 
-- [ ] **Step 2: Run `run_diagnostics` and verify the new tests fail**
+- [x] **Step 2: Run `run_diagnostics` and verify the new tests fail**
 
   Expected: compilation failures for the missing lifecycle functions.
 
-- [ ] **Step 3: Implement the lifecycle behind one private process-wide state**
+- [x] **Step 3: Implement the lifecycle behind one private process-wide state**
 
   Protect mutable state with a mutex, derive event offsets from `std::chrono::steady_clock`, and preserve the first terminal outcome. Do not throw from `Record`, `Finish`, or `Shutdown`.
 
-- [ ] **Step 4: Run `run_diagnostics`**
+- [x] **Step 4: Run `run_diagnostics`**
 
   Expected: PASS, including the concurrent recorder test.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
   git add src/common/runDiagnostics.h src/common/runDiagnostics.cpp tests/RunDiagnosticsTests.cpp
@@ -121,29 +121,29 @@
 - Consumes: Task 2 lifecycle.
 - Produces: CLI option `--diagnostics-output <json>`, `ConfigOptions::diagnostics_output_file`, lifecycle events for initialization and guest execution, `unsupported_import` events, fatal outcomes, and selected Vulkan device metadata.
 
-- [ ] **Step 1: Add failing CLI tests**
+- [x] **Step 1: Add failing CLI tests**
 
   Register `emulator_diagnostics_cli` for `kyty_emulator --help --diagnostics-output report.json` and `emulator_diagnostics_missing_value` with `WILL_FAIL TRUE`.
 
-- [ ] **Step 2: Run the CLI tests and verify failure**
+- [x] **Step 2: Run the CLI tests and verify failure**
 
   Run: `ctest --test-dir <build-dir> -R '^emulator_diagnostics_' --output-on-failure`
 
   Expected: the option is rejected or absent from help.
 
-- [ ] **Step 3: Parse the diagnostics option and initialize metadata**
+- [x] **Step 3: Parse the diagnostics option and initialize metadata**
 
   Initialize diagnostics after config/log setup and `param.json` loading. Populate build, platform, CPU, title ID, localized title, content version, and non-secret emulator configuration. Store only the title ID and filename leaf for path-valued configuration.
 
-- [ ] **Step 4: Record emulator milestones and Vulkan device metadata**
+- [x] **Step 4: Record emulator milestones and Vulkan device metadata**
 
   Record subsystem initialization completion, program load, guest execution start, selected Vulkan device name, vendor ID, device ID, and driver version.
 
-- [ ] **Step 5: Record unsupported imports and fatal outcomes**
+- [x] **Step 5: Record unsupported imports and fatal outcomes**
 
   Record the symbol NID/name and program filename leaf in `UnresolvedImportStub`. Call `Diagnostics::Finish(Outcome::Fatal, ...)` from the fatal-report path before emergency shutdown; preserve the existing text log and exit behavior.
 
-- [ ] **Step 6: Run focused and full core tests**
+- [x] **Step 6: Run focused and full core tests**
 
   Run: `ctest --test-dir <build-dir> -R '^(run_diagnostics|emulator_diagnostics_)' --output-on-failure`
 
@@ -151,7 +151,7 @@
 
   Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
   ```bash
   git add CMakeLists.txt src/common/emulatorConfig.h src/main.cpp src/emulator.cpp src/common/assert.cpp src/loader/runtimeLinker.cpp src/graphics/presentation/window/vulkanWindow.cpp
@@ -173,31 +173,31 @@
 - Produces: `run_corpus.py --manifest <json> --emulator <path> --output <dir> [--title-id <id>]`; exit classification `completed`, `fatal`, `host_exception`, `timeout`, or `launch_error`; one isolated directory per title and attempt.
 - Manifest fields: schema version `1`, title ID, local game path, optional patch path, timeout seconds, repeat count, and emulator arguments.
 
-- [ ] **Step 1: Write runner tests with a temporary fake emulator**
+- [x] **Step 1: Write runner tests with a temporary fake emulator**
 
   Cover valid launch, paths with spaces and Unicode, invalid title ID, missing game path, timeout termination, nonzero exit, repeated attempts, and absence of local absolute paths from generated public summaries.
 
-- [ ] **Step 2: Run the Python tests and verify failure**
+- [x] **Step 2: Run the Python tests and verify failure**
 
   Run: `python -m unittest discover -s tools/compat/tests -v`
 
   Expected: import failure because `run_corpus.py` does not exist.
 
-- [ ] **Step 3: Implement manifest validation and process execution**
+- [x] **Step 3: Implement manifest validation and process execution**
 
   Use only Python's standard library. Pass emulator arguments as an argument array, never through a shell. Write stdout, stderr, command metadata with paths replaced by stable labels, and diagnostics output into the attempt directory.
 
-- [ ] **Step 4: Ignore local corpus data**
+- [x] **Step 4: Ignore local corpus data**
 
   Add `/tools/compat/corpus.local.json` and `/_CompatibilityRuns/` to `.gitignore`. The example manifest contains placeholders only.
 
-- [ ] **Step 5: Register and run the Python tests**
+- [x] **Step 5: Register and run the Python tests**
 
   Register CTest `compat_corpus_tool` with label `core`, then run both the Python command and `ctest -R '^compat_corpus_tool$'`.
 
   Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   ```bash
   git add .gitignore CMakeLists.txt tools/compat
@@ -217,29 +217,29 @@
 - Consumes: Task 4 attempt directories and Task 1 report schema.
 - Produces: `summarize_runs.py --input <dir> --json <file> --markdown <file>` and one result per title/version/host/attempt.
 
-- [ ] **Step 1: Write summary tests**
+- [x] **Step 1: Write summary tests**
 
   Cover missing diagnostics, incomplete running reports, optional GPU fields, mixed attempts, deterministic ordering by title ID, and path sanitization.
 
-- [ ] **Step 2: Run the Python tests and verify failure**
+- [x] **Step 2: Run the Python tests and verify failure**
 
   Expected: import failure because `summarize_runs.py` does not exist.
 
-- [ ] **Step 3: Implement summary generation**
+- [x] **Step 3: Implement summary generation**
 
   Emit counts and latest outcomes without inferring a compatibility rung from a process exit alone. Use `unknown` when evidence is incomplete.
 
-- [ ] **Step 4: Add empty committed baseline artifacts**
+- [x] **Step 4: Add empty committed baseline artifacts**
 
   Seed both baseline files with schema version `1`, the eight title IDs, and `not_tested` outcomes. Do not add local paths, proprietary metadata, or guessed game versions.
 
-- [ ] **Step 5: Run all tool tests**
+- [x] **Step 5: Run all tool tests**
 
   Run: `python -m unittest discover -s tools/compat/tests -v`
 
   Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   ```bash
   git add tools/compat docs/compatibility
@@ -257,25 +257,25 @@
 - Consumes: all registered CTest targets.
 - Produces: CTest labels `core`, `vulkan`, and `platform`; Windows/Linux CI commands that build and execute every `core` test; documented local commands for Vulkan tests.
 
-- [ ] **Step 1: Inventory every registered CTest test**
+- [x] **Step 1: Inventory every registered CTest test**
 
   Record each test's label and required host capability in `docs/testing.md`. No test may remain unlabeled.
 
-- [ ] **Step 2: Add labels and verify the inventory**
+- [x] **Step 2: Add labels and verify the inventory**
 
   Run: `ctest --test-dir <build-dir> --show-only=json-v1`
 
   Expected: every test contains at least one of `core`, `vulkan`, or `platform`.
 
-- [ ] **Step 3: Change Windows and Linux CI to build the `kyty_tests` aggregate and run `core`**
+- [x] **Step 3: Change Windows and Linux CI to build the `kyty_tests` aggregate and run `core`**
 
   Replace hand-maintained regular-expression subsets with `ctest --test-dir ... -L core --output-on-failure`. Preserve platform-only checks and do not schedule Vulkan tests on workers without a validated Vulkan device.
 
-- [ ] **Step 4: Run the same core command locally**
+- [x] **Step 4: Run the same core command locally**
 
   Expected: all `core` tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
   git add CMakeLists.txt .github/workflows/build.yml docs/testing.md
@@ -294,15 +294,15 @@
 - Consumes: Tasks 4 and 5 tooling plus locally owned PS5 and game installations.
 - Produces: reproducible route descriptions, exact local title/version/hash records, Windows/Linux baseline results, and PS5 observation records without proprietary payloads.
 
-- [ ] **Step 1: Document the comparison protocol**
+- [x] **Step 1: Document the comparison protocol**
 
   Specify console/game/display settings, cold-start state, input sequence, scene checkpoint, observation duration, screenshot/video naming, frame-time sampling, audio sync observation, and allowed variance.
 
-- [ ] **Step 2: Create the private local corpus manifest**
+- [x] **Step 2: Create the private local corpus manifest**
 
   Copy `corpus.example.json` to ignored `corpus.local.json`, enter the eight owned game paths, and record exact metadata read from each `sce_sys/param.json` plus SHA-256 of the executable.
 
-- [ ] **Step 3: Perform one bounded Windows baseline run per title**
+- [x] **Step 3: Perform one bounded Windows baseline run per title**
 
   Run each title with Vulkan and shader validation enabled where supported. Preserve every attempt directory, including launch errors and timeouts.
 
@@ -314,11 +314,11 @@
 
   Follow the protocol for the earliest repeatable route available in each title. Store media privately; commit only hashes, observation notes, and non-copyrightable measurements.
 
-- [ ] **Step 6: Generate and review the sanitized baseline**
+- [x] **Step 6: Generate and review the sanitized baseline**
 
   Run `summarize_runs.py`, inspect both output files for absolute paths or protected content, and commit only the sanitized results.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
   ```bash
   git add docs/compatibility
