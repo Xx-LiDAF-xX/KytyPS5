@@ -359,6 +359,8 @@ def run_corpus(
             results.append(
                 _run_attempt(emulator, entry, attempt_number, attempt_directory)
             )
+            if os.name == "nt" and results[-1].get("duration_seconds", 0) > 2.0:
+                time.sleep(2.0)
             attempt_number += 1
     return results
 

@@ -43,7 +43,7 @@ public:
 
 	explicit GuestBackingStore(uint64_t size): m_size(size) {
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
-		for (int attempt = 0; attempt < 10; ++attempt) {
+		for (int attempt = 0; attempt < 30; ++attempt) {
 			m_handle = CreateFileMappingA(
 			    INVALID_HANDLE_VALUE, nullptr, PAGE_EXECUTE_READWRITE | SEC_COMMIT,
 			    static_cast<DWORD>(m_size >> 32u), static_cast<DWORD>(m_size & 0xffffffffu),

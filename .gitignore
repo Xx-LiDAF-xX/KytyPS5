@@ -10,3 +10,6 @@ _PipelineCache/
 /_CompatibilityRuns/
 __pycache__/
 *.py[cod]
+/_DownloadData/
+/_SaveData/
+/_TempData/
