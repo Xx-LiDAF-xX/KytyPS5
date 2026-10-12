@@ -998,6 +998,7 @@ void WindowContext::CreateVulkan() {
 	LOGF("Select device: %s\n", device_properties.deviceName.data());
 	Diagnostics::SetGpu(device_properties.deviceName.data(), device_properties.vendorID,
 	                    device_properties.deviceID, device_properties.driverVersion);
+	Diagnostics::Checkpoint();
 
 	const vk::PhysicalDeviceImageFormatInfo2 block_texel_view_info {
 	    .format = vk::Format::eBc1RgbaUnormBlock,

@@ -198,6 +198,25 @@ void TestShutdownFlushesRunningReport() {
   Check(!Diagnostics::Enabled(), "shutdown left diagnostics enabled");
 }
 
+void TestCheckpointPersistsRunningReport() {
+  ResetLifecycleRoot();
+  const auto file = LifecycleRoot() / "checkpoint.json";
+  Diagnostics::Initialize(file, MakeReport().metadata);
+  Diagnostics::Record("lifecycle", "guest_execution_started", "guest thread starting");
+  Diagnostics::SetGpu("Test GPU", 0x1234, 0x5678, 9);
+  Diagnostics::Checkpoint();
+
+  const auto json = ReadJson(file);
+  Check(json.at("outcome") == "running",
+        "checkpoint changed the running outcome");
+  Check(json.at("events").size() == 1 &&
+            json.at("events").at(0).at("code") == "guest_execution_started",
+        "checkpoint did not persist the latest event");
+  Check(json.at("metadata").at("gpu").at("name") == "Test GPU",
+        "checkpoint did not persist GPU metadata");
+  Diagnostics::Shutdown();
+}
+
 } // namespace
 
 int main() {
@@ -210,6 +229,7 @@ int main() {
   TestFinishIsIdempotent();
   TestFatalBeforeInitializeIsSafe();
   TestShutdownFlushesRunningReport();
+  TestCheckpointPersistsRunningReport();
   ResetLifecycleRoot();
   std::puts("RunDiagnosticsTests: all cases passed");
   return 0;

@@ -213,6 +213,15 @@ void SetGpu(std::string_view name, uint32_t vendor_id, uint32_t device_id,
 	    GpuMetadata {std::string(name), vendor_id, device_id, driver_version};
 }
 
+void Checkpoint() noexcept {
+	auto&           state = State();
+	std::lock_guard lock(state.mutex);
+	if (!state.enabled || state.finished) {
+		return;
+	}
+	WriteCurrentReport(state);
+}
+
 void Finish(Outcome outcome, std::string_view detail) noexcept {
 	auto&           state = State();
 	std::lock_guard lock(state.mutex);

@@ -97,6 +97,7 @@ static void InitializeDiagnostics(const Config::ConfigOptions& cfg,
 
 	Diagnostics::Initialize(cfg.diagnostics_output_file, std::move(metadata));
 	Diagnostics::Record("lifecycle", "diagnostics_initialized", "run report started");
+	Diagnostics::Checkpoint();
 }
 
 static void KytyClose() {
@@ -200,6 +201,7 @@ static void Init(const Config::ConfigOptions& cfg, const std::filesystem::path& 
 	subsystems.Initialize<Libs::Audio::Lifecycle>();
 	subsystems.Initialize<Libs::Graphics::Lifecycle>();
 	Diagnostics::Record("lifecycle", "subsystems_initialized", "initialization complete");
+	Diagnostics::Checkpoint();
 }
 
 static void LoadElf(const std::filesystem::path& elf, bool dbg_print_reloc = false,
@@ -209,6 +211,7 @@ static void LoadElf(const std::filesystem::path& elf, bool dbg_print_reloc = fal
 	auto* program = rt->LoadProgram(
 	    Libs::LibKernel::FileSystem::GetRealFilename(Common::PathToGenericString(elf)));
 	Diagnostics::Record("loader", "program_loaded", elf.filename().string());
+	Diagnostics::Checkpoint();
 
 	if (dbg_print_reloc) {
 		program->dbg_print_reloc = true;
@@ -223,6 +226,7 @@ static void LoadElf(const std::filesystem::path& elf, bool dbg_print_reloc = fal
 static void Execute(const std::filesystem::path& game_patch) {
 	auto           patch_path = game_patch;
 	Diagnostics::Record("lifecycle", "guest_execution_started", "guest thread starting");
+	Diagnostics::Checkpoint();
 	Common::Thread guest_thread(
 	    [](void* param) {
 		    auto* rt = Common::Singleton<Loader::RuntimeLinker>::Instance();

@@ -58,6 +58,7 @@ void               Initialize(const std::filesystem::path& file, RunMetadata met
 void Record(std::string_view category, std::string_view code, std::string_view message) noexcept;
 void SetGpu(std::string_view name, uint32_t vendor_id, uint32_t device_id,
             uint32_t driver_version) noexcept;
+void Checkpoint() noexcept;
 void Finish(Outcome outcome, std::string_view detail) noexcept;
 void Shutdown() noexcept;
 

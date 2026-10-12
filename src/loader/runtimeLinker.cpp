@@ -211,6 +211,9 @@ static KYTY_SYSV_ABI uint64_t UnresolvedImportStub(uint64_t record_id) {
 			LOGF("Unresolved import stub called [%u]: record_id=%" PRIu64 " symbol=<bad-record>\n",
 			     log_index, record_id);
 		}
+		if (log_index < 16 || log_index % 64 == 0) {
+			Diagnostics::Checkpoint();
+		}
 	}
 	return 0;
 }
