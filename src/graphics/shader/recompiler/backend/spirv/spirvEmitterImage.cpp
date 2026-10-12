@@ -576,7 +576,8 @@ uint32_t PackImageTexel(ValueEmitContext& ctx, const IR::MemoryInfo& mem, uint32
 	return result;
 }
 
-uint32_t StoreTexel(ValueEmitContext& ctx, const IR::MemoryInfo& mem, uint32_t data, bool integer) {
+uint32_t StoreTexel(ValueEmitContext& ctx, const IR::MemoryInfo& mem, uint32_t data,
+                    Prospero::TextureNumericClass numeric_class) {
 	const auto swizzle = ctx.state.program.info.images[mem.resource].shader_swizzle;
 	uint32_t   values[4] {};
 	const auto dmask = mem.dmask != 0u ? mem.dmask : 1u;
@@ -597,15 +598,32 @@ uint32_t StoreTexel(ValueEmitContext& ctx, const IR::MemoryInfo& mem, uint32_t d
 				             ConstantU32(ctx.state, 0xffffu));
 			}
 		}
-		values[component] = integer ? raw
-		                    : mem.data_bits == 16u
-		                        ? EmitF16BitsToF32(ctx.state, raw)
-		                        : Unary(ctx.state, spv::OpBitcast, TypeF32(ctx.state), raw);
+		switch (numeric_class) {
+			case Prospero::TextureNumericClass::Uint: values[component] = raw; break;
+			case Prospero::TextureNumericClass::Sint:
+				if (mem.data_bits == 16u) {
+					values[component] = ctx.state.builder.AllocateId();
+					ctx.state.builder.AddFunction(
+					    spv::OpBitFieldSExtract, TypeI32(ctx.state), values[component], raw,
+					    ConstantU32(ctx.state, 0u), ConstantU32(ctx.state, 16u));
+				} else {
+					values[component] =
+					    Unary(ctx.state, spv::OpBitcast, TypeI32(ctx.state), raw);
+				}
+				break;
+			case Prospero::TextureNumericClass::Float:
+				values[component] =
+				    mem.data_bits == 16u
+				        ? EmitF16BitsToF32(ctx.state, raw)
+				        : Unary(ctx.state, spv::OpBitcast, TypeF32(ctx.state), raw);
+				break;
+			case Prospero::TextureNumericClass::Unsupported:
+				EXIT("invalid storage image numeric class");
+		}
 	}
 	const auto texel = ctx.state.builder.AllocateId();
 	ctx.state.builder.AddFunction(spv::OpCompositeConstruct,
-	                              integer ? TypeU32Vector(ctx.state, 4)
-	                                      : TypeF32Vector(ctx.state, 4),
+	                              ImageVectorType(ctx.state, numeric_class, 4),
 	                              texel, values[0], values[1], values[2], values[3]);
 	return PackImageTexel(ctx, mem, texel);
 }
@@ -770,15 +788,15 @@ void EmitImage(ValueEmitContext& ctx, const IR::Inst& inst) {
 		return;
 	}
 	if (op == IR::ValueOpcode::ImageWrite) {
-		const bool uint_image = image.numeric_class == Prospero::TextureNumericClass::Uint;
-		const auto dimension  = image.dimension;
+		const auto numeric_class = image.numeric_class;
+		const auto dimension     = image.dimension;
 		EmitIfCondition(state, ctx.Arg(inst, 3), [&]() {
 			const auto mip_lod =
 			    state.program.info.images[mem.resource].mip_mode == IR::ImageMipMode::Dynamic
 			        ? LodU32(ctx, mem, *address, dimension)
 			        : 0u;
 			const auto coord = CoordU32(ctx, mem, *address, dimension);
-			const auto texel = StoreTexel(ctx, mem, ctx.Arg(inst, 2), uint_image);
+			const auto texel = StoreTexel(ctx, mem, ctx.Arg(inst, 2), numeric_class);
 			EmitStorageImageWrite(state, mem.resource, mip_lod, coord, texel);
 		});
 		return;

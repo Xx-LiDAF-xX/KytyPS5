@@ -5943,6 +5943,41 @@ void TestNewShaderRecompilerStorageImage1DDescriptorVariants() {
       "1D-array store did not access the 1D-array storage descriptor binding");
 }
 
+void TestNewShaderRecompilerSignedStorageImage() {
+  const uint32_t shader[] = {
+      EncodeMimg0(0x08, 0xf),
+      EncodeMimg1(12, 0, 0, 1), // image_store
+      0xbf810000u,
+  };
+
+  std::array<uint32_t, 64> user_data{};
+  user_data[0] = 0x1000u;
+  user_data[1] = static_cast<uint32_t>(
+                     Prospero::BufferFormat::k16_16_16_16SInt)
+                 << 20u;
+  user_data[3] = static_cast<uint32_t>(Prospero::ImageType::kColor2D) << 28u;
+  auto options = MakeCompileOptions(ShaderType::Compute);
+  options.user_data = user_data;
+
+  auto result = RecompileForTest(shader, options);
+  Check(result.program.info.images.size() == 1,
+        "signed storage image was not materialized exactly once");
+  Check(result.resources.images.size() == 1 &&
+            ((result.resources.images.front().dwords[1] >> 20u) & 0x1ffu) ==
+                static_cast<uint32_t>(
+                    Prospero::BufferFormat::k16_16_16_16SInt),
+        "signed storage image test used the wrong descriptor format");
+  const auto &image = result.program.info.images.front();
+  Check(image.resource_class ==
+                ShaderRecompiler::IR::ImageResourceClass::Storage &&
+            !image.atomic &&
+            image.numeric_class == Prospero::TextureNumericClass::Sint,
+        "signed storage image descriptor lost its numeric class");
+  Check(SpirvContainsOpcode(result.spirv, 99),
+        "signed storage image did not emit OpImageWrite");
+  CheckSpirvBinaryValidates(result.spirv);
+}
+
 void TestNewShaderRecompilerNullImageUsesCanonical2DView() {
   const uint32_t shader[] = {
       EncodeMimg0(0x20, 0xf, false, 0),
@@ -15679,6 +15714,7 @@ int main() {
   TestNewShaderRecompilerBufferAtomicsGuardedByBounds();
   TestCapturedBufferAtomicsX2();
   TestDisabledDebugBranches();
+  TestNewShaderRecompilerSignedStorageImage();
   TestNewShaderRecompilerPixelImageSampleLodSelection();
   TestNewShaderRecompilerBranchConditionForms();
   TestNewShaderRecompilerSetpcBranch();

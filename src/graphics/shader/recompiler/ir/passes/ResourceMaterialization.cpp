@@ -543,8 +543,8 @@ static bool BuildResourceSpecialization(const ResourcePlan& program, ResourceSna
 		                              base.written && !base.read && !base.atomic;
 		image.numeric_class         = Prospero::SampledTextureNumericClass(format);
 		if (storage) {
-			if ((!raw_sint_storage && image.numeric_class == Prospero::TextureNumericClass::Sint) ||
-			    image.numeric_class == Prospero::TextureNumericClass::Unsupported) {
+			if (image.numeric_class == Prospero::TextureNumericClass::Unsupported ||
+			    (base.atomic && image.numeric_class == Prospero::TextureNumericClass::Sint)) {
 				return SpecializationFail(
 				    fmt::format("storage image descriptor {} uses unsupported format {}", i,
 				                static_cast<uint32_t>(format)));

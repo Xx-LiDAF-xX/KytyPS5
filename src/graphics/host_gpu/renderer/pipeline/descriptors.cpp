@@ -316,8 +316,7 @@ void ValidateStorageTexture(const ShaderRecompiler::IR::ImageResource& resource,
 	const bool format_ok =
 	    raw_sint_storage || raw_float_atomic ||
 	    (numeric_class != Prospero::TextureNumericClass::Unsupported &&
-	     numeric_class != Prospero::TextureNumericClass::Sint &&
-	     uint_resource == (numeric_class == Prospero::TextureNumericClass::Uint) &&
+	     resource.numeric_class == numeric_class &&
 	     (!resource.atomic || format == (resource.atomic64 ? Prospero::BufferFormat::k32_32UInt
 	                                                       : Prospero::BufferFormat::k32UInt)));
 	if (resource_ok && descriptor_ok && encoding_ok && format_ok && size != 0) {
@@ -410,8 +409,7 @@ static ImageViewInfo TextureViewInfo(const ShaderRecompiler::IR::ImageResource& 
 	}
 	view.usage = storage ? vk::ImageUsageFlagBits::eStorage : vk::ImageUsageFlagBits::eSampled;
 	view.mapping =
-	    storage || resource.depth_compare ||
-	    surface_format.conversion_format != Prospero::BufferFormat::kInvalid
+	    storage || surface_format.conversion_format != Prospero::BufferFormat::kInvalid
 	        ? vk::ComponentMapping {}
 	        : TextureGetComponentMapping(descriptor.DstSelXYZW(), surface_format.host_to_storage);
 	switch (resource.dimension) {
@@ -598,8 +596,11 @@ TextureBinding RenderExecutor::ResolveTexture(const ShaderRecompiler::IR::ImageR
 		}
 	}
 	const auto storage_view_format = resource.atomic64 ? vk::Format::eR64Uint
-	                                 : storage && (resource.atomic ||
-	                                               format == Prospero::BufferFormat::k32SInt)
+	                                 : storage &&
+	                                           (resource.atomic ||
+	                                            (format == Prospero::BufferFormat::k32SInt &&
+	                                             resource.numeric_class ==
+	                                                 Prospero::TextureNumericClass::Uint))
 	                                     ? vk::Format::eR32Uint
 	                                     : SrgbStorageViewFormat(pixel_format);
 	const auto view_format         = storage && storage_view_format != vk::Format::eUndefined

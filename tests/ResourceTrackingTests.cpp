@@ -2218,6 +2218,20 @@ void TestDynamicStorageMipTracking() {
   Check(MaterializeResources(resource_plan, runtime, snapshot,
                              specialization),
         "dynamic storage resources did not materialize");
+  auto signed_user_data = user_data;
+  signed_user_data[1] =
+      static_cast<uint32_t>(
+          Libs::Graphics::Prospero::BufferFormat::k16_16_16_16SInt)
+      << 20u;
+  ResourceSnapshot signed_snapshot;
+  ResourceSpecialization signed_specialization;
+  Check(MaterializeResources(resource_plan, {.user_data = signed_user_data},
+                             signed_snapshot, signed_specialization) &&
+            std::ranges::all_of(signed_specialization.images, [](const auto &image) {
+              return image.numeric_class ==
+                     Libs::Graphics::Prospero::TextureNumericClass::Sint;
+            }),
+        "signed storage resources did not materialize");
   ApplyResourceSpecialization(fixture.program, specialization);
   Check(fixture.program.info.images[1].mip_count == 3 &&
             snapshot.images.size() == fixture.program.info.images.size(),
@@ -3482,16 +3496,16 @@ void TestShaderInfoCollection() {
 void TestImageBindingAbi() {
   using NumericClass = Libs::Graphics::Prospero::TextureNumericClass;
 
-  Check(ImageBindingCount == 48u &&
+  Check(ImageBindingCount == 53u &&
             static_cast<uint32_t>(DescriptorBindingKind::Buffers) == 0u &&
-            static_cast<uint32_t>(DescriptorBindingKind::Samplers) == 49u &&
-            static_cast<uint32_t>(DescriptorBindingKind::Gds) == 50u &&
-            static_cast<uint32_t>(DescriptorBindingKind::BdaPagetable) == 51u &&
-            static_cast<uint32_t>(DescriptorBindingKind::FaultBuffer) == 52u &&
-            static_cast<uint32_t>(DescriptorBindingKind::FlattenedSrt) == 53u &&
-            static_cast<uint32_t>(DescriptorBindingKind::ShaderData) == 54u &&
-            static_cast<uint32_t>(DescriptorBindingKind::SharedMemory) == 55u &&
-            static_cast<uint32_t>(DescriptorBindingKind::Count) == 56u,
+            static_cast<uint32_t>(DescriptorBindingKind::Samplers) == 54u &&
+            static_cast<uint32_t>(DescriptorBindingKind::Gds) == 55u &&
+            static_cast<uint32_t>(DescriptorBindingKind::BdaPagetable) == 56u &&
+            static_cast<uint32_t>(DescriptorBindingKind::FaultBuffer) == 57u &&
+            static_cast<uint32_t>(DescriptorBindingKind::FlattenedSrt) == 58u &&
+            static_cast<uint32_t>(DescriptorBindingKind::ShaderData) == 59u &&
+            static_cast<uint32_t>(DescriptorBindingKind::SharedMemory) == 60u &&
+            static_cast<uint32_t>(DescriptorBindingKind::Count) == 61u,
         "native descriptor binding anchors changed");
 
   const std::array sampled_dimensions{
@@ -3510,7 +3524,8 @@ void TestImageBindingAbi() {
   };
   const std::array sampled_classes{NumericClass::Float, NumericClass::Uint,
                                    NumericClass::Sint};
-  const std::array storage_classes{NumericClass::Float, NumericClass::Uint};
+  const std::array storage_classes{NumericClass::Float, NumericClass::Uint,
+                                   NumericClass::Sint};
   uint32_t index = 0;
   const auto CheckBinding =
       [&](ImageResourceClass resource_class, NumericClass numeric_class,
@@ -3590,8 +3605,6 @@ void TestImageBindingAbi() {
   Check(Invalid(image), "atomic sampled image received a descriptor binding");
   image.resource_class = ImageResourceClass::Storage;
   image.atomic = false;
-  image.numeric_class = NumericClass::Sint;
-  Check(Invalid(image), "signed storage image received a descriptor binding");
   image.numeric_class = NumericClass::Float;
   image.dimension = Decoder::ImageDimension::Dim2DMsaa;
   Check(Invalid(image),
