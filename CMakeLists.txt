@@ -711,6 +711,74 @@ if(BUILD_TESTING)
 	add_test(NAME buffer_cache_ranges
 		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --buffer-cache-range-only)
 
+	# Keep headless-safe coverage separate from tests that require a Vulkan device.
+	# Every registered test has exactly one capability label so CI selection does
+	# not silently omit current coverage.
+	set(kyty_core_tests
+		emulator_user_name_cli
+		emulator_user_name_too_long
+		emulator_present_mode_cli
+		emulator_present_mode_invalid
+		emulator_diagnostics_cli
+		emulator_diagnostics_missing_value
+		ime_dialog
+		shader_cfg
+		scalar_provenance
+		image_page_table
+		memory_tracker
+		page_manager
+		archive_file
+		trophy_system
+		avplayer_file
+		bit_array
+		lru_cache
+		run_diagnostics
+		compat_corpus_tool
+		shader_vertex_metadata
+		resource_materialization
+		resource_tracking
+		event_queue_lifetime
+		kernel_file_system
+		sync_on_address
+		audio_out2_port
+		audio_out_timing
+		ngs2_sampler
+		pad_haptics
+		controller_settings
+		save_data_memory
+		png_enc
+		ces
+		save_data_dialog
+		http_uri_parse
+		graphics_draw_offsets
+		virtual_memory_allocation
+		guest_red_zone_patcher
+		image_transfer_layout
+		texture_cache_depth_readback
+	)
+	set(kyty_vulkan_tests
+		shader_recompiler_compute
+		shader_recompiler_alignbyte
+		graphics_pipeline_rasterization
+		command_scheduler_timeline
+		stream_buffer_ring
+		gpu_command_lane
+		pm4_context_state
+		gpu_tiler
+		texture_cache_layered_image
+		host_image_allocation
+		texture_cache_image_views
+		texture_cache_storage_sampled
+		compute_meta_clear_classification
+		buffer_cache_dirty_gc
+		color_render_target_1d
+		texture_cache_image_overlap
+		texture_cache_htile_clear
+		buffer_cache_ranges
+	)
+	set_tests_properties(${kyty_core_tests} PROPERTIES LABELS core)
+	set_tests_properties(${kyty_vulkan_tests} PROPERTIES LABELS vulkan)
+
 	add_custom_target(kyty_tests DEPENDS
 		ime_dialog_tests
 		shader_cfg_tests
@@ -757,13 +825,16 @@ if(APPLE AND (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR
 	target_include_directories(macos_sse4a_tests PRIVATE ${inc_headers})
 	if(BUILD_TESTING)
 		add_test(NAME macos_sse4a COMMAND $<TARGET_FILE:macos_sse4a_tests>)
-		set_tests_properties(macos_sse4a PROPERTIES TIMEOUT 15)
+		set_tests_properties(macos_sse4a PROPERTIES TIMEOUT 15 LABELS platform)
 		add_dependencies(kyty_tests macos_sse4a_tests)
 	endif()
 endif()
 
 add_executable(kyty_emulator "${KYTY_SOURCE_DIR}/main.cpp" ${kyty_emulator_src})
 configure_macos_guest_address_space(kyty_emulator)
+if(BUILD_TESTING)
+	add_dependencies(kyty_tests kyty_emulator)
+endif()
 
 set(KYTY_TROPHY_UNLOCK_SOUND "${CMAKE_CURRENT_SOURCE_DIR}/assets/sounds/trophy-unlock.wav")
 add_custom_target(kyty_trophy_sound
