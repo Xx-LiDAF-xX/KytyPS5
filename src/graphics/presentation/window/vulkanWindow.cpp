@@ -7,6 +7,7 @@
 #include "common/file.h"
 #include "common/logging/log.h"
 #include "common/profiler.h"
+#include "common/runDiagnostics.h"
 #include "common/stringUtils.h"
 #include "common/threads.h"
 #include "common/timer.h"
@@ -995,6 +996,8 @@ void WindowContext::CreateVulkan() {
 	const auto& device_properties = graphic_ctx.GetPhysicalDeviceProperties();
 
 	LOGF("Select device: %s\n", device_properties.deviceName.data());
+	Diagnostics::SetGpu(device_properties.deviceName.data(), device_properties.vendorID,
+	                    device_properties.deviceID, device_properties.driverVersion);
 
 	const vk::PhysicalDeviceImageFormatInfo2 block_texel_view_info {
 	    .format = vk::Format::eBc1RgbaUnormBlock,

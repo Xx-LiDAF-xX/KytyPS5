@@ -6,6 +6,7 @@
 #include "common/file.h"
 #include "common/logging/log.h"
 #include "common/profiler.h"
+#include "common/runDiagnostics.h"
 #include "common/singleton.h"
 #include "common/stringUtils.h"
 #include "common/subsystems.h"
@@ -29,21 +30,25 @@
 #include <cstdlib>
 #include <filesystem>
 #include <thread>
+#include <utility>
+#include <magic_enum.hpp>
 
 namespace Emulator {
 
+static const char* PlatformName() {
+#if defined(__APPLE__)
+	return "macOS";
+#elif KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+	return "Windows";
+#elif KYTY_PLATFORM == KYTY_PLATFORM_LINUX
+	return "Linux";
+#else
+	return "Unknown";
+#endif
+}
+
 static void PrintSystemInfo() {
 	const Common::SystemInfo info = Common::GetSystemInfo();
-
-#if defined(__APPLE__)
-	static constexpr auto platform_name = "macOS";
-#elif KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
-	static constexpr auto platform_name = "Windows";
-#elif KYTY_PLATFORM == KYTY_PLATFORM_LINUX
-	static constexpr auto platform_name = "Linux";
-#else
-	static constexpr auto platform_name = "Unknown";
-#endif
 
 	LOGF("Build\n"
 	     "  version: %s\n\n"
@@ -51,14 +56,54 @@ static void PrintSystemInfo() {
 	     "  os:      %s\n"
 	     "  cpu:     %s\n"
 	     "  threads: %u\n\n",
-	     KYTY_BUILD_LABEL, platform_name, info.ProcessorName.c_str(),
+	     KYTY_BUILD_LABEL, PlatformName(), info.ProcessorName.c_str(),
 	     std::thread::hardware_concurrency());
+}
+
+static std::string BoolText(bool value) {
+	return value ? "true" : "false";
+}
+
+static void InitializeDiagnostics(const Config::ConfigOptions& cfg,
+                                  const std::filesystem::path& elf) {
+	if (cfg.diagnostics_output_file.empty()) {
+		return;
+	}
+
+	Diagnostics::RunMetadata metadata {};
+	metadata.build_label     = KYTY_BUILD_LABEL;
+	metadata.platform        = PlatformName();
+	metadata.cpu_name        = Common::GetSystemInfo().ProcessorName;
+	metadata.executable_name = elf.filename().string();
+	(void)Loader::SystemContentParamSfoGetString("TITLE_ID", &metadata.title_id);
+	(void)Loader::SystemContentParamSfoGetString("TITLE", &metadata.title_name);
+	(void)Loader::SystemContentParamSfoGetString("APP_VER", &metadata.content_version);
+	metadata.configuration = {
+	    {"screen_width", std::to_string(cfg.screen_width)},
+	    {"screen_height", std::to_string(cfg.screen_height)},
+	    {"present_mode", std::string(magic_enum::enum_name(cfg.present_mode))},
+	    {"gpu_index", std::to_string(cfg.gpu_index)},
+	    {"fullscreen", BoolText(cfg.fullscreen_enabled)},
+	    {"hdr", BoolText(cfg.hdr_enabled)},
+	    {"vblank_frequency", std::to_string(cfg.vblank_frequency)},
+	    {"vulkan_validation", BoolText(cfg.vulkan_validation_enabled)},
+	    {"shader_validation", BoolText(cfg.shader_validation_enabled)},
+	    {"shader_optimization",
+	     std::string(magic_enum::enum_name(cfg.shader_optimization_type))},
+	    {"tessellation", BoolText(cfg.tessellation_enabled)},
+	    {"readback_linear_images", BoolText(cfg.readback_linear_images)},
+	    {"sync_raw_image_buffers", BoolText(cfg.sync_raw_image_buffers)},
+	};
+
+	Diagnostics::Initialize(cfg.diagnostics_output_file, std::move(metadata));
+	Diagnostics::Record("lifecycle", "diagnostics_initialized", "run report started");
 }
 
 static void KytyClose() {
 	auto* rt = Common::Singleton<Loader::RuntimeLinker>::Instance();
 
 	rt->Clear();
+	Diagnostics::Finish(Diagnostics::Outcome::Completed, "emulator shutdown completed");
 
 	LOGF("done!\n");
 
@@ -125,7 +170,7 @@ static void ClearDebugTextureFolder() {
 }
 
 static void Init(const Config::ConfigOptions& cfg, const std::filesystem::path& param_json,
-                 Common::Subsystems& subsystems) {
+                 const std::filesystem::path& elf, Common::Subsystems& subsystems) {
 	EXIT_IF(!Common::Thread::IsMainThread());
 
 	subsystems.Initialize<Config::Lifecycle>();
@@ -139,6 +184,7 @@ static void Init(const Config::ConfigOptions& cfg, const std::filesystem::path& 
 			Libs::LibKernel::Memory::SetFlexibleMemorySize(flexible_memory_size);
 		}
 	}
+	InitializeDiagnostics(cfg, elf);
 	if (cfg.splash_enabled) {
 		Libs::Graphics::InitializeSplashScreen(param_json.parent_path());
 	}
@@ -153,6 +199,7 @@ static void Init(const Config::ConfigOptions& cfg, const std::filesystem::path& 
 	subsystems.Initialize<Libs::Controller::Lifecycle>();
 	subsystems.Initialize<Libs::Audio::Lifecycle>();
 	subsystems.Initialize<Libs::Graphics::Lifecycle>();
+	Diagnostics::Record("lifecycle", "subsystems_initialized", "initialization complete");
 }
 
 static void LoadElf(const std::filesystem::path& elf, bool dbg_print_reloc = false,
@@ -161,6 +208,7 @@ static void LoadElf(const std::filesystem::path& elf, bool dbg_print_reloc = fal
 
 	auto* program = rt->LoadProgram(
 	    Libs::LibKernel::FileSystem::GetRealFilename(Common::PathToGenericString(elf)));
+	Diagnostics::Record("loader", "program_loaded", elf.filename().string());
 
 	if (dbg_print_reloc) {
 		program->dbg_print_reloc = true;
@@ -174,6 +222,7 @@ static void LoadElf(const std::filesystem::path& elf, bool dbg_print_reloc = fal
 
 static void Execute(const std::filesystem::path& game_patch) {
 	auto           patch_path = game_patch;
+	Diagnostics::Record("lifecycle", "guest_execution_started", "guest thread starting");
 	Common::Thread guest_thread(
 	    [](void* param) {
 		    auto* rt = Common::Singleton<Loader::RuntimeLinker>::Instance();
@@ -181,6 +230,7 @@ static void Execute(const std::filesystem::path& game_patch) {
 	    },
 	    &patch_path);
 	Libs::Graphics::WindowRun();
+	Diagnostics::Finish(Diagnostics::Outcome::Completed, "presentation loop ended");
 	std::quick_exit(0);
 }
 
@@ -195,7 +245,7 @@ void Run(const RunOptions& options) {
 
 	const auto         param_json = options.app0_dir / "sce_sys" / "param.json";
 	Common::Subsystems subsystems(true);
-	Init(options.config, param_json, subsystems);
+	Init(options.config, param_json, options.elf, subsystems);
 
 	ClearDebugTextureFolder();
 

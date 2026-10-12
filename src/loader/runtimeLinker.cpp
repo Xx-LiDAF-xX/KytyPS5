@@ -8,6 +8,7 @@
 #include "common/logging/log.h"
 #include "common/platform/sysDbg.h"
 #include "common/profiler.h"
+#include "common/runDiagnostics.h"
 #include "common/singleton.h"
 #include "common/stringUtils.h"
 #include "common/threads.h"
@@ -194,6 +195,10 @@ static KYTY_SYSV_ABI uint64_t UnresolvedImportStub(uint64_t record_id) {
 	if (log_index < 1024) {
 		if (record_id < g_stubbed_imports.size()) {
 			const auto& record = g_stubbed_imports[record_id];
+			Diagnostics::Record(
+			    "loader", "unsupported_import",
+			    fmt::format("symbol={} program={}", record.name,
+			                std::filesystem::path(record.program).filename().string()));
 			printf("Unresolved import stub called: %s\n", record.name.c_str());
 			LOGF("Unresolved import stub called [%u]: patch_vaddr=0x%016" PRIx64
 			     " jmprela_index=%" PRIu32 " symbol=%s type=%s bind=%s program=%s\n",
@@ -201,6 +206,7 @@ static KYTY_SYSV_ABI uint64_t UnresolvedImportStub(uint64_t record_id) {
 			     magic_enum::enum_name(record.type), magic_enum::enum_name(record.bind),
 			     record.program.c_str());
 		} else {
+			Diagnostics::Record("loader", "unsupported_import", "bad record identifier");
 			printf("Unresolved import stub called: <bad-record>\n");
 			LOGF("Unresolved import stub called [%u]: record_id=%" PRIu64 " symbol=<bad-record>\n",
 			     log_index, record_id);

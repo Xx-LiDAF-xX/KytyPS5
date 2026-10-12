@@ -1,6 +1,7 @@
 #include "common/assert.h"
 
 #include "common/logging/log.h"
+#include "common/runDiagnostics.h"
 #include "common/subsystems.h"
 #include "kytyGitVersion.h"
 
@@ -18,6 +19,7 @@ static std::string BuildFatalReport(const char* title, std::string_view text, co
 }
 
 static int DbgReport(const char* title, std::string_view text, const char* file, int line) {
+	Diagnostics::Finish(Diagnostics::Outcome::Fatal, text);
 	Log::WriteFatal(BuildFatalReport(title, text, file, line));
 	Subsystems::EmergencyShutdownActive();
 	return 1;
@@ -33,11 +35,13 @@ int DbgNotImplementedHandler(const char* expr, const char* file, int line) {
 }
 
 int DbgExitHandler(const char* file, int line, std::string_view text) {
+	Diagnostics::Finish(Diagnostics::Outcome::Fatal, text);
 	Log::WriteFatal(BuildFatalReport("--- Error ---", text, file, line));
 	return 1;
 }
 
 int DbgExitHandler(const char* file, int line, fmt::text_style style, std::string_view text) {
+	Diagnostics::Finish(Diagnostics::Outcome::Fatal, text);
 	Log::WriteFatal(style, BuildFatalReport("--- Error ---", text, file, line));
 	return 1;
 }

@@ -619,6 +619,12 @@ if(BUILD_TESTING)
 	add_test(NAME emulator_present_mode_invalid
 	         COMMAND $<TARGET_FILE:kyty_emulator> --help --present-mode Invalid)
 	set_tests_properties(emulator_present_mode_invalid PROPERTIES WILL_FAIL TRUE)
+	add_test(NAME emulator_diagnostics_cli
+	         COMMAND $<TARGET_FILE:kyty_emulator> --help --diagnostics-output report.json)
+	set_tests_properties(emulator_diagnostics_cli PROPERTIES LABELS core)
+	add_test(NAME emulator_diagnostics_missing_value
+	         COMMAND $<TARGET_FILE:kyty_emulator> --help --diagnostics-output)
+	set_tests_properties(emulator_diagnostics_missing_value PROPERTIES WILL_FAIL TRUE LABELS core)
 	add_test(NAME ime_dialog COMMAND $<TARGET_FILE:ime_dialog_tests>)
 	add_test(NAME shader_cfg COMMAND $<TARGET_FILE:shader_cfg_tests>)
 	add_test(NAME scalar_provenance COMMAND $<TARGET_FILE:scalar_provenance_tests>)

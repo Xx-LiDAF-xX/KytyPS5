@@ -180,6 +180,10 @@ bool SkipNoticeScreen() {
 	return g_config->skip_notice_screen;
 }
 
+std::filesystem::path GetDiagnosticsOutputFile() {
+	return g_config->diagnostics_output_file;
+}
+
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 bool RedZoneProtectionEnabled() {
 	return g_config->red_zone_protection_enabled;

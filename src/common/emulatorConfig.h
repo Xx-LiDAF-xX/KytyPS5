@@ -81,6 +81,7 @@ struct ConfigOptions {
 	bool                   trophy_enabled              = true;
 	bool                   playgo_hack_enabled         = false;
 	bool                   skip_notice_screen          = false;
+	std::filesystem::path  diagnostics_output_file;
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 	bool red_zone_protection_enabled = false;
 #endif
@@ -137,6 +138,7 @@ bool TessellationEnabled();
 bool TrophyEnabled();
 bool PlayGoHackEnabled();
 bool SkipNoticeScreen();
+std::filesystem::path GetDiagnosticsOutputFile();
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 bool RedZoneProtectionEnabled();
 #endif
