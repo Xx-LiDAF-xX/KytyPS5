@@ -3,7 +3,7 @@
   "titles": [
     {
       "title_id": "PPSA01325",
-      "game_path": "C:/replace/with/your/owned/game/directory",
+      "game_path": "C:/replace/PPSA01325",
       "timeout_seconds": 120,
       "repeat": 1,
       "arguments": [
@@ -12,6 +12,55 @@
         "--shader-validation",
         "true"
       ]
+    },
+    {
+      "title_id": "PPSA01859",
+      "game_path": "C:/replace/PPSA01859",
+      "timeout_seconds": 120,
+      "repeat": 1,
+      "arguments": ["--vulkan-validation", "true", "--shader-validation", "true"]
+    },
+    {
+      "title_id": "PPSA02100",
+      "game_path": "C:/replace/PPSA02100",
+      "timeout_seconds": 120,
+      "repeat": 1,
+      "arguments": ["--vulkan-validation", "true", "--shader-validation", "true"]
+    },
+    {
+      "title_id": "PPSA21567",
+      "game_path": "C:/replace/PPSA21567",
+      "timeout_seconds": 120,
+      "repeat": 1,
+      "arguments": ["--vulkan-validation", "true", "--shader-validation", "true"]
+    },
+    {
+      "title_id": "PPSA25991",
+      "game_path": "C:/replace/PPSA25991",
+      "timeout_seconds": 120,
+      "repeat": 1,
+      "arguments": ["--vulkan-validation", "true", "--shader-validation", "true"]
+    },
+    {
+      "title_id": "PPSA26223",
+      "game_path": "C:/replace/PPSA26223",
+      "timeout_seconds": 120,
+      "repeat": 1,
+      "arguments": ["--vulkan-validation", "true", "--shader-validation", "true"]
+    },
+    {
+      "title_id": "PPSA27624",
+      "game_path": "C:/replace/PPSA27624",
+      "timeout_seconds": 120,
+      "repeat": 1,
+      "arguments": ["--vulkan-validation", "true", "--shader-validation", "true"]
+    },
+    {
+      "title_id": "PPSA31162",
+      "game_path": "C:/replace/PPSA31162",
+      "timeout_seconds": 120,
+      "repeat": 1,
+      "arguments": ["--vulkan-validation", "true", "--shader-validation", "true"]
     }
   ]
 }

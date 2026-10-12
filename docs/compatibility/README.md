@@ -13,4 +13,5 @@ python tools/compat/summarize_runs.py --input _CompatibilityRuns --json docs/com
 
 Review generated files before committing them. A process outcome alone never proves a compatibility
 rung; visual, audio, input, save/reload, stability, and frame-pacing evidence must be reviewed using
-the PS5 comparison protocol.
+the [PS5 comparison protocol](ps5-comparison-protocol.md). The private setup and eight-title run
+sequence are documented in [corpus.md](corpus.md).
