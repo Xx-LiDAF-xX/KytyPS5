@@ -121,28 +121,28 @@ git commit -m "fix(loader): resolve imports without ambiguous nid binding"
 - Consumes: symbol name, program path, symbol type, and binding text from the runtime linker.
 - Produces: `uint64_t Diagnostics::RecordUnsupportedImport(std::string_view symbol, std::string_view program, std::string_view type, std::string_view binding) noexcept`; return value is the updated call count or zero when diagnostics are disabled.
 
-- [ ] **Step 1: Write failing serialization and lifecycle tests**
+- [x] **Step 1: Write failing serialization and lifecycle tests**
 
 Add tests asserting that two calls for the same `(symbol, program leaf, type, binding)` serialize as one `unsupported_imports.entries` record with `call_count == 2`; concurrent calls retain the exact total; different programs remain separate; more than 256 unique keys increments `dropped_unique`; and an absolute program path serializes only its filename.
 
-- [ ] **Step 2: Run the focused target and verify RED**
+- [x] **Step 2: Run the focused target and verify RED**
 
 Run: `cmake --build _Build/compat-foundation --target run_diagnostics_tests --parallel 8`
 
 Expected: compile failure because `RecordUnsupportedImport` and the summary structures do not exist.
 
-- [ ] **Step 3: Implement the bounded summary**
+- [x] **Step 3: Implement the bounded summary**
 
 Add `UnsupportedImport`, `UnsupportedImportSummary`, and `RunReport::unsupported_imports`. Keep at most 256 unique entries, increment existing counts without limit, track dropped unique keys, sanitize `program` with `filename()`, and serialize the optional root object only when it is non-empty. Schema version remains `1` because the field is additive.
 
-- [ ] **Step 4: Run the focused test and verify GREEN**
+- [x] **Step 4: Run the focused test and verify GREEN**
 
 Run: `cmake --build _Build/compat-foundation --target run_diagnostics_tests --parallel 8`
 Run: `ctest --test-dir _Build/compat-foundation -R '^run_diagnostics$' --output-on-failure`
 
 Expected: 1/1 focused test passes, including disabled-mode and concurrency coverage.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/common/runDiagnostics.h src/common/runDiagnostics.cpp tests/RunDiagnosticsTests.cpp

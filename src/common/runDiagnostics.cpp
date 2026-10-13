@@ -5,6 +5,7 @@
 #include <exception>
 #include <fstream>
 #include <functional>
+#include <limits>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <system_error>
@@ -32,6 +33,11 @@ struct LifecycleState {
 LifecycleState& State() {
 	static LifecycleState state;
 	return state;
+}
+
+std::string ProgramLeaf(std::string_view program) {
+	const auto separator = program.find_last_of("/\\");
+	return std::string(separator == std::string_view::npos ? program : program.substr(separator + 1));
 }
 
 void WriteCurrentReport(const LifecycleState& state) {
@@ -99,6 +105,23 @@ std::string Serialize(const RunReport& report) {
 		root["presentation"] = {
 		    {"presented_frames", presentation.presented_frames},
 		    {"current_fps", presentation.current_fps},
+		};
+	}
+	if (!report.unsupported_imports.entries.empty() ||
+	    report.unsupported_imports.dropped_unique != 0) {
+		Json entries = Json::array();
+		for (const auto& entry: report.unsupported_imports.entries) {
+			entries.push_back({
+			    {"symbol", entry.symbol},
+			    {"program", ProgramLeaf(entry.program)},
+			    {"type", entry.type},
+			    {"binding", entry.binding},
+			    {"call_count", entry.call_count},
+			});
+		}
+		root["unsupported_imports"] = {
+		    {"entries", std::move(entries)},
+		    {"dropped_unique", report.unsupported_imports.dropped_unique},
 		};
 	}
 	return root.dump(2) + "\n";
@@ -208,6 +231,43 @@ void Record(std::string_view category, std::string_view code, std::string_view m
 	state.report.events.push_back({static_cast<uint64_t>(offset),
 	                               static_cast<uint64_t>(thread_id), std::string(category),
 	                               std::string(code), std::string(message)});
+}
+
+uint64_t RecordUnsupportedImport(std::string_view symbol, std::string_view program,
+                                 std::string_view type, std::string_view binding) noexcept {
+	try {
+		auto&           state = State();
+		std::lock_guard lock(state.mutex);
+		if (!state.enabled || state.finished) {
+			return 0;
+		}
+
+		const auto program_leaf = ProgramLeaf(program);
+		for (auto& entry: state.report.unsupported_imports.entries) {
+			if (entry.symbol == symbol && entry.program == program_leaf && entry.type == type &&
+			    entry.binding == binding) {
+				if (entry.call_count != std::numeric_limits<uint64_t>::max()) {
+					entry.call_count++;
+				}
+				return entry.call_count;
+			}
+		}
+
+		constexpr size_t MaxUniqueEntries = 256;
+		if (state.report.unsupported_imports.entries.size() >= MaxUniqueEntries) {
+			if (state.report.unsupported_imports.dropped_unique !=
+			    std::numeric_limits<uint64_t>::max()) {
+				state.report.unsupported_imports.dropped_unique++;
+			}
+			return 0;
+		}
+
+		state.report.unsupported_imports.entries.push_back(
+		    {std::string(symbol), program_leaf, std::string(type), std::string(binding), 1});
+		return 1;
+	} catch (...) {
+		return 0;
+	}
 }
 
 void SetGpu(std::string_view name, uint32_t vendor_id, uint32_t device_id,

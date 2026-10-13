@@ -143,6 +143,9 @@ void TestDisabledCallsAreNoops() {
   const auto file = LifecycleRoot() / "disabled.json";
 
   Check(!Diagnostics::Enabled(), "diagnostics unexpectedly started enabled");
+  Check(Diagnostics::RecordUnsupportedImport("ignored", "C:/private/eboot.bin", "Func",
+                                             "Global") == 0,
+        "disabled unsupported import returned a count");
   Diagnostics::Record("disabled", "record", "must be ignored");
   Diagnostics::SetGpu("ignored", 1, 2, 3);
   Diagnostics::UpdatePresentation(120, 59.5);
@@ -151,6 +154,96 @@ void TestDisabledCallsAreNoops() {
 
   Check(!std::filesystem::exists(file),
         "disabled diagnostics created a report");
+}
+
+void TestUnsupportedImportsAggregateAndSanitizePaths() {
+  ResetLifecycleRoot();
+  const auto file = LifecycleRoot() / "unsupported-imports.json";
+  Diagnostics::Initialize(file, MakeReport().metadata);
+
+  const std::string private_path = "C:/Users/example/private/game/eboot.bin";
+  Check(Diagnostics::RecordUnsupportedImport("test-nid", private_path, "Func", "Global") == 1,
+        "first unsupported import count was not one");
+  Check(Diagnostics::RecordUnsupportedImport("test-nid", private_path, "Func", "Global") == 2,
+        "second unsupported import count was not two");
+  Diagnostics::Checkpoint();
+
+  const auto json = ReadJson(file);
+  const auto &summary = json.at("unsupported_imports");
+  Check(summary.at("entries").size() == 1,
+        "duplicate unsupported imports were not aggregated");
+  const auto &entry = summary.at("entries").at(0);
+  Check(entry.at("symbol") == "test-nid", "unsupported import symbol changed");
+  Check(entry.at("program") == "eboot.bin", "unsupported import path was not sanitized");
+  Check(entry.at("type") == "Func" && entry.at("binding") == "Global",
+        "unsupported import classification changed");
+  Check(entry.at("call_count") == 2, "unsupported import call count changed");
+  Check(json.dump().find(private_path) == std::string::npos,
+        "absolute unsupported import path was serialized");
+  Diagnostics::Shutdown();
+}
+
+void TestConcurrentUnsupportedImportsRetainExactCount() {
+  ResetLifecycleRoot();
+  const auto file = LifecycleRoot() / "concurrent-unsupported-imports.json";
+  Diagnostics::Initialize(file, MakeReport().metadata);
+
+  constexpr int kThreadCount = 4;
+  constexpr int kCallsPerThread = 100;
+  std::vector<std::thread> threads;
+  for (int thread = 0; thread < kThreadCount; ++thread) {
+    threads.emplace_back([]() {
+      for (int call = 0; call < kCallsPerThread; ++call) {
+        (void)Diagnostics::RecordUnsupportedImport("threaded-nid", "eboot.bin", "Func",
+                                                   "Weak");
+      }
+    });
+  }
+  for (auto &thread : threads) {
+    thread.join();
+  }
+  Diagnostics::Finish(Diagnostics::Outcome::Completed, "threads joined");
+
+  const auto json = ReadJson(file);
+  Check(json.at("unsupported_imports").at("entries").at(0).at("call_count") ==
+            kThreadCount * kCallsPerThread,
+        "concurrent unsupported import calls were lost");
+  Diagnostics::Shutdown();
+}
+
+void TestUnsupportedImportsSeparatePrograms() {
+  ResetLifecycleRoot();
+  const auto file = LifecycleRoot() / "separate-programs.json";
+  Diagnostics::Initialize(file, MakeReport().metadata);
+
+  (void)Diagnostics::RecordUnsupportedImport("shared-nid", "eboot.bin", "Func", "Global");
+  (void)Diagnostics::RecordUnsupportedImport("shared-nid", "module.prx", "Func", "Global");
+  Diagnostics::Checkpoint();
+
+  const auto json = ReadJson(file);
+  Check(json.at("unsupported_imports").at("entries").size() == 2,
+        "unsupported imports from different programs were merged");
+  Diagnostics::Shutdown();
+}
+
+void TestUnsupportedImportUniqueEntriesAreBounded() {
+  ResetLifecycleRoot();
+  const auto file = LifecycleRoot() / "bounded-unsupported-imports.json";
+  Diagnostics::Initialize(file, MakeReport().metadata);
+
+  for (int index = 0; index < 260; ++index) {
+    (void)Diagnostics::RecordUnsupportedImport("nid-" + std::to_string(index), "eboot.bin",
+                                               "Func", "Global");
+  }
+  Diagnostics::Checkpoint();
+
+  const auto json = ReadJson(file);
+  const auto &summary = json.at("unsupported_imports");
+  Check(summary.at("entries").size() == 256,
+        "unsupported import entry bound was not enforced");
+  Check(summary.at("dropped_unique") == 4,
+        "dropped unsupported import count was not recorded");
+  Diagnostics::Shutdown();
 }
 
 void TestPresentationUpdatePersistsAndSanitizesFps() {
@@ -273,6 +366,10 @@ int main() {
   TestCreatesParentDirectoryAndReplacesFile();
   TestDoesNotSerializeSourcePaths();
   TestDisabledCallsAreNoops();
+  TestUnsupportedImportsAggregateAndSanitizePaths();
+  TestConcurrentUnsupportedImportsRetainExactCount();
+  TestUnsupportedImportsSeparatePrograms();
+  TestUnsupportedImportUniqueEntriesAreBounded();
   TestPresentationUpdatePersistsAndSanitizesFps();
   TestConcurrentEventsAreRetained();
   TestFinishIsIdempotent();
