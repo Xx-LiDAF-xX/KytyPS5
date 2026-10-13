@@ -4,61 +4,61 @@
     "fatal": 22,
     "host_exception": 0,
     "launch_error": 0,
-    "timeout": 50,
+    "timeout": 61,
     "unknown": 0
   },
   "latest": [
     {
-      "attempt": 7,
+      "attempt": 8,
       "content_version": "01.905.000",
       "outcome": "timeout",
       "platform": "Windows",
       "title_id": "PPSA01325"
     },
     {
-      "attempt": 10,
+      "attempt": 11,
       "content_version": "01.001.000",
       "outcome": "timeout",
       "platform": "Windows",
       "title_id": "PPSA01859"
     },
     {
-      "attempt": 6,
+      "attempt": 7,
       "content_version": "01.005.000",
       "outcome": "timeout",
       "platform": "Windows",
       "title_id": "PPSA02100"
     },
     {
-      "attempt": 23,
+      "attempt": 24,
       "content_version": "01.018.000",
       "outcome": "timeout",
       "platform": "Windows",
       "title_id": "PPSA21567"
     },
     {
-      "attempt": 6,
+      "attempt": 7,
       "content_version": "01.002.000",
       "outcome": "timeout",
       "platform": "Windows",
       "title_id": "PPSA25991"
     },
     {
-      "attempt": 8,
+      "attempt": 9,
       "content_version": "01.000.000",
       "outcome": "timeout",
       "platform": "Windows",
       "title_id": "PPSA26223"
     },
     {
-      "attempt": 6,
+      "attempt": 10,
       "content_version": "01.000.003",
       "outcome": "timeout",
       "platform": "Windows",
       "title_id": "PPSA27624"
     },
     {
-      "attempt": 6,
+      "attempt": 7,
       "content_version": "02.000.001",
       "outcome": "timeout",
       "platform": "Windows",
@@ -79,6 +79,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA01325",
       "title_name": "ASTRO's PLAYROOM"
     },
@@ -95,6 +96,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA01325",
       "title_name": "ASTRO's PLAYROOM"
     },
@@ -111,6 +113,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA01325",
       "title_name": "ASTRO's PLAYROOM"
     },
@@ -132,6 +135,7 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA01325",
       "title_name": "ASTRO's PLAYROOM"
     },
@@ -153,6 +157,7 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA01325",
       "title_name": "ASTRO's PLAYROOM"
     },
@@ -174,6 +179,7 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA01325",
       "title_name": "ASTRO's PLAYROOM"
     },
@@ -195,6 +201,32 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
+      "title_id": "PPSA01325",
+      "title_name": "ASTRO's PLAYROOM"
+    },
+    {
+      "attempt": 8,
+      "build_label": "Source build 07bcdaf",
+      "compatibility_rung": "unknown",
+      "content_version": "01.905.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 25.289806,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 58.0,
+        "presented_frames": 1367
+      },
       "title_id": "PPSA01325",
       "title_name": "ASTRO's PLAYROOM"
     },
@@ -216,6 +248,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA01859",
       "title_name": "MAIDEN"
     },
@@ -237,6 +270,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA01859",
       "title_name": "MAIDEN"
     },
@@ -258,6 +292,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA01859",
       "title_name": "MAIDEN"
     },
@@ -279,6 +314,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA01859",
       "title_name": "MAIDEN"
     },
@@ -295,6 +331,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA01859",
       "title_name": "MAIDEN"
     },
@@ -311,6 +348,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA01859",
       "title_name": "MAIDEN"
     },
@@ -327,6 +365,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA01859",
       "title_name": "MAIDEN"
     },
@@ -348,6 +387,7 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA01859",
       "title_name": "MAIDEN"
     },
@@ -369,6 +409,7 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA01859",
       "title_name": "MAIDEN"
     },
@@ -390,6 +431,32 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
+      "title_id": "PPSA01859",
+      "title_name": "MAIDEN"
+    },
+    {
+      "attempt": 11,
+      "build_label": "Source build 07bcdaf",
+      "compatibility_rung": "unknown",
+      "content_version": "01.001.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 25.236364,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 56.0,
+        "presented_frames": 1285
+      },
       "title_id": "PPSA01859",
       "title_name": "MAIDEN"
     },
@@ -406,6 +473,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA02100",
       "title_name": "Stray"
     },
@@ -422,6 +490,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA02100",
       "title_name": "Stray"
     },
@@ -438,6 +507,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA02100",
       "title_name": "Stray"
     },
@@ -459,6 +529,7 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA02100",
       "title_name": "Stray"
     },
@@ -480,6 +551,7 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA02100",
       "title_name": "Stray"
     },
@@ -501,6 +573,32 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
+      "title_id": "PPSA02100",
+      "title_name": "Stray"
+    },
+    {
+      "attempt": 7,
+      "build_label": "Source build 07bcdaf",
+      "compatibility_rung": "unknown",
+      "content_version": "01.005.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 25.240784,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 56.0,
+        "presented_frames": 1153
+      },
       "title_id": "PPSA02100",
       "title_name": "Stray"
     },
@@ -522,6 +620,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -543,6 +642,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -564,6 +664,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -585,6 +686,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -606,6 +708,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -627,6 +730,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -648,6 +752,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -669,6 +774,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -690,6 +796,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -706,6 +813,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -722,6 +830,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -738,6 +847,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -759,6 +869,7 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -780,6 +891,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -801,6 +913,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -822,6 +935,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -843,6 +957,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -864,6 +979,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -885,6 +1001,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -906,6 +1023,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -927,6 +1045,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -948,6 +1067,7 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -969,6 +1089,32 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
+      "title_id": "PPSA21567",
+      "title_name": "ASTRO BOT"
+    },
+    {
+      "attempt": 24,
+      "build_label": "Source build 07bcdaf",
+      "compatibility_rung": "unknown",
+      "content_version": "01.018.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 25.189059,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 40.0,
+        "presented_frames": 1072
+      },
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"
     },
@@ -985,6 +1131,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA25991",
       "title_name": "Senua's Saga: Hellblade II"
     },
@@ -1001,6 +1148,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA25991",
       "title_name": "Senua's Saga: Hellblade II"
     },
@@ -1017,6 +1165,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA25991",
       "title_name": "Senua's Saga: Hellblade II"
     },
@@ -1038,6 +1187,7 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA25991",
       "title_name": "Senua's Saga: Hellblade II"
     },
@@ -1059,6 +1209,7 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA25991",
       "title_name": "Senua's Saga: Hellblade II"
     },
@@ -1080,6 +1231,32 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
+      "title_id": "PPSA25991",
+      "title_name": "Senua's Saga: Hellblade II"
+    },
+    {
+      "attempt": 7,
+      "build_label": "Source build 07bcdaf",
+      "compatibility_rung": "unknown",
+      "content_version": "01.002.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 25.225354,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 0.0,
+        "presented_frames": 481
+      },
       "title_id": "PPSA25991",
       "title_name": "Senua's Saga: Hellblade II"
     },
@@ -1096,6 +1273,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA26223",
       "title_name": "The Mound: Omen of Cthulhu"
     },
@@ -1112,6 +1290,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA26223",
       "title_name": "The Mound: Omen of Cthulhu"
     },
@@ -1128,6 +1307,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA26223",
       "title_name": "The Mound: Omen of Cthulhu"
     },
@@ -1149,6 +1329,7 @@
       },
       "outcome": "fatal",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA26223",
       "title_name": "The Mound: Omen of Cthulhu"
     },
@@ -1170,6 +1351,7 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA26223",
       "title_name": "The Mound: Omen of Cthulhu"
     },
@@ -1191,6 +1373,7 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA26223",
       "title_name": "The Mound: Omen of Cthulhu"
     },
@@ -1212,6 +1395,7 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA26223",
       "title_name": "The Mound: Omen of Cthulhu"
     },
@@ -1233,6 +1417,32 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
+      "title_id": "PPSA26223",
+      "title_name": "The Mound: Omen of Cthulhu"
+    },
+    {
+      "attempt": 9,
+      "build_label": "Source build 07bcdaf",
+      "compatibility_rung": "unknown",
+      "content_version": "01.000.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 25.305175,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 0.0,
+        "presented_frames": 257
+      },
       "title_id": "PPSA26223",
       "title_name": "The Mound: Omen of Cthulhu"
     },
@@ -1249,6 +1459,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA27624",
       "title_name": "Bendy and the Dark Revival"
     },
@@ -1265,6 +1476,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA27624",
       "title_name": "Bendy and the Dark Revival"
     },
@@ -1281,6 +1493,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA27624",
       "title_name": "Bendy and the Dark Revival"
     },
@@ -1302,6 +1515,7 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA27624",
       "title_name": "Bendy and the Dark Revival"
     },
@@ -1323,6 +1537,7 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA27624",
       "title_name": "Bendy and the Dark Revival"
     },
@@ -1344,6 +1559,101 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
+      "title_id": "PPSA27624",
+      "title_name": "Bendy and the Dark Revival"
+    },
+    {
+      "attempt": 7,
+      "build_label": "Source build 79d0898",
+      "compatibility_rung": "unknown",
+      "content_version": "01.000.003",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 90.204543,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": null,
+      "title_id": "PPSA27624",
+      "title_name": "Bendy and the Dark Revival"
+    },
+    {
+      "attempt": 8,
+      "build_label": "Source build 79d0898",
+      "compatibility_rung": "unknown",
+      "content_version": "01.000.003",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 90.204318,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": null,
+      "title_id": "PPSA27624",
+      "title_name": "Bendy and the Dark Revival"
+    },
+    {
+      "attempt": 9,
+      "build_label": "Source build ddeae4b-dirty",
+      "compatibility_rung": "unknown",
+      "content_version": "01.000.003",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 25.215726,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 56.0,
+        "presented_frames": 1314
+      },
+      "title_id": "PPSA27624",
+      "title_name": "Bendy and the Dark Revival"
+    },
+    {
+      "attempt": 10,
+      "build_label": "Source build 07bcdaf",
+      "compatibility_rung": "unknown",
+      "content_version": "01.000.003",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 25.175076,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 51.0,
+        "presented_frames": 1364
+      },
       "title_id": "PPSA27624",
       "title_name": "Bendy and the Dark Revival"
     },
@@ -1360,6 +1670,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA31162",
       "title_name": "Super Meat Boy 3D"
     },
@@ -1376,6 +1687,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA31162",
       "title_name": "Super Meat Boy 3D"
     },
@@ -1392,6 +1704,7 @@
       "gpu": null,
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA31162",
       "title_name": "Super Meat Boy 3D"
     },
@@ -1413,6 +1726,7 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA31162",
       "title_name": "Super Meat Boy 3D"
     },
@@ -1434,6 +1748,7 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
       "title_id": "PPSA31162",
       "title_name": "Super Meat Boy 3D"
     },
@@ -1455,6 +1770,32 @@
       },
       "outcome": "timeout",
       "platform": "Windows",
+      "presentation": null,
+      "title_id": "PPSA31162",
+      "title_name": "Super Meat Boy 3D"
+    },
+    {
+      "attempt": 7,
+      "build_label": "Source build 07bcdaf",
+      "compatibility_rung": "unknown",
+      "content_version": "02.000.001",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 25.257729,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 0.0,
+        "presented_frames": 448
+      },
       "title_id": "PPSA31162",
       "title_name": "Super Meat Boy 3D"
     }
