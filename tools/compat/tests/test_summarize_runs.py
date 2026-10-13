@@ -26,6 +26,7 @@ class SummarizeRunsTests(unittest.TestCase):
         runner_outcome=None,
         diagnostics_outcome=None,
         gpu=None,
+        presentation=None,
         executable="eboot.bin",
     ):
         directory = self.root / title_id / f"attempt-{attempt:03d}"
@@ -60,16 +61,17 @@ class SummarizeRunsTests(unittest.TestCase):
             }
             if gpu is not None:
                 metadata["gpu"] = gpu
+            diagnostics = {
+                "schema_version": 1,
+                "metadata": metadata,
+                "outcome": diagnostics_outcome,
+                "outcome_detail": "details stay private",
+                "events": [],
+            }
+            if presentation is not None:
+                diagnostics["presentation"] = presentation
             (directory / "diagnostics.json").write_text(
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "metadata": metadata,
-                        "outcome": diagnostics_outcome,
-                        "outcome_detail": "details stay private",
-                        "events": [],
-                    }
-                ),
+                json.dumps(diagnostics),
                 encoding="utf-8",
             )
         return directory
@@ -112,6 +114,45 @@ class SummarizeRunsTests(unittest.TestCase):
 
         self.assertEqual(gpu, summary["results"][0]["gpu"])
         self.assertEqual("diagnostics", summary["results"][0]["evidence"])
+
+    def test_optional_presentation_evidence_is_preserved_without_awarding_a_rung(self):
+        presentation = {"presented_frames": 1440, "current_fps": 59.75}
+        self.make_attempt(
+            "PPSA00007",
+            1,
+            runner_outcome="timeout",
+            diagnostics_outcome="running",
+            presentation=presentation,
+        )
+
+        summary = summarize_runs.summarize(self.root)
+        result = summary["results"][0]
+
+        self.assertEqual(presentation, result["presentation"])
+        self.assertEqual("unknown", result["compatibility_rung"])
+        markdown = summarize_runs.render_markdown(summary)
+        self.assertIn("| Frames | FPS |", markdown.splitlines()[6])
+        self.assertIn("| 1440 | 59.75 |", markdown)
+
+    def test_missing_or_malformed_presentation_evidence_is_ignored(self):
+        self.make_attempt(
+            "PPSA00008",
+            1,
+            runner_outcome="timeout",
+            diagnostics_outcome="running",
+        )
+        self.make_attempt(
+            "PPSA00009",
+            1,
+            runner_outcome="timeout",
+            diagnostics_outcome="running",
+            presentation={"presented_frames": True, "current_fps": "fast"},
+        )
+
+        summary = summarize_runs.summarize(self.root)
+
+        self.assertIsNone(summary["results"][0]["presentation"])
+        self.assertIsNone(summary["results"][1]["presentation"])
 
     def test_mixed_attempts_are_ordered_and_latest_is_selected(self):
         self.make_attempt(

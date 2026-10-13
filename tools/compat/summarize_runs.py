@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 from collections import Counter
 from pathlib import Path
@@ -94,6 +95,30 @@ def _gpu_metadata(metadata: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _presentation_metadata(document: dict[str, Any] | None) -> dict[str, Any] | None:
+    if document is None:
+        return None
+    presentation = document.get("presentation")
+    if not isinstance(presentation, dict):
+        return None
+    presented_frames = presentation.get("presented_frames")
+    current_fps = presentation.get("current_fps")
+    if (
+        not isinstance(presented_frames, int)
+        or isinstance(presented_frames, bool)
+        or presented_frames < 0
+        or not isinstance(current_fps, (int, float))
+        or isinstance(current_fps, bool)
+        or not math.isfinite(current_fps)
+        or current_fps < 0
+    ):
+        return None
+    return {
+        "presented_frames": presented_frames,
+        "current_fps": current_fps,
+    }
+
+
 def _summarize_attempt(directory: Path) -> dict[str, Any] | None:
     runner = _read_json(directory / "run.json")
     diagnostics = _read_json(directory / "diagnostics.json")
@@ -134,6 +159,7 @@ def _summarize_attempt(directory: Path) -> dict[str, Any] | None:
         "platform": _string(metadata.get("platform")),
         "cpu_name": _string(metadata.get("cpu_name")),
         "gpu": _gpu_metadata(metadata),
+        "presentation": _presentation_metadata(diagnostics),
         "attempt": _attempt_number(directory, runner),
         "outcome": outcome,
         "evidence": evidence,
@@ -203,11 +229,16 @@ def render_markdown(summary: dict[str, Any]) -> str:
         "",
         "Process outcomes do not establish a compatibility rung; manual evidence is required.",
         "",
-        "| Title ID | Version | Platform | Attempt | Outcome | Evidence | GPU |",
-        "| --- | --- | --- | ---: | --- | --- | --- |",
+        "| Title ID | Version | Platform | Attempt | Outcome | Evidence | GPU | Frames | FPS |",
+        "| --- | --- | --- | ---: | --- | --- | --- | ---: | ---: |",
     ]
     for result in summary["results"]:
         gpu_name = result["gpu"]["name"] if result["gpu"] is not None else "unknown"
+        presentation = result["presentation"]
+        presented_frames = (
+            presentation["presented_frames"] if presentation is not None else "unknown"
+        )
+        current_fps = presentation["current_fps"] if presentation is not None else "unknown"
         lines.append(
             "| "
             + " | ".join(
@@ -220,6 +251,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
                     result["outcome"],
                     result["evidence"],
                     gpu_name,
+                    presented_frames,
+                    current_fps,
                 )
             )
             + " |"

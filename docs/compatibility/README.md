@@ -15,3 +15,8 @@ Review generated files before committing them. A process outcome alone never pro
 rung; visual, audio, input, save/reload, stability, and frame-pacing evidence must be reviewed using
 the [PS5 comparison protocol](ps5-comparison-protocol.md). The private setup and eight-title run
 sequence are documented in [corpus.md](corpus.md).
+
+When diagnostics are enabled, the emulator persists its latest presented-frame count and one-second
+FPS sample. These values prove only that the host presentation loop made progress before exit or a
+forced timeout. They do not establish that the frame was visually correct and cannot award Rung 1
+without the private visual evidence required by the comparison protocol.
