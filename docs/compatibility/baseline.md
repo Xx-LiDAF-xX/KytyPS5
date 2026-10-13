@@ -1,6 +1,6 @@
 # KytyPS5 Compatibility Run Summary
 
-Outcomes: completed=0, fatal=22, host_exception=0, timeout=65, launch_error=0, unknown=0.
+Outcomes: completed=0, fatal=22, host_exception=0, timeout=79, launch_error=0, unknown=0.
 
 Process outcomes do not establish a compatibility rung; manual evidence is required.
 
@@ -14,6 +14,15 @@ Process outcomes do not establish a compatibility rung; manual evidence is requi
 | PPSA01325 | 01.905.000 | Windows | 6 | timeout | runner | NVIDIA GeForce RTX 4060 Ti | true | true | unknown | unknown |
 | PPSA01325 | 01.905.000 | Windows | 7 | timeout | runner | NVIDIA GeForce RTX 4060 Ti | true | true | unknown | unknown |
 | PPSA01325 | 01.905.000 | Windows | 8 | timeout | runner | NVIDIA GeForce RTX 4060 Ti | true | true | 1367 | 58.0 |
+| PPSA01325 | 01.905.000 | Windows | 10 | timeout | runner | NVIDIA GeForce RTX 4060 Ti | true | true | 1422 | 58.0 |
+| PPSA01325 | 01.905.000 | Windows | 11 | timeout | runner | NVIDIA GeForce RTX 4060 Ti | true | true | 55 | 0.0 |
+| PPSA01325 | 01.905.000 | Windows | 12 | timeout | runner | NVIDIA GeForce RTX 4060 Ti | true | true | 1318 | 57.0 |
+| PPSA01325 | 01.905.000 | Windows | 13 | timeout | runner | NVIDIA GeForce RTX 4060 Ti | true | true | 65 | 0.0 |
+| PPSA01325 | 01.905.000 | Windows | 14 | timeout | runner | NVIDIA GeForce RTX 4060 Ti | true | true | 1330 | 7.0 |
+| PPSA01325 | 01.905.000 | Windows | 15 | timeout | runner | NVIDIA GeForce RTX 4060 Ti | true | true | 1346 | 20.0 |
+| PPSA01325 | 01.905.000 | Windows | 16 | timeout | runner | NVIDIA GeForce RTX 4060 Ti | true | true | 53 | 4.0 |
+| PPSA01325 | 01.905.000 | Windows | 17 | timeout | runner | NVIDIA GeForce RTX 4060 Ti | true | true | 1339 | 6.0 |
+| PPSA01325 | 01.905.000 | Windows | 18 | timeout | runner | NVIDIA GeForce RTX 4060 Ti | true | true | 1372 | 35.0 |
 | PPSA01859 | 01.001.000 | Windows | 1 | fatal | diagnostics | NVIDIA GeForce RTX 4060 Ti | true | true | unknown | unknown |
 | PPSA01859 | 01.001.000 | Windows | 2 | fatal | diagnostics | NVIDIA GeForce RTX 4060 Ti | true | true | unknown | unknown |
 | PPSA01859 | 01.001.000 | Windows | 3 | fatal | diagnostics | NVIDIA GeForce RTX 4060 Ti | true | true | unknown | unknown |
@@ -56,6 +65,11 @@ Process outcomes do not establish a compatibility rung; manual evidence is requi
 | PPSA21567 | 01.018.000 | Windows | 22 | timeout | runner | NVIDIA GeForce RTX 4060 Ti | true | true | unknown | unknown |
 | PPSA21567 | 01.018.000 | Windows | 23 | timeout | runner | NVIDIA GeForce RTX 4060 Ti | true | true | unknown | unknown |
 | PPSA21567 | 01.018.000 | Windows | 24 | timeout | runner | NVIDIA GeForce RTX 4060 Ti | true | true | 1072 | 40.0 |
+| PPSA21567 | 01.018.000 | Windows | 26 | timeout | runner | NVIDIA GeForce RTX 4060 Ti | true | true | 85 | 0.0 |
+| PPSA21567 | 01.018.000 | Windows | 27 | timeout | runner | NVIDIA GeForce RTX 4060 Ti | true | true | 1369 | 34.0 |
+| PPSA21567 | 01.018.000 | Windows | 28 | timeout | runner | NVIDIA GeForce RTX 4060 Ti | true | true | 862 | 416.0 |
+| PPSA21567 | 01.018.000 | Windows | 29 | timeout | runner | NVIDIA GeForce RTX 4060 Ti | true | true | 1055 | 34.0 |
+| PPSA21567 | 01.018.000 | Windows | 30 | timeout | runner | NVIDIA GeForce RTX 4060 Ti | true | true | 1057 | 34.0 |
 | PPSA25991 | 01.002.000 | Windows | 1 | timeout | runner | unknown | true | true | unknown | unknown |
 | PPSA25991 | 01.002.000 | Windows | 2 | timeout | runner | unknown | true | true | unknown | unknown |
 | PPSA25991 | 01.002.000 | Windows | 3 | timeout | runner | unknown | true | true | unknown | unknown |

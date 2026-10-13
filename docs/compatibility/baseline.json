@@ -4,12 +4,12 @@
     "fatal": 22,
     "host_exception": 0,
     "launch_error": 0,
-    "timeout": 65,
+    "timeout": 79,
     "unknown": 0
   },
   "latest": [
     {
-      "attempt": 8,
+      "attempt": 18,
       "configuration": {
         "shader_validation": "true",
         "vulkan_validation": "true"
@@ -42,7 +42,7 @@
       "title_id": "PPSA02100"
     },
     {
-      "attempt": 24,
+      "attempt": 30,
       "configuration": {
         "shader_validation": "true",
         "vulkan_validation": "true"
@@ -290,6 +290,267 @@
       "presentation": {
         "current_fps": 58.0,
         "presented_frames": 1367
+      },
+      "title_id": "PPSA01325",
+      "title_name": "ASTRO's PLAYROOM"
+    },
+    {
+      "attempt": 10,
+      "build_label": "Source build 9826581-dirty",
+      "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
+      "content_version": "01.905.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 25.244528,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 58.0,
+        "presented_frames": 1422
+      },
+      "title_id": "PPSA01325",
+      "title_name": "ASTRO's PLAYROOM"
+    },
+    {
+      "attempt": 11,
+      "build_label": "Source build 4520a28",
+      "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
+      "content_version": "01.905.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 25.255723,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 0.0,
+        "presented_frames": 55
+      },
+      "title_id": "PPSA01325",
+      "title_name": "ASTRO's PLAYROOM"
+    },
+    {
+      "attempt": 12,
+      "build_label": "Source build 4520a28",
+      "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
+      "content_version": "01.905.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 60.211054,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 57.0,
+        "presented_frames": 1318
+      },
+      "title_id": "PPSA01325",
+      "title_name": "ASTRO's PLAYROOM"
+    },
+    {
+      "attempt": 13,
+      "build_label": "Source build 4520a28-dirty",
+      "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
+      "content_version": "01.905.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 25.251224,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 0.0,
+        "presented_frames": 65
+      },
+      "title_id": "PPSA01325",
+      "title_name": "ASTRO's PLAYROOM"
+    },
+    {
+      "attempt": 14,
+      "build_label": "Source build 4520a28-dirty",
+      "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
+      "content_version": "01.905.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 25.200025,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 7.0,
+        "presented_frames": 1330
+      },
+      "title_id": "PPSA01325",
+      "title_name": "ASTRO's PLAYROOM"
+    },
+    {
+      "attempt": 15,
+      "build_label": "Source build 4520a28-dirty",
+      "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
+      "content_version": "01.905.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 25.201335,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 20.0,
+        "presented_frames": 1346
+      },
+      "title_id": "PPSA01325",
+      "title_name": "ASTRO's PLAYROOM"
+    },
+    {
+      "attempt": 16,
+      "build_label": "Source build 4520a28-dirty",
+      "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
+      "content_version": "01.905.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 25.205922,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 4.0,
+        "presented_frames": 53
+      },
+      "title_id": "PPSA01325",
+      "title_name": "ASTRO's PLAYROOM"
+    },
+    {
+      "attempt": 17,
+      "build_label": "Source build 4520a28-dirty",
+      "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
+      "content_version": "01.905.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 25.287372,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 6.0,
+        "presented_frames": 1339
+      },
+      "title_id": "PPSA01325",
+      "title_name": "ASTRO's PLAYROOM"
+    },
+    {
+      "attempt": 18,
+      "build_label": "Source build e5b6ece",
+      "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
+      "content_version": "01.905.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 25.228001,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 35.0,
+        "presented_frames": 1372
       },
       "title_id": "PPSA01325",
       "title_name": "ASTRO's PLAYROOM"
@@ -1346,6 +1607,151 @@
       "presentation": {
         "current_fps": 40.0,
         "presented_frames": 1072
+      },
+      "title_id": "PPSA21567",
+      "title_name": "ASTRO BOT"
+    },
+    {
+      "attempt": 26,
+      "build_label": "Source build 4520a28",
+      "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
+      "content_version": "01.018.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 25.268954,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 0.0,
+        "presented_frames": 85
+      },
+      "title_id": "PPSA21567",
+      "title_name": "ASTRO BOT"
+    },
+    {
+      "attempt": 27,
+      "build_label": "Source build 4520a28",
+      "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
+      "content_version": "01.018.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 60.245206,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 34.0,
+        "presented_frames": 1369
+      },
+      "title_id": "PPSA21567",
+      "title_name": "ASTRO BOT"
+    },
+    {
+      "attempt": 28,
+      "build_label": "Source build 4520a28-dirty",
+      "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
+      "content_version": "01.018.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 25.286403,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 416.0,
+        "presented_frames": 862
+      },
+      "title_id": "PPSA21567",
+      "title_name": "ASTRO BOT"
+    },
+    {
+      "attempt": 29,
+      "build_label": "Source build 4520a28-dirty",
+      "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
+      "content_version": "01.018.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 25.238546,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 34.0,
+        "presented_frames": 1055
+      },
+      "title_id": "PPSA21567",
+      "title_name": "ASTRO BOT"
+    },
+    {
+      "attempt": 30,
+      "build_label": "Source build e5b6ece",
+      "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
+      "content_version": "01.018.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 25.252463,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 34.0,
+        "presented_frames": 1057
       },
       "title_id": "PPSA21567",
       "title_name": "ASTRO BOT"

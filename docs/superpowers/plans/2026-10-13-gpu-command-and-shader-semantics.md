@@ -254,30 +254,43 @@ Commit: `docs(presentation): record non-reproducing swapchain stall diagnosis`
 - Consumes: local 8-title corpus and all CTest targets.
 - Produces: updated baseline reports showing improved FPS for `PPSA21567` and uninterrupted presentation for `PPSA01325`.
 
-- [ ] **Step 1: Run complete core test suite**
+- [x] **Step 1: Run complete core test suite**
 
 Run: `ctest --test-dir _Build/compat-foundation -L core --output-on-failure`
 Expected: 100% tests passed (all 40+ tests).
 
-- [ ] **Step 2: Run complete Vulkan test suite**
+Result: 42/42 tests passed.
+
+- [x] **Step 2: Run complete Vulkan test suite**
 
 Run: `ctest --test-dir _Build/compat-foundation -L vulkan --output-on-failure`
 Expected: 100% tests passed (all 18+ tests).
 
-- [ ] **Step 3: Run Python tool test suites**
+Result: 18/18 tests passed.
+
+- [x] **Step 3: Run Python tool test suites**
 
 Run: `python -m unittest discover -s tools/compat/tests -v`
 Run: `python -m unittest discover -s tools/shader/tests -v`
 Run: `python -m unittest discover -s tools/gpu/tests -v`
 Expected: 100% tests passed.
 
-- [ ] **Step 4: Run local corpus benchmark on PPSA21567 and PPSA01325**
+Result: compatibility 18/18, shader 9/9, and GPU replay 6/6 tests passed.
+
+- [x] **Step 4: Run local corpus benchmark on PPSA21567 and PPSA01325**
 
 Run: `python tools/compat/run_corpus.py --manifest tools/compat/corpus.local.json --emulator _Build/compat-foundation/kyty_emulator.exe --output _CompatibilityRuns --title-id PPSA21567`
 Run: `python tools/compat/run_corpus.py --manifest tools/compat/corpus.local.json --emulator _Build/compat-foundation/kyty_emulator.exe --output _CompatibilityRuns --title-id PPSA01325`
 Verify that `PPSA21567` FPS improves from 2.0 FPS and `PPSA01325` sustains non-zero FPS through the timeout boundary.
 
-- [ ] **Step 5: Commit documentation and baseline updates**
+Result: applying optimizer passes to every shader made the 25-second cold-start window compile
+bound. Runtime optimization is now limited to guest shaders of at least 24 KiB whose emitted
+SPIR-V is at least 400 KiB. With `Performance` optimization and the original 25-second window,
+`PPSA21567` presented 1,057 frames and ended at 34 FPS (up from the prior 2 FPS sample), while
+`PPSA01325` presented 1,372 frames and ended at 35 FPS. Earlier diagnostic
+runs remain in the baseline so the optimization-policy tradeoff is visible.
+
+- [x] **Step 5: Commit documentation and baseline updates**
 
 Commit: `docs(compat): update baseline with optimized shader performance`
 
