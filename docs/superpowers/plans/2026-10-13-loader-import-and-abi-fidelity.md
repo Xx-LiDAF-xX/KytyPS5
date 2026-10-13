@@ -238,13 +238,13 @@ git commit -m "feat(compat): summarize unsupported import evidence"
 - Consumes: all core tests, the local eight-title corpus, and the sanitized summarizer.
 - Produces: a clean-build baseline with bounded unsupported-import totals and no loader-resolution regression.
 
-- [ ] **Step 1: Run the complete core suite**
+- [x] **Step 1: Run the complete core suite**
 
 Run: `ctest --test-dir _Build/compat-foundation -L core --output-on-failure`
 
 Expected: 100% of core tests pass, including `symbol_database`, `runtime_linker`, and `run_diagnostics`.
 
-- [ ] **Step 2: Run the Python tool suites**
+- [x] **Step 2: Run the Python tool suites**
 
 Run: `python -m unittest discover -s tools/compat/tests -v`
 Run: `python -m unittest discover -s tools/shader/tests -v`
@@ -252,20 +252,20 @@ Run: `python -m unittest discover -s tools/gpu/tests -v`
 
 Expected: 100% pass.
 
-- [ ] **Step 3: Rebuild from a clean commit and run all eight titles**
+- [x] **Step 3: Rebuild from a clean commit and run all eight titles**
 
 Run: `cmake --build _Build/compat-foundation --target kyty_emulator --parallel 8`
 Run: `python tools/compat/run_corpus.py --manifest tools/compat/corpus.local.json --emulator _Build/compat-foundation/kyty_emulator.exe --output _CompatibilityRuns`
 
 Expected: each title reaches at least its previous presentation evidence; unresolved imports produce bounded summaries rather than repeated event growth. Do not interpret recurring `NpCppWebApi` NIDs as blockers without separate behavioral evidence.
 
-- [ ] **Step 4: Regenerate and sanitize the baseline**
+- [x] **Step 4: Regenerate and sanitize the baseline**
 
 Run: `python tools/compat/summarize_runs.py --input _CompatibilityRuns --json docs/compatibility/baseline.json --markdown docs/compatibility/baseline.md --vulkan-validation true --shader-validation true`
 
 Verify valid JSON, no absolute paths, no proprietary payloads, and aggregate import totals for every run that called an unresolved thunk.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs/compatibility/baseline.json docs/compatibility/baseline.md docs/superpowers/plans/2026-10-13-loader-import-and-abi-fidelity.md
