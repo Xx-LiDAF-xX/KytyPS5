@@ -221,28 +221,26 @@ Commit: `perf(shader): eliminate redundant instructions and shrink compute spirv
 - Consumes: `VulkanWindow::Present`, `AcquireNextImageKHR`, timeline semaphore fences.
 - Produces: non-blocking or recovered swapchain presentation when GPU pipeline waits occur near timeout boundaries.
 
-- [ ] **Step 1: Write a synchronization test asserting timely swapchain acquisition**
+- [x] **Step 1: Reproduce and distinguish a swapchain stall from the corpus time limit**
 
-In `tests/ShaderRecompilerComputeTests.cpp`, add a test exercising swapchain image acquisition when presentation queues have pending command buffers and timeout reaches near boundary, ensuring no deadlocks or permanent 0 FPS stalls occur.
+Run the local `PPSA01325` corpus entry and inspect the persisted presentation telemetry at the timeout boundary rather than treating the runner's deliberate process timeout as a swapchain timeout.
 
-- [ ] **Step 2: Run test and verify failure or diagnose stall**
+- [x] **Step 2: Run test and verify failure or diagnose stall**
 
 Run: `cmake --build _Build/compat-foundation --target shader_recompiler_compute_tests --parallel && _Build/compat-foundation/shader_recompiler_compute_tests.exe --scheduler-only`
 
-- [ ] **Step 3: Implement presentation timeout handling and synchronization recovery**
+- [x] **Step 3: Preserve the existing synchronization after the stall does not reproduce**
 
-In `src/graphics/presentation/window/vulkanWindow.cpp`:
-- Handle `VK_TIMEOUT` and `VK_NOT_READY` from `vkAcquireNextImageKHR` gracefully with retry budgets instead of indefinite waits.
-- Ensure frame timeline ticks and semaphore signaled states are properly advanced even during transient queue starvation.
+The current run reached 1,422 presented frames and 58 FPS at the 25-second corpus cutoff. The previous nominal "0 FPS" run still reached 1,286 frames, identifying the final FPS sample as the misleading value rather than evidence of a permanent acquisition deadlock. Do not weaken the frame-timeline wait added for `VUID-vkAcquireNextImageKHR-semaphore-01779` without a real stalled trace.
 
-- [ ] **Step 4: Build and verify GREEN**
+- [x] **Step 4: Build and verify GREEN**
 
 Run: `ctest --test-dir _Build/compat-foundation -L vulkan --output-on-failure`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit diagnosis**
 
-Commit: `fix(presentation): prevent swapchain acquisition deadlocks and presentation stalls`
+Commit: `docs(presentation): record non-reproducing swapchain stall diagnosis`
 
 ---
 
