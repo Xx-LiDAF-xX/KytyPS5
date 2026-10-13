@@ -140,31 +140,31 @@ Commit: `feat(gpu): add offline pm4 stream replay harness`
 - Strips: file paths, guest user data values, hashes, identifying game strings.
 - Emits: `const uint32_t code[] = { ... };` with `RecompileForTest(...)` assertion checking SPIR-V validity and expected opcode behavior.
 
-- [ ] **Step 1: Write failing tests for test-reduction synthesis**
+- [x] **Step 1: Write failing tests for test-reduction synthesis**
 
 Add Python unit tests in `tools/shader/tests/test_reduce_shader.py`:
 - Test that input binary bytecode is converted into a formatted C++ array literal.
 - Test that proprietary paths and game names are completely excluded from output.
 - Test delta-debugging / line minimization logic that strips trailing NOPs and unused instruction blocks while preserving compile errors.
 
-- [ ] **Step 2: Run test and verify RED**
+- [x] **Step 2: Run test and verify RED**
 
 Run: `python -m unittest tools/shader/tests/test_reduce_shader.py -v`
 Expected: FAIL because `tools/shader/reduce_shader.py` does not exist.
 
-- [ ] **Step 3: Implement `tools/shader/reduce_shader.py`**
+- [x] **Step 3: Implement `tools/shader/reduce_shader.py`**
 
 Implement bytecode minimization:
 - Chunk binary into 32-bit dwords / GCN instruction boundaries.
 - Generate valid C++ snippet using `RecompileForTest` template from `tests/shaderCfgTests.cpp`.
 - Add CLI options: `--input <file.bin> --stage <cs|vs|ps> --output <test.cpp> --minimize`.
 
-- [ ] **Step 4: Run test and verify GREEN**
+- [x] **Step 4: Run test and verify GREEN**
 
 Run: `python -m unittest tools/shader/tests/test_reduce_shader.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Commit: `feat(shader): add shader reduction and test case synthesis tool`
 
