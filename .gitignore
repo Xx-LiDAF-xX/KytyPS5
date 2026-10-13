@@ -8,6 +8,7 @@ cmake-build-debug/
 _PipelineCache/
 /tools/compat/corpus.local.json
 /_CompatibilityRuns/
+/_ShaderDebug/
 __pycache__/
 *.py[cod]
 /_DownloadData/
