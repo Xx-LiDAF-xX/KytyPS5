@@ -452,6 +452,13 @@ add_executable(run_diagnostics_tests EXCLUDE_FROM_ALL
 target_link_libraries(run_diagnostics_tests PRIVATE common nlohmann_json::nlohmann_json)
 target_include_directories(run_diagnostics_tests PRIVATE ${inc_headers})
 
+add_executable(symbol_database_tests EXCLUDE_FROM_ALL
+	"${KYTY_TESTS_DIR}/SymbolDatabaseTests.cpp"
+	"${KYTY_SOURCE_DIR}/loader/symbolDatabase.cpp"
+)
+target_link_libraries(symbol_database_tests PRIVATE common)
+target_include_directories(symbol_database_tests PRIVATE ${inc_headers})
+
 add_executable(ime_dialog_tests EXCLUDE_FROM_ALL
 	"${KYTY_TESTS_DIR}/ImeDialogTests.cpp"
 	"${KYTY_SOURCE_DIR}/libs/imeCommon.cpp"
@@ -644,6 +651,8 @@ if(BUILD_TESTING)
 	add_test(NAME lru_cache COMMAND $<TARGET_FILE:lru_cache_tests>)
 	add_test(NAME run_diagnostics COMMAND $<TARGET_FILE:run_diagnostics_tests>)
 	set_tests_properties(run_diagnostics PROPERTIES LABELS core)
+	add_test(NAME symbol_database COMMAND $<TARGET_FILE:symbol_database_tests>)
+	set_tests_properties(symbol_database PROPERTIES LABELS core)
 	add_test(NAME compat_corpus_tool
 	         COMMAND ${Python3_EXECUTABLE} -m unittest discover
 	                 -s "${CMAKE_SOURCE_DIR}/tools/compat/tests"
@@ -745,6 +754,7 @@ if(BUILD_TESTING)
 		bit_array
 		lru_cache
 		run_diagnostics
+		symbol_database
 		compat_corpus_tool
 		shader_tool_tests
 		gpu_replay_tool_tests
@@ -806,6 +816,7 @@ if(BUILD_TESTING)
 		bit_array_tests
 		lru_cache_tests
 		run_diagnostics_tests
+		symbol_database_tests
 		shader_vertex_metadata_tests
 		resource_materialization_tests
 		resource_tracking_tests

@@ -24,6 +24,17 @@ struct SymbolRecord {
 	uint64_t    vaddr;
 };
 
+enum class NidLookupStatus {
+	NotFound,
+	Unique,
+	Ambiguous,
+};
+
+struct NidLookupResult {
+	NidLookupStatus     status = NidLookupStatus::NotFound;
+	const SymbolRecord* record = nullptr;
+};
+
 struct SymbolResolve {
 	std::string name;
 	std::string library;
@@ -45,6 +56,8 @@ public:
 	[[nodiscard]] const SymbolRecord* Find(const SymbolResolve& s) const;
 	[[nodiscard]] const SymbolRecord* FindByNid(const std::string& nid, SymbolType type,
 	                                              uint64_t vaddr = 0) const;
+	[[nodiscard]] NidLookupResult FindUniqueByNid(const std::string& nid, SymbolType type,
+	                                               uint64_t vaddr = 0) const;
 	[[nodiscard]] const SymbolRecord* FindByName(const std::string& name, SymbolType type) const;
 
 	void DbgDump(const std::string& folder, const std::string& file_name);

@@ -41,28 +41,28 @@
 - Consumes: existing `SymbolDatabase::Add`, `Find`, and `FindByNid` registrations.
 - Produces: `enum class NidLookupStatus { NotFound, Unique, Ambiguous }`, `struct NidLookupResult { NidLookupStatus status; const SymbolRecord* record; }`, and `SymbolDatabase::FindUniqueByNid(const std::string&, SymbolType, uint64_t = 0) const`.
 
-- [ ] **Step 1: Write failing unique-NID lookup tests**
+- [x] **Step 1: Write failing unique-NID lookup tests**
 
 Add cases named `TestUniqueNidReturnsRecord`, `TestDuplicateNidIsAmbiguous`, `TestTypeAndAddressFiltersDisambiguate`, and `TestMissingNidIsNotFound`. Assert that an ambiguous result has `record == nullptr` and that exact `Find(SymbolResolve)` behavior remains unchanged.
 
-- [ ] **Step 2: Run the focused target and verify RED**
+- [x] **Step 2: Run the focused target and verify RED**
 
 Run: `cmake --build _Build/compat-foundation --target symbol_database_tests --parallel 8`
 
 Expected: compile failure because `NidLookupStatus`, `NidLookupResult`, and `FindUniqueByNid` do not exist.
 
-- [ ] **Step 3: Implement unique lookup and register the core test**
+- [x] **Step 3: Implement unique lookup and register the core test**
 
 Scan all records matching NID, type, and optional address. Return `Ambiguous` after the second distinct match instead of retaining the first. Keep `FindByNid` for address-specific relocation bookkeeping, but do not use it for compatibility fallback after Task 2.
 
-- [ ] **Step 4: Build and verify GREEN**
+- [x] **Step 4: Build and verify GREEN**
 
 Run: `cmake --build _Build/compat-foundation --target symbol_database_tests --parallel 8`
 Run: `ctest --test-dir _Build/compat-foundation -R '^symbol_database$' --output-on-failure`
 
 Expected: 1/1 focused test passes and the test is labeled `core`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add CMakeLists.txt src/loader/symbolDatabase.h src/loader/symbolDatabase.cpp tests/SymbolDatabaseTests.cpp

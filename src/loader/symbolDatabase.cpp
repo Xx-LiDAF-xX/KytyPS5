@@ -80,6 +80,30 @@ const SymbolRecord* SymbolDatabase::FindByNid(const std::string& nid, SymbolType
 	return nullptr;
 }
 
+NidLookupResult SymbolDatabase::FindUniqueByNid(const std::string& nid, SymbolType type,
+                                                uint64_t vaddr) const {
+	auto                prefix = nid + "[";
+	auto                suffix = fmt::format("[{}]", magic_enum::enum_name(type));
+	const SymbolRecord* result = nullptr;
+
+	for (const auto& symbol: m_symbols) {
+		if ((vaddr != 0 && symbol.vaddr != vaddr) || !symbol.name.starts_with(prefix) ||
+		    !symbol.name.ends_with(suffix)) {
+			continue;
+		}
+		if (result == nullptr) {
+			result = &symbol;
+			continue;
+		}
+		if (symbol.name != result->name || symbol.dbg_name != result->dbg_name ||
+		    symbol.vaddr != result->vaddr) {
+			return {NidLookupStatus::Ambiguous, nullptr};
+		}
+	}
+
+	return result == nullptr ? NidLookupResult {} : NidLookupResult {NidLookupStatus::Unique, result};
+}
+
 const SymbolRecord* SymbolDatabase::FindByName(const std::string& name, SymbolType type) const {
 	auto prefix = name + "[";
 	auto suffix = fmt::format("[{}]", magic_enum::enum_name(type));
