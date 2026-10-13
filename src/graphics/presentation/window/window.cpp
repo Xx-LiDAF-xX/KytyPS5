@@ -8,6 +8,7 @@
 #include "common/file.h"
 #include "common/logging/log.h"
 #include "common/profiler.h"
+#include "common/runDiagnostics.h"
 #include "common/systemInfo.h"
 #include "common/threads.h"
 #include "common/timer.h"
@@ -944,6 +945,8 @@ void WindowContext::UpdateIcon() {
 }
 
 void WindowContext::UpdateTitle(uint64_t frame_num, double current_fps) {
+	Diagnostics::UpdatePresentation(frame_num, current_fps);
+
 	static char title[128];
 	static char title_id[12];
 	static char app_ver[12];
