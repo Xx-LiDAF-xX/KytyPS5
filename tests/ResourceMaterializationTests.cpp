@@ -168,6 +168,35 @@ void TestMappedSrtUsesDirectReaderByDefault() {
         "cache rematerialization did not use the direct reader by default");
 }
 
+void TestNullScalarAddressReadPolicy() {
+  using namespace Libs::Graphics::ShaderRecompiler::IR;
+  const auto RejectRead = +[](void *data, uint64_t, std::span<uint32_t>) {
+    ++*static_cast<uint32_t *>(data);
+    return false;
+  };
+  const auto Materialize = [&](uint64_t base, bool zero_null, uint32_t &reads,
+                               ResourceSnapshot &snapshot) {
+    auto program = SrtProgram(base);
+    program.memory_info[0].offset = 24u;
+    auto plan = ExtractResourcePlan(program);
+    ResourceSpecialization specialization;
+    const SrtRuntime runtime{.read_memory = RejectRead,
+                             .userdata = &reads,
+                             .null_scalar_address_reads_zero = zero_null};
+    return MaterializeResources(plan, runtime, snapshot, specialization);
+  };
+
+  uint32_t reads = 0;
+  ResourceSnapshot snapshot;
+  Check(!Materialize(0u, false, reads, snapshot) && reads == 1u,
+        "strict scalar-address policy accepted a failed null-page read");
+  Check(Materialize(0u, true, reads, snapshot) && reads == 1u &&
+            snapshot.flattened_srt == std::vector<uint32_t>{0u},
+        "robust scalar-address policy did not zero a null-root offset load");
+  Check(!Materialize(4u, true, reads, snapshot) && reads == 2u,
+        "robust null-root policy hid an unreadable non-null address");
+}
+
 void TestNativeNestedSrtRefresh() {
   using namespace Libs::Graphics::ShaderRecompiler::IR;
   std::array<uint32_t, 3> first{0u, 0x12345678u, 0xabcdef01u};
@@ -842,6 +871,7 @@ void DbgExit(int) { std::abort(); }
 
 int main() {
   TestMappedSrtUsesDirectReaderByDefault();
+  TestNullScalarAddressReadPolicy();
   TestNativeNestedSrtRefresh();
   TestIntegerRuntimeValueFollowsSrtReads();
   TestSrtAliasesRetainReadPolicy();

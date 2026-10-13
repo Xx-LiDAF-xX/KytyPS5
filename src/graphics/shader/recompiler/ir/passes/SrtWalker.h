@@ -18,6 +18,10 @@ struct SrtRuntime {
 	void*                     userdata                   = nullptr;
 	SrtMemoryReader           read_specialization_memory = nullptr;
 	std::span<const uint32_t> workgroup_counts;
+	// Production GPU walks may encounter a null-root scalar pointer in a
+	// data-dependent branch. Preserve robust null-page load semantics without
+	// weakening explicit test/read-memory contracts for non-null addresses.
+	bool null_scalar_address_reads_zero = false;
 };
 
 class SrtReadCapture {

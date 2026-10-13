@@ -687,6 +687,11 @@ bool SrtWalker::EvaluateRawRead(const Inst& inst, uint64_t& result) {
 			return false;
 		}
 	}
+	if (m_runtime.null_scalar_address_reads_zero &&
+	    mem.kind == ResourceKind::ScalarAddress && base == 0u) {
+		result = 0u;
+		return true;
+	}
 	uint32_t word = 0;
 	const auto reader = vector ? m_runtime.read_specialization_memory : m_runtime.read_memory;
 	if (reader != nullptr) {

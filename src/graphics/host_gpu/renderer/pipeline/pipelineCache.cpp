@@ -106,8 +106,14 @@ void PipelineCacheLog(fmt::format_string<Args...> format, Args&&... args) {
 bool ReadShaderGuestMemory(void*, uint64_t address, std::span<uint32_t> values) {
 	// Scalar and unformatted buffer dependencies use the same backing as native raw loads.
 	// Image synchronization belongs to formatted buffer bindings, not these reads.
-	return !values.empty() &&
-	       Libs::LibKernel::Memory::TryReadBufferBacking(address, values.data(), values.size_bytes());
+	const bool read = !values.empty() &&
+	                  Libs::LibKernel::Memory::TryReadBufferBacking(
+	                      address, values.data(), values.size_bytes());
+	if (!read) {
+		PipelineCacheLog("Shader resource read failed: address=0x{:016x} size={}", address,
+		                 values.size_bytes());
+	}
+	return read;
 }
 
 void DumpShaderSpirv(const char* stage_name, uint64_t shader_hash,
@@ -338,9 +344,11 @@ struct PipelineCache::ProgramCache {
 		BuildStageStaticKey(input_info, lookup_key.static_state);
 		auto                                         entry = programs.find(lookup_key);
 		ShaderRecompiler::IR::SrtRuntime             runtime {
-		    .user_data                  = user_data,
-		    .shader_base                = params.Base(),
-		    .read_specialization_memory = ReadShaderGuestMemory,
+		    .user_data                      = user_data,
+		    .shader_base                    = params.Base(),
+		    .read_memory                    = ReadShaderGuestMemory,
+		    .read_specialization_memory     = ReadShaderGuestMemory,
+		    .null_scalar_address_reads_zero = true,
 		};
 		if constexpr (std::is_same_v<InputInfo, ShaderComputeInputInfo>) {
 			runtime.workgroup_counts = input_info.workgroup_counts;
@@ -422,9 +430,11 @@ struct PipelineCache::ProgramCache {
 			auto retained = source.call ? std::make_unique<ShaderRecompiler::ShaderSource>(std::move(source)) : nullptr;
 			entry = programs.try_emplace(lookup_key,
 			    ShaderRecompiler::IR::ExtractResourcePlan(translated.program), std::move(retained)).first;
-			EXIT_IF(!ShaderRecompiler::IR::MaterializeResources(
-			    entry->second.resource_plan, runtime, entry->second.resources,
-			    entry->second.specialization));
+			if (!ShaderRecompiler::IR::MaterializeResources(entry->second.resource_plan, runtime,
+			        entry->second.resources, entry->second.specialization)) {
+				EXIT("%s failed hash=0x%016" PRIx64 ": resource materialization failed\n", label,
+				     options.shader_hash);
+			}
 		} else if (source_changed) {
 			entry->second.resource_plan = ShaderRecompiler::IR::ExtractResourcePlan(translated.program);
 			if (const auto* permutation = entry->second.FindPermutation<true>(runtime, push_data_cursor)) {
