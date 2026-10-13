@@ -214,6 +214,17 @@ bool TestMainEntryUsesGuestStack();
 bool TestModuleRelocationUsesWritableHostMapping();
 #endif
 
+#if defined(KYTY_RUNTIME_LINKER_TESTS)
+struct UnresolvedImportThunkAbiResult {
+	uint64_t integer_return                  = UINT64_MAX;
+	uint64_t floating_return_bits            = UINT64_MAX;
+	uint64_t call_rsp_alignment              = UINT64_MAX;
+	bool     nonvolatile_registers_preserved = false;
+};
+
+UnresolvedImportThunkAbiResult TestUnresolvedImportThunkAbi();
+#endif
+
 } // namespace Loader
 
 #endif /* EMULATOR_INCLUDE_EMULATOR_LOADER_RUNTIMELINKER_H_ */

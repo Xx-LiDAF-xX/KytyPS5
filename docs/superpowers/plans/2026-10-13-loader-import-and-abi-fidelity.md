@@ -161,28 +161,28 @@ git commit -m "feat(diagnostics): aggregate unsupported import calls"
 - Consumes: `Diagnostics::RecordUnsupportedImport` from Task 3 and existing generated x86-64 unresolved-import thunks.
 - Produces: test-only `Loader::TestUnresolvedImportThunkAbi()` under `KYTY_RUNTIME_LINKER_TESTS`; production thunks preserve the System V stack/nonvolatile-register contract and return zero in both integer and scalar floating return registers.
 
-- [ ] **Step 1: Write the failing thunk ABI fixture**
+- [x] **Step 1: Write the failing thunk ABI fixture**
 
 Generate one unresolved function thunk, call it through integer-return and `double`-return System V function pointers with six populated arguments, and bracket the call with sentinels in `rbx`, `rbp`, and `r12-r15`. Assert integer zero, positive floating zero, 16-byte call alignment, unchanged sentinels, and an aggregated call count of two.
 
-- [ ] **Step 2: Run the focused target and verify RED**
+- [x] **Step 2: Run the focused target and verify RED**
 
 Run: `cmake --build _Build/compat-foundation --target runtime_linker_tests --parallel 8`
 
 Expected: compile failure because the test seam is absent; after adding only the seam, any ABI defect fails a named assertion rather than crashing silently.
 
-- [ ] **Step 3: Integrate aggregation and correct the thunk if required**
+- [x] **Step 3: Integrate aggregation and correct the thunk if required**
 
 Replace the repeated generic `Diagnostics::Record` call with `RecordUnsupportedImport`. Print/checkpoint only on the first call and power-of-two counts through 1024 so diagnostics remain bounded. Preserve the existing per-relocation thunk identity and clear all thunk/summary test state during `RuntimeLinker::Clear`.
 
-- [ ] **Step 4: Build and verify GREEN**
+- [x] **Step 4: Build and verify GREEN**
 
 Run: `cmake --build _Build/compat-foundation --target runtime_linker_tests --parallel 8`
 Run: `ctest --test-dir _Build/compat-foundation -R '^runtime_linker$' --output-on-failure`
 
 Expected: 1/1 focused test passes on the host; Linux CI exercises the same System V contract.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add CMakeLists.txt src/loader/runtimeLinker.h src/loader/runtimeLinker.cpp tests/RuntimeLinkerTests.cpp

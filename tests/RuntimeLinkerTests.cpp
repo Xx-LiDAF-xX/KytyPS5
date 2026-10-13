@@ -1,8 +1,14 @@
+#include "common/runDiagnostics.h"
 #include "common/threads.h"
+#include "kernel/memory.h"
 #include "loader/runtimeLinker.h"
+
+#include <nlohmann/json.hpp>
 
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 
@@ -135,16 +141,58 @@ void TestMalformedSymbolNameRemainsUnresolved() {
 	}
 }
 
+void TestUnresolvedFunctionThunkAbi() {
+	const auto root =
+	    std::filesystem::temp_directory_path() / "kyty_runtime_linker_thunk_tests";
+	const auto file = root / "report.json";
+	std::error_code error;
+	std::filesystem::remove_all(root, error);
+
+	Diagnostics::RunMetadata metadata {};
+	metadata.executable_name = "eboot.bin";
+	Diagnostics::Initialize(file, std::move(metadata));
+
+	Loader::UnresolvedImportThunkAbiResult result {};
+	{
+		Loader::RuntimeLinker linker;
+		result = Loader::TestUnresolvedImportThunkAbi();
+	}
+	Diagnostics::Checkpoint();
+
+	Check(result.integer_return == 0, "unresolved thunk integer return was not zero");
+	Check(result.floating_return_bits == 0,
+	      "unresolved thunk floating return was not positive zero");
+	Check(result.call_rsp_alignment == 0,
+	      "unresolved thunk callback call site was not 16-byte aligned");
+	Check(result.nonvolatile_registers_preserved,
+	      "unresolved thunk corrupted a nonvolatile register");
+
+	std::ifstream input(file, std::ios::binary);
+	Check(static_cast<bool>(input), "unresolved thunk diagnostics report was not written");
+	const auto json = nlohmann::json::parse(input);
+	const auto &entries = json.at("unsupported_imports").at("entries");
+	Check(entries.size() == 1, "unresolved thunk calls were not aggregated");
+	Check(entries.at(0).at("call_count") == 2,
+	      "unresolved thunk diagnostic call count was not two");
+	Check(entries.at(0).at("program") == "synthetic-eboot.bin",
+	      "unresolved thunk diagnostic program was not sanitized");
+	Diagnostics::Shutdown();
+	std::filesystem::remove_all(root, error);
+}
+
 } // namespace
 
 int main() {
 	Common::InitializeThreads();
+	Libs::LibKernel::Memory::Initialize();
 	TestExactMetadataWinsOverFallback();
 	TestUniqueFallbackResolvesMissingExactRegistration();
 	TestAmbiguousFallbackRemainsUnresolved();
 	TestLoadedProgramCandidatesParticipateInAmbiguity();
 	TestMissingLibraryOrModuleRemainsUnresolved();
 	TestMalformedSymbolNameRemainsUnresolved();
+	TestUnresolvedFunctionThunkAbi();
+	Libs::LibKernel::Memory::Shutdown();
 	std::puts("RuntimeLinkerTests: all cases passed");
 	return 0;
 }

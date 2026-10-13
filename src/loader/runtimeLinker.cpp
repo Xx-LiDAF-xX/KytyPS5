@@ -33,6 +33,7 @@
 #include <fmt/format.h>
 #include <magic_enum.hpp>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
@@ -113,6 +114,7 @@ struct StubbedImportRecord {
 	uint32_t    index       = 0;
 	uint64_t    patch_vaddr = 0;
 	uint64_t    thunk_vaddr = 0;
+	uint64_t    call_count  = 0;
 	std::string name;
 	SymbolType  type = SymbolType::Unknown;
 	BindType    bind = BindType::Unknown;
@@ -120,12 +122,18 @@ struct StubbedImportRecord {
 };
 
 static std::vector<StubbedImportRecord> g_stubbed_imports;
+static std::mutex                       g_stubbed_imports_mutex;
 static std::atomic_uint32_t             g_unresolved_stub_call_log_count {0};
 static std::vector<uint64_t>            g_unresolved_stub_thunk_pages;
 static uint64_t                         g_unresolved_stub_thunk_offset = 0;
 static constexpr uint64_t               UNRESOLVED_STUB_PAGE_SIZE      = 4096;
 
-static KYTY_SYSV_ABI uint64_t UnresolvedImportStub(uint64_t record_id);
+static KYTY_SYSV_ABI uint64_t UnresolvedImportStub(uint64_t record_id,
+                                                   uint64_t call_rsp_alignment);
+
+#if defined(KYTY_RUNTIME_LINKER_TESTS)
+static std::atomic_uint64_t g_test_unresolved_call_rsp_alignment {UINT64_MAX};
+#endif
 
 static bool PatchGuestMemory64(uint64_t vaddr, uint64_t value) {
 	auto* ptr     = reinterpret_cast<uint64_t*>(vaddr);
@@ -135,7 +143,7 @@ static bool PatchGuestMemory64(uint64_t vaddr, uint64_t value) {
 }
 
 static uint64_t AllocateUnresolvedImportThunk(uint64_t record_id) {
-	constexpr uint64_t thunk_size = 34;
+	constexpr uint64_t thunk_size = 41;
 
 	if (g_unresolved_stub_thunk_pages.empty() ||
 	    g_unresolved_stub_thunk_offset + thunk_size > UNRESOLVED_STUB_PAGE_SIZE) {
@@ -154,6 +162,8 @@ static uint64_t AllocateUnresolvedImportThunk(uint64_t record_id) {
 	uint8_t bytes[thunk_size] = {
 	    0x48, 0x83, 0xec, 0x08,               // sub rsp, 8
 	    0x48, 0xbf, 0, 0, 0, 0, 0, 0, 0, 0, // mov rdi, record_id
+	    0x48, 0x89, 0xe6,                     // mov rsi, rsp
+	    0x48, 0x83, 0xe6, 0x0f,               // and rsi, 0xf
 	    0x48, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, // mov rax, UnresolvedImportStub
 	    0xff, 0xd0,                           // call rax
 	    0x48, 0x83, 0xc4, 0x08,               // add rsp, 8
@@ -162,7 +172,7 @@ static uint64_t AllocateUnresolvedImportThunk(uint64_t record_id) {
 	};
 	const auto target = reinterpret_cast<uint64_t>(UnresolvedImportStub);
 	std::memcpy(bytes + 6, &record_id, sizeof(record_id));
-	std::memcpy(bytes + 16, &target, sizeof(target));
+	std::memcpy(bytes + 23, &target, sizeof(target));
 	std::memcpy(code, bytes, sizeof(bytes));
 	Common::VirtualMemory::FlushInstructionCache(reinterpret_cast<uint64_t>(code), thunk_size);
 	return reinterpret_cast<uint64_t>(code);
@@ -170,6 +180,7 @@ static uint64_t AllocateUnresolvedImportThunk(uint64_t record_id) {
 
 static uint64_t RegisterStubbedImport(uint32_t index, const Program* program,
                                       const RelocationInfo& ri) {
+	std::lock_guard lock(g_stubbed_imports_mutex);
 	for (const auto& record: g_stubbed_imports) {
 		if (record.patch_vaddr == ri.vaddr) {
 			return record.thunk_vaddr;
@@ -190,33 +201,149 @@ static uint64_t RegisterStubbedImport(uint32_t index, const Program* program,
 	return thunk;
 }
 
-static KYTY_SYSV_ABI uint64_t UnresolvedImportStub(uint64_t record_id) {
-	const auto log_index = g_unresolved_stub_call_log_count.fetch_add(1);
-	if (log_index < 1024) {
+static KYTY_SYSV_ABI uint64_t UnresolvedImportStub(uint64_t record_id,
+                                                   uint64_t call_rsp_alignment) {
+#if defined(KYTY_RUNTIME_LINKER_TESTS)
+	g_test_unresolved_call_rsp_alignment.store(call_rsp_alignment);
+#else
+	(void)call_rsp_alignment;
+#endif
+
+	StubbedImportRecord record {};
+	bool                valid_record = false;
+	{
+		std::lock_guard lock(g_stubbed_imports_mutex);
 		if (record_id < g_stubbed_imports.size()) {
-			const auto& record = g_stubbed_imports[record_id];
-			Diagnostics::Record(
-			    "loader", "unsupported_import",
-			    fmt::format("symbol={} program={}", record.name,
-			                std::filesystem::path(record.program).filename().string()));
+			auto& stored = g_stubbed_imports[record_id];
+			if (stored.call_count != UINT64_MAX) {
+				stored.call_count++;
+			}
+			record       = stored;
+			valid_record = true;
+		}
+	}
+
+	if (valid_record) {
+		(void)Diagnostics::RecordUnsupportedImport(
+		    record.name, record.program, magic_enum::enum_name(record.type),
+		    magic_enum::enum_name(record.bind));
+		const bool should_log = record.call_count <= 1024 &&
+		                        (record.call_count & (record.call_count - 1)) == 0;
+		if (should_log) {
 			printf("Unresolved import stub called: %s\n", record.name.c_str());
-			LOGF("Unresolved import stub called [%u]: patch_vaddr=0x%016" PRIx64
+			LOGF("Unresolved import stub called [%" PRIu64 "]: patch_vaddr=0x%016" PRIx64
 			     " jmprela_index=%" PRIu32 " symbol=%s type=%s bind=%s program=%s\n",
-			     log_index, record.patch_vaddr, record.index, record.name.c_str(),
+			     record.call_count, record.patch_vaddr, record.index, record.name.c_str(),
 			     magic_enum::enum_name(record.type), magic_enum::enum_name(record.bind),
 			     record.program.c_str());
-		} else {
+			Diagnostics::Checkpoint();
+		}
+	} else {
+		const auto call_count = g_unresolved_stub_call_log_count.fetch_add(1) + 1;
+		const bool should_log =
+		    call_count <= 1024 && (call_count & (call_count - 1)) == 0;
+		if (should_log) {
 			Diagnostics::Record("loader", "unsupported_import", "bad record identifier");
 			printf("Unresolved import stub called: <bad-record>\n");
-			LOGF("Unresolved import stub called [%u]: record_id=%" PRIu64 " symbol=<bad-record>\n",
-			     log_index, record_id);
-		}
-		if (log_index < 16 || log_index % 64 == 0) {
+			LOGF("Unresolved import stub called [%u]: record_id=%" PRIu64
+			     " symbol=<bad-record>\n",
+			     call_count, record_id);
 			Diagnostics::Checkpoint();
 		}
 	}
 	return 0;
 }
+
+#if defined(KYTY_RUNTIME_LINKER_TESTS)
+UnresolvedImportThunkAbiResult TestUnresolvedImportThunkAbi() {
+	Program program;
+	program.file_name = "C:/private/synthetic-eboot.bin";
+	RelocationInfo relocation {};
+	relocation.vaddr = 0x1234;
+	relocation.name  = "test-unresolved-nid";
+	relocation.type  = SymbolType::Func;
+	relocation.bind  = BindType::Global;
+	const auto thunk = RegisterStubbedImport(7, &program, relocation);
+
+	using FloatingCall = double(KYTY_SYSV_ABI *)(uint64_t, uint64_t, uint64_t, uint64_t,
+	                                             uint64_t, uint64_t);
+
+	UnresolvedImportThunkAbiResult result {};
+	register uint64_t thunk_and_return asm("rax") = thunk;
+	register uint64_t integer_return asm("r10");
+	register uint64_t failure_mask asm("r11");
+	asm volatile(
+	    "pushq %%rbx\n\t"
+	    "pushq %%rbp\n\t"
+	    "pushq %%r12\n\t"
+	    "pushq %%r13\n\t"
+	    "pushq %%r14\n\t"
+	    "pushq %%r15\n\t"
+	    "movabsq $0x1111222233334444, %%rbx\n\t"
+	    "movabsq $0x2222333344445555, %%rbp\n\t"
+	    "movabsq $0x3333444455556666, %%r12\n\t"
+	    "movabsq $0x4444555566667777, %%r13\n\t"
+	    "movabsq $0x5555666677778888, %%r14\n\t"
+	    "movabsq $0x6666777788889999, %%r15\n\t"
+	    "movq $1, %%rdi\n\t"
+	    "movq $2, %%rsi\n\t"
+	    "movq $3, %%rdx\n\t"
+	    "movq $4, %%rcx\n\t"
+	    "movq $5, %%r8\n\t"
+	    "movq $6, %%r9\n\t"
+	    "callq *%%rax\n\t"
+	    "movq %%rax, %%r10\n\t"
+	    "xorq %%r11, %%r11\n\t"
+	    "movabsq $0x1111222233334444, %%rax\n\t"
+	    "cmpq %%rax, %%rbx\n\t"
+	    "je 1f\n\t"
+	    "orq $0x01, %%r11\n\t"
+	    "1:\n\t"
+	    "movabsq $0x2222333344445555, %%rax\n\t"
+	    "cmpq %%rax, %%rbp\n\t"
+	    "je 2f\n\t"
+	    "orq $0x02, %%r11\n\t"
+	    "2:\n\t"
+	    "movabsq $0x3333444455556666, %%rax\n\t"
+	    "cmpq %%rax, %%r12\n\t"
+	    "je 3f\n\t"
+	    "orq $0x04, %%r11\n\t"
+	    "3:\n\t"
+	    "movabsq $0x4444555566667777, %%rax\n\t"
+	    "cmpq %%rax, %%r13\n\t"
+	    "je 4f\n\t"
+	    "orq $0x08, %%r11\n\t"
+	    "4:\n\t"
+	    "movabsq $0x5555666677778888, %%rax\n\t"
+	    "cmpq %%rax, %%r14\n\t"
+	    "je 5f\n\t"
+	    "orq $0x10, %%r11\n\t"
+	    "5:\n\t"
+	    "movabsq $0x6666777788889999, %%rax\n\t"
+	    "cmpq %%rax, %%r15\n\t"
+	    "je 6f\n\t"
+	    "orq $0x20, %%r11\n\t"
+	    "6:\n\t"
+	    "popq %%r15\n\t"
+	    "popq %%r14\n\t"
+	    "popq %%r13\n\t"
+	    "popq %%r12\n\t"
+	    "popq %%rbp\n\t"
+	    "popq %%rbx\n\t"
+	    : "+a"(thunk_and_return), "=r"(integer_return), "=r"(failure_mask)
+	    :
+	    : "cc", "memory", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "xmm0", "xmm1",
+	      "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9", "xmm10",
+	      "xmm11", "xmm12", "xmm13", "xmm14", "xmm15");
+	result.integer_return                  = integer_return;
+	result.nonvolatile_registers_preserved = failure_mask == 0;
+
+	const double floating_return = reinterpret_cast<FloatingCall>(thunk)(7, 8, 9, 10, 11, 12);
+	std::memcpy(&result.floating_return_bits, &floating_return, sizeof(floating_return));
+	result.call_rsp_alignment = g_test_unresolved_call_rsp_alignment.load();
+	return result;
+}
+#endif
 
 constexpr uint64_t SYSTEM_RESERVED  = 0x800000000u;
 constexpr uint64_t CODE_BASE_INCR   = 0x010000000u;
@@ -1319,13 +1446,19 @@ void RuntimeLinker::Clear() {
 		DeleteProgram(p);
 	}
 	m_programs.clear();
-	for (const auto page: g_unresolved_stub_thunk_pages) {
-		EXIT_IF(!Libs::LibKernel::Memory::FreeGuestMemory(page, UNRESOLVED_STUB_PAGE_SIZE));
+	{
+		std::lock_guard stub_lock(g_stubbed_imports_mutex);
+		for (const auto page: g_unresolved_stub_thunk_pages) {
+			EXIT_IF(!Libs::LibKernel::Memory::FreeGuestMemory(page, UNRESOLVED_STUB_PAGE_SIZE));
+		}
+		g_unresolved_stub_thunk_pages.clear();
+		g_unresolved_stub_thunk_offset = 0;
+		g_stubbed_imports.clear();
 	}
-	g_unresolved_stub_thunk_pages.clear();
-	g_unresolved_stub_thunk_offset = 0;
-	g_stubbed_imports.clear();
 	g_unresolved_stub_call_log_count.store(0);
+#if defined(KYTY_RUNTIME_LINKER_TESTS)
+	g_test_unresolved_call_rsp_alignment.store(UINT64_MAX);
+#endif
 	if (g_invalid_memory != 0) {
 		EXIT_IF(!Libs::LibKernel::Memory::FreeGuestMemory(g_invalid_memory, 4096));
 		g_invalid_memory = 0;
@@ -1895,10 +2028,13 @@ void RuntimeLinker::DeleteProgram(Program* p) {
 		g_tls_cached_main_program = nullptr;
 		g_tls_cached_main_tcb     = nullptr;
 	}
-	for (auto& record: g_stubbed_imports) {
-		if (record.patch_vaddr >= program->base_vaddr &&
-		    record.patch_vaddr < program->base_vaddr + program->mapped_size) {
-			record.patch_vaddr = 0;
+	{
+		std::lock_guard lock(g_stubbed_imports_mutex);
+		for (auto& record: g_stubbed_imports) {
+			if (record.patch_vaddr >= program->base_vaddr &&
+			    record.patch_vaddr < program->base_vaddr + program->mapped_size) {
+				record.patch_vaddr = 0;
+			}
 		}
 	}
 
