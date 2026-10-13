@@ -1,6 +1,7 @@
 #include "common/runDiagnostics.h"
 
 #include <chrono>
+#include <cmath>
 #include <exception>
 #include <fstream>
 #include <functional>
@@ -93,6 +94,13 @@ std::string Serialize(const RunReport& report) {
 	    {"outcome_detail", report.outcome_detail},
 	    {"events", std::move(events)},
 	};
+	if (report.presentation.has_value()) {
+		const auto& presentation = report.presentation.value();
+		root["presentation"] = {
+		    {"presented_frames", presentation.presented_frames},
+		    {"current_fps", presentation.current_fps},
+		};
+	}
 	return root.dump(2) + "\n";
 }
 
@@ -211,6 +219,19 @@ void SetGpu(std::string_view name, uint32_t vendor_id, uint32_t device_id,
 	}
 	state.report.metadata.gpu =
 	    GpuMetadata {std::string(name), vendor_id, device_id, driver_version};
+}
+
+void UpdatePresentation(uint64_t presented_frames, double current_fps) noexcept {
+	auto&           state = State();
+	std::lock_guard lock(state.mutex);
+	if (!state.enabled || state.finished) {
+		return;
+	}
+	state.report.presentation = PresentationMetadata {
+	    presented_frames,
+	    std::isfinite(current_fps) && current_fps >= 0.0 ? current_fps : 0.0,
+	};
+	WriteCurrentReport(state);
 }
 
 void Checkpoint() noexcept {

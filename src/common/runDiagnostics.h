@@ -42,11 +42,17 @@ struct Event {
 	std::string message;
 };
 
+struct PresentationMetadata {
+	uint64_t presented_frames = 0;
+	double   current_fps      = 0.0;
+};
+
 struct RunReport {
-	RunMetadata        metadata;
-	Outcome            outcome = Outcome::Running;
-	std::string        outcome_detail;
-	std::vector<Event> events;
+	RunMetadata                        metadata;
+	std::optional<PresentationMetadata> presentation;
+	Outcome                            outcome = Outcome::Running;
+	std::string                        outcome_detail;
+	std::vector<Event>                 events;
 };
 
 [[nodiscard]] std::string Serialize(const RunReport& report);
@@ -58,6 +64,7 @@ void               Initialize(const std::filesystem::path& file, RunMetadata met
 void Record(std::string_view category, std::string_view code, std::string_view message) noexcept;
 void SetGpu(std::string_view name, uint32_t vendor_id, uint32_t device_id,
             uint32_t driver_version) noexcept;
+void UpdatePresentation(uint64_t presented_frames, double current_fps) noexcept;
 void Checkpoint() noexcept;
 void Finish(Outcome outcome, std::string_view detail) noexcept;
 void Shutdown() noexcept;

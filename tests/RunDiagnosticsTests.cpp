@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <thread>
 #include <vector>
@@ -59,6 +60,24 @@ void TestOmitsEmptyOptionalGpuFields() {
 
   Check(!json.at("metadata").contains("gpu"),
         "empty GPU metadata was serialized");
+}
+
+void TestSerializesOptionalPresentationFields() {
+  auto report = MakeReport();
+  report.presentation = Diagnostics::PresentationMetadata{120, 59.5};
+  const auto json = nlohmann::json::parse(Diagnostics::Serialize(report));
+
+  Check(json.at("presentation").at("presented_frames") == 120,
+        "presented frame count changed");
+  Check(json.at("presentation").at("current_fps") == 59.5,
+        "presentation FPS changed");
+}
+
+void TestOmitsEmptyOptionalPresentationFields() {
+  const auto json = nlohmann::json::parse(Diagnostics::Serialize(MakeReport()));
+
+  Check(!json.contains("presentation"),
+        "empty presentation metadata was serialized");
 }
 
 void TestCreatesParentDirectoryAndReplacesFile() {
@@ -126,11 +145,38 @@ void TestDisabledCallsAreNoops() {
   Check(!Diagnostics::Enabled(), "diagnostics unexpectedly started enabled");
   Diagnostics::Record("disabled", "record", "must be ignored");
   Diagnostics::SetGpu("ignored", 1, 2, 3);
+  Diagnostics::UpdatePresentation(120, 59.5);
   Diagnostics::Finish(Diagnostics::Outcome::Fatal, "must be ignored");
   Diagnostics::Shutdown();
 
   Check(!std::filesystem::exists(file),
         "disabled diagnostics created a report");
+}
+
+void TestPresentationUpdatePersistsAndSanitizesFps() {
+  ResetLifecycleRoot();
+  const auto file = LifecycleRoot() / "presentation.json";
+  Diagnostics::Initialize(file, MakeReport().metadata);
+
+  Diagnostics::UpdatePresentation(120, 59.5);
+  auto json = ReadJson(file);
+  Check(json.at("presentation").at("presented_frames") == 120 &&
+            json.at("presentation").at("current_fps") == 59.5,
+        "presentation update was not persisted immediately");
+
+  Diagnostics::UpdatePresentation(240, -1.0);
+  json = ReadJson(file);
+  Check(json.at("presentation").at("presented_frames") == 240 &&
+            json.at("presentation").at("current_fps") == 0.0,
+        "negative presentation FPS was not sanitized");
+
+  Diagnostics::UpdatePresentation(
+      360, std::numeric_limits<double>::infinity());
+  json = ReadJson(file);
+  Check(json.at("presentation").at("presented_frames") == 360 &&
+            json.at("presentation").at("current_fps") == 0.0,
+        "non-finite presentation FPS was not sanitized");
+  Diagnostics::Shutdown();
 }
 
 void TestConcurrentEventsAreRetained() {
@@ -222,9 +268,12 @@ void TestCheckpointPersistsRunningReport() {
 int main() {
   TestSerializesRequiredMetadata();
   TestOmitsEmptyOptionalGpuFields();
+  TestSerializesOptionalPresentationFields();
+  TestOmitsEmptyOptionalPresentationFields();
   TestCreatesParentDirectoryAndReplacesFile();
   TestDoesNotSerializeSourcePaths();
   TestDisabledCallsAreNoops();
+  TestPresentationUpdatePersistsAndSanitizesFps();
   TestConcurrentEventsAreRetained();
   TestFinishIsIdempotent();
   TestFatalBeforeInitializeIsSafe();
