@@ -235,39 +235,35 @@ void Record(std::string_view category, std::string_view code, std::string_view m
 
 uint64_t RecordUnsupportedImport(std::string_view symbol, std::string_view program,
                                  std::string_view type, std::string_view binding) noexcept {
-	try {
-		auto&           state = State();
-		std::lock_guard lock(state.mutex);
-		if (!state.enabled || state.finished) {
-			return 0;
-		}
-
-		const auto program_leaf = ProgramLeaf(program);
-		for (auto& entry: state.report.unsupported_imports.entries) {
-			if (entry.symbol == symbol && entry.program == program_leaf && entry.type == type &&
-			    entry.binding == binding) {
-				if (entry.call_count != std::numeric_limits<uint64_t>::max()) {
-					entry.call_count++;
-				}
-				return entry.call_count;
-			}
-		}
-
-		constexpr size_t MaxUniqueEntries = 256;
-		if (state.report.unsupported_imports.entries.size() >= MaxUniqueEntries) {
-			if (state.report.unsupported_imports.dropped_unique !=
-			    std::numeric_limits<uint64_t>::max()) {
-				state.report.unsupported_imports.dropped_unique++;
-			}
-			return 0;
-		}
-
-		state.report.unsupported_imports.entries.push_back(
-		    {std::string(symbol), program_leaf, std::string(type), std::string(binding), 1});
-		return 1;
-	} catch (...) {
+	auto&           state = State();
+	std::lock_guard lock(state.mutex);
+	if (!state.enabled || state.finished) {
 		return 0;
 	}
+
+	const auto program_leaf = ProgramLeaf(program);
+	for (auto& entry: state.report.unsupported_imports.entries) {
+		if (entry.symbol == symbol && entry.program == program_leaf && entry.type == type &&
+		    entry.binding == binding) {
+			if (entry.call_count != std::numeric_limits<uint64_t>::max()) {
+				entry.call_count++;
+		}
+			return entry.call_count;
+		}
+	}
+
+	constexpr size_t MaxUniqueEntries = 256;
+	if (state.report.unsupported_imports.entries.size() >= MaxUniqueEntries) {
+		if (state.report.unsupported_imports.dropped_unique !=
+		    std::numeric_limits<uint64_t>::max()) {
+			state.report.unsupported_imports.dropped_unique++;
+		}
+		return 0;
+	}
+
+	state.report.unsupported_imports.entries.push_back(
+	    {std::string(symbol), program_leaf, std::string(type), std::string(binding), 1});
+	return 1;
 }
 
 void SetGpu(std::string_view name, uint32_t vendor_id, uint32_t device_id,
