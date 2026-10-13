@@ -459,6 +459,9 @@ add_executable(symbol_database_tests EXCLUDE_FROM_ALL
 target_link_libraries(symbol_database_tests PRIVATE common)
 target_include_directories(symbol_database_tests PRIVATE ${inc_headers})
 
+add_kyty_full_emulator_test(runtime_linker_tests "${KYTY_TESTS_DIR}/RuntimeLinkerTests.cpp")
+target_compile_definitions(runtime_linker_tests PRIVATE KYTY_RUNTIME_LINKER_TESTS=1)
+
 add_executable(ime_dialog_tests EXCLUDE_FROM_ALL
 	"${KYTY_TESTS_DIR}/ImeDialogTests.cpp"
 	"${KYTY_SOURCE_DIR}/libs/imeCommon.cpp"
@@ -653,6 +656,8 @@ if(BUILD_TESTING)
 	set_tests_properties(run_diagnostics PROPERTIES LABELS core)
 	add_test(NAME symbol_database COMMAND $<TARGET_FILE:symbol_database_tests>)
 	set_tests_properties(symbol_database PROPERTIES LABELS core)
+	add_test(NAME runtime_linker COMMAND $<TARGET_FILE:runtime_linker_tests>)
+	set_tests_properties(runtime_linker PROPERTIES LABELS core)
 	add_test(NAME compat_corpus_tool
 	         COMMAND ${Python3_EXECUTABLE} -m unittest discover
 	                 -s "${CMAKE_SOURCE_DIR}/tools/compat/tests"
@@ -755,6 +760,7 @@ if(BUILD_TESTING)
 		lru_cache
 		run_diagnostics
 		symbol_database
+		runtime_linker
 		compat_corpus_tool
 		shader_tool_tests
 		gpu_replay_tool_tests
@@ -817,6 +823,7 @@ if(BUILD_TESTING)
 		lru_cache_tests
 		run_diagnostics_tests
 		symbol_database_tests
+		runtime_linker_tests
 		shader_vertex_metadata_tests
 		resource_materialization_tests
 		resource_tracking_tests

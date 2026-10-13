@@ -81,29 +81,29 @@ git commit -m "feat(loader): detect ambiguous nid fallbacks"
 - Consumes: `SymbolDatabase::FindUniqueByNid` from Task 1 and existing `RuntimeLinker::Resolve` inputs.
 - Produces: exact-first resolution with unique-NID fallback; unresolved output is always `{vaddr = 0, name = generated-or-original-name, dbg_name = ""}` without `EXIT` for missing metadata or ambiguous fallback.
 
-- [ ] **Step 1: Write failing synthetic resolution tests**
+- [x] **Step 1: Write failing synthetic resolution tests**
 
 Construct `Program` fixtures with owned `DynamicInfo`, import libraries/modules, and synthetic symbol registrations. Add `TestExactMetadataWinsOverFallback`, `TestUniqueFallbackResolvesMissingExactRegistration`, `TestAmbiguousFallbackRemainsUnresolved`, `TestMissingLibraryOrModuleRemainsUnresolved`, and `TestMalformedSymbolNameRemainsUnresolved`.
 
-- [ ] **Step 2: Run the focused target and verify RED**
+- [x] **Step 2: Run the focused target and verify RED**
 
 Run: `cmake --build _Build/compat-foundation --target runtime_linker_tests --parallel 8`
 Run: `ctest --test-dir _Build/compat-foundation -R '^runtime_linker$' --output-on-failure`
 
 Expected: the ambiguity assertion fails because current fallback returns the first matching NID; the missing-metadata case terminates in the current `EXIT` path.
 
-- [ ] **Step 3: Implement exact-first resolution**
+- [x] **Step 3: Implement exact-first resolution**
 
 Factor the NID-only path into a private `RuntimeLinker::ResolveUniqueNid(const std::string&, SymbolType, SymbolRecord*) const`. It must merge built-in and loaded-program candidates, return a record only when exactly one distinct candidate exists, and record a `loader/symbol_resolution_ambiguous` diagnostic event for ambiguity. Replace the missing library/module `EXIT` with a normal unresolved result.
 
-- [ ] **Step 4: Build and verify GREEN**
+- [x] **Step 4: Build and verify GREEN**
 
 Run: `cmake --build _Build/compat-foundation --target runtime_linker_tests --parallel 8`
 Run: `ctest --test-dir _Build/compat-foundation -R '^runtime_linker$' --output-on-failure`
 
 Expected: 1/1 focused test passes on Windows and remains host-path independent.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add CMakeLists.txt src/loader/runtimeLinker.h src/loader/runtimeLinker.cpp tests/RuntimeLinkerTests.cpp

@@ -173,6 +173,10 @@ public:
 
 	SymbolDatabase* Symbols() { return m_symbols.get(); }
 
+#if defined(KYTY_RUNTIME_LINKER_TESTS)
+	void AdoptTestProgram(std::unique_ptr<Program> program);
+#endif
+
 	static uint64_t ReadFromElf(Program* program, uint64_t vaddr);
 	Program*        FindProgramByAddr(uint64_t vaddr);
 	Program*        FindProgramById(int32_t id);
@@ -193,6 +197,8 @@ private:
 
 	static const ModuleId*  FindModule(const Program& program, const std::string& id);
 	static const LibraryId* FindLibrary(const Program& program, const std::string& id);
+	NidLookupStatus ResolveUniqueNid(const std::string& nid, SymbolType type,
+	                                 SymbolRecord* out_info) const;
 
 	std::vector<Program*>           m_programs;
 	std::unique_ptr<SymbolDatabase> m_symbols;

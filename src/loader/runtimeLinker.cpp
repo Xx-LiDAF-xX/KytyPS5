@@ -1175,6 +1175,14 @@ RuntimeLinker::~RuntimeLinker() {
 	Clear();
 }
 
+#if defined(KYTY_RUNTIME_LINKER_TESTS)
+void RuntimeLinker::AdoptTestProgram(std::unique_ptr<Program> program) {
+	Common::LockGuard lock(m_mutex);
+	EXIT_IF(program == nullptr);
+	m_programs.push_back(program.release());
+}
+#endif
+
 Program* RuntimeLinker::LoadProgram(const std::filesystem::path& elf_name) {
 	KYTY_PROFILER_FUNCTION();
 
@@ -1336,6 +1344,9 @@ void RuntimeLinker::Resolve(const std::string& name, SymbolType type, Program* p
 	Common::LockGuard lock(m_mutex);
 
 	EXIT_IF(out_info == nullptr);
+	out_info->vaddr    = 0;
+	out_info->name     = name;
+	out_info->dbg_name = "";
 
 	auto ids = Common::Split(name, '#');
 
@@ -1343,31 +1354,9 @@ void RuntimeLinker::Resolve(const std::string& name, SymbolType type, Program* p
 		*bind_self = false;
 	}
 
-	if (ids.size() == 3) {
+	if (ids.size() == 3 && program != nullptr && program->dynamic_info != nullptr) {
 		const LibraryId* l = FindLibrary(*program, ids.at(1));
 		const ModuleId*  m = FindModule(*program, ids.at(2));
-
-		auto resolve_by_nid = [this, type](const std::string& nid, SymbolRecord* out) -> bool {
-			EXIT_IF(out == nullptr);
-
-			if (m_symbols != nullptr) {
-				if (const auto* rec = m_symbols->FindByNid(nid, type); rec != nullptr) {
-					*out = *rec;
-					return true;
-				}
-			}
-
-			for (auto* p: m_programs) {
-				if (p != nullptr && p->export_symbols != nullptr) {
-					if (const auto* rec = p->export_symbols->FindByNid(nid, type); rec != nullptr) {
-						*out = *rec;
-						return true;
-					}
-				}
-			}
-
-			return false;
-		};
 
 		if (l != nullptr && m != nullptr) {
 			SymbolResolve sr {};
@@ -1387,6 +1376,9 @@ void RuntimeLinker::Resolve(const std::string& name, SymbolType type, Program* p
 
 			if (rec == nullptr) {
 				for (auto* p: m_programs) {
+					if (p == nullptr || p->dynamic_info == nullptr) {
+						continue;
+					}
 					const auto& libs = p->dynamic_info->export_libs;
 					const auto& modules = p->dynamic_info->export_modules;
 					if (p->export_symbols == nullptr ||
@@ -1405,7 +1397,7 @@ void RuntimeLinker::Resolve(const std::string& name, SymbolType type, Program* p
 			}
 
 			if (rec == nullptr) {
-				if (resolve_by_nid(sr.name, out_info)) {
+				if (ResolveUniqueNid(sr.name, type, out_info) == NidLookupStatus::Unique) {
 					LOGF("PS5 NID fallback: %s -> %s\n", sr.name.c_str(), out_info->name.c_str());
 					return;
 				}
@@ -1419,19 +1411,58 @@ void RuntimeLinker::Resolve(const std::string& name, SymbolType type, Program* p
 				out_info->dbg_name = "";
 			}
 		} else {
-			if (resolve_by_nid(ids.at(0), out_info)) {
+			if (ResolveUniqueNid(ids.at(0), type, out_info) == NidLookupStatus::Unique) {
 				LOGF("PS5 NID fallback: %s -> %s (missing lib/module metadata)\n",
 				     ids.at(0).c_str(), out_info->name.c_str());
 				return;
 			}
-
-			EXIT("l == nullptr || m == nullptr");
 		}
-	} else {
-		out_info->vaddr    = 0;
-		out_info->name     = name;
-		out_info->dbg_name = "";
 	}
+}
+
+NidLookupStatus RuntimeLinker::ResolveUniqueNid(const std::string& nid, SymbolType type,
+                                                SymbolRecord* out_info) const {
+	EXIT_IF(out_info == nullptr);
+
+	NidLookupStatus status = NidLookupStatus::NotFound;
+	SymbolRecord    candidate {};
+	const auto merge = [&status, &candidate, &nid, type](const SymbolDatabase* symbols) {
+		if (symbols == nullptr || status == NidLookupStatus::Ambiguous) {
+			return;
+		}
+		const auto result = symbols->FindUniqueByNid(nid, type);
+		if (result.status == NidLookupStatus::Ambiguous) {
+			status = NidLookupStatus::Ambiguous;
+			return;
+		}
+		if (result.status != NidLookupStatus::Unique || result.record == nullptr) {
+			return;
+		}
+		if (status == NidLookupStatus::NotFound) {
+			candidate = *result.record;
+			status    = NidLookupStatus::Unique;
+			return;
+		}
+		if (candidate.name != result.record->name || candidate.dbg_name != result.record->dbg_name ||
+		    candidate.vaddr != result.record->vaddr) {
+			status = NidLookupStatus::Ambiguous;
+		}
+	};
+
+	merge(m_symbols.get());
+	for (const auto* program: m_programs) {
+		if (program != nullptr) {
+			merge(program->export_symbols.get());
+		}
+	}
+
+	if (status == NidLookupStatus::Unique) {
+		*out_info = candidate;
+	} else if (status == NidLookupStatus::Ambiguous) {
+		Diagnostics::Record("loader", "symbol_resolution_ambiguous",
+		                    fmt::format("Ambiguous NID fallback: {}", nid));
+	}
+	return status;
 }
 
 uint64_t RuntimeLinker::ReadFromElf(Program* program, uint64_t vaddr) {
