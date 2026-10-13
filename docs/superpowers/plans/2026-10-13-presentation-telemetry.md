@@ -39,27 +39,27 @@
 - Consumes: the existing `Diagnostics::Initialize`, lifecycle mutex, and atomic report replacement.
 - Produces: `Diagnostics::PresentationMetadata`, `RunReport::presentation`, and `Diagnostics::UpdatePresentation(uint64_t presented_frames, double current_fps) noexcept`.
 
-- [ ] **Step 1: Write failing serialization and lifecycle tests**
+- [x] **Step 1: Write failing serialization and lifecycle tests**
 
 Add tests asserting that an empty report omits `presentation`, an explicit snapshot serializes `presented_frames` and `current_fps`, an enabled `UpdatePresentation(120, 59.5)` immediately reaches disk, disabled updates are no-ops, and negative/non-finite FPS is stored as `0.0`.
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 Run: `cmake --build _Build/compat-foundation --target run_diagnostics_tests --parallel && _Build/compat-foundation/run_diagnostics_tests.exe`
 
 Expected: compilation fails because the presentation types and update API do not exist.
 
-- [ ] **Step 3: Implement the diagnostics API**
+- [x] **Step 3: Implement the diagnostics API**
 
 Add `struct PresentationMetadata { uint64_t presented_frames; double current_fps; };`, an optional field on `RunReport`, optional JSON serialization, and `UpdatePresentation(...)` that sanitizes FPS, updates only an enabled unfinished report, and calls the existing atomic writer while holding the lifecycle mutex.
 
-- [ ] **Step 4: Run the focused test and verify GREEN**
+- [x] **Step 4: Run the focused test and verify GREEN**
 
 Run: `cmake --build _Build/compat-foundation --target run_diagnostics_tests --parallel && _Build/compat-foundation/run_diagnostics_tests.exe`
 
 Expected: `RunDiagnosticsTests: all cases passed`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Commit: `feat(diagnostics): persist presentation progress`
 
@@ -73,17 +73,17 @@ Commit: `feat(diagnostics): persist presentation progress`
 - Consumes: `Diagnostics::UpdatePresentation(uint64_t, double)` from Task 1 and the existing `WindowContext::UpdateTitle` one-second call site.
 - Produces: live reports containing the same frame number and FPS displayed in the window title.
 
-- [ ] **Step 1: Add the diagnostics call at the existing one-second update seam**
+- [x] **Step 1: Add the diagnostics call at the existing one-second update seam**
 
 Include `common/runDiagnostics.h` and call `Diagnostics::UpdatePresentation(frame_num, current_fps)` in `WindowContext::UpdateTitle` before the SDL title update.
 
-- [ ] **Step 2: Build and run the core diagnostics test**
+- [x] **Step 2: Build and run the core diagnostics test**
 
 Run: `cmake --build _Build/compat-foundation --target kyty_emulator run_diagnostics_tests --parallel && ctest --test-dir _Build/compat-foundation -R '^run_diagnostics$' --output-on-failure`
 
 Expected: build succeeds and the diagnostics test passes.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 Commit: `feat(presentation): report frame progress`
 
@@ -98,35 +98,35 @@ Commit: `feat(presentation): report frame progress`
 - Consumes: optional diagnostics JSON `presentation.presented_frames` and `presentation.current_fps`.
 - Produces: optional sanitized `presentation` data in each summary result plus `Frames` and `FPS` Markdown columns.
 
-- [ ] **Step 1: Write failing Python tests**
+- [x] **Step 1: Write failing Python tests**
 
 Add attempts with valid presentation data, malformed presentation data, and no presentation object. Assert valid numeric values survive, malformed values become `None`, missing data preserves old behavior, and `compatibility_rung` remains `unknown`.
 
-- [ ] **Step 2: Run the Python test and verify RED**
+- [x] **Step 2: Run the Python test and verify RED**
 
 Run: `python -m unittest tools.compat.tests.test_summarize_runs -v`
 
 Expected: the new presentation assertions fail.
 
-- [ ] **Step 3: Implement sanitized summary extraction and rendering**
+- [x] **Step 3: Implement sanitized summary extraction and rendering**
 
 Add a helper that accepts only non-boolean non-negative integer frame counts and finite non-negative numeric FPS values. Include the optional object in JSON results and render unknown values as `unknown` in Markdown.
 
-- [ ] **Step 4: Document the evidence boundary**
+- [x] **Step 4: Document the evidence boundary**
 
 State that presentation telemetry proves only successful host presents and cannot award Rung 1 without visual evidence.
 
-- [ ] **Step 5: Run focused and full verification**
+- [x] **Step 5: Run focused and full verification**
 
 Run: `python -m unittest discover -s tools/compat/tests -v`, `ctest --test-dir _Build/compat-foundation -L core --output-on-failure`, and `ctest --test-dir _Build/compat-foundation -L vulkan --output-on-failure`.
 
 Expected: all compatibility-tool, core, and Vulkan tests pass.
 
-- [ ] **Step 6: Run the clean eight-title corpus and regenerate the baseline**
+- [x] **Step 6: Run the clean eight-title corpus and regenerate the baseline**
 
 Run the existing local corpus manifest, confirm each latest attempt contains presentation telemetry where frames were presented, then regenerate `docs/compatibility/baseline.json` and `.md` with the existing summarizer.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 Commit: `feat(compat): summarize presentation evidence`
 
