@@ -568,6 +568,7 @@ static int HandleRecompileShader(int argc, char* argv[], int opt_index) {
 	ShaderRecompiler::CompileOptions options;
 	options.stage = stage_type;
 	options.user_data = user_data;
+	options.spirv_optimization = ShaderRecompiler::SpirvOptimization::Performance;
 	options.dump_ir = false;
 	options.dump_label = "recompile_shader_cli";
 	switch (stage_type) {

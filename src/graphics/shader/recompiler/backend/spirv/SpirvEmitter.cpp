@@ -1,11 +1,13 @@
 #include "graphics/shader/recompiler/backend/spirv/SpirvEmitter.h"
 
 #include "common/assert.h"
+#include "graphics/shader/recompiler/ShaderRecompiler.h"
 #include "graphics/shader/recompiler/backend/spirv/spirvEmitterInternal.h"
 #include "graphics/shader/recompiler/ir/ShaderIR.h"
 
 #include <algorithm>
 #include <array>
+#include <spirv-tools/optimizer.hpp>
 
 namespace Libs::Graphics::ShaderRecompiler::Spirv {
 
@@ -229,6 +231,33 @@ std::vector<uint32_t> EmitProgram(IR::Program& program, ShaderStageInputInfo inp
 	                            "main", state.interface_variables);
 
 	return state.builder.Build();
+}
+
+bool OptimizeProgram(std::span<const uint32_t> input, SpirvOptimization optimization,
+                     std::vector<uint32_t>& output, std::string& diagnostics) {
+	diagnostics.clear();
+	if (optimization == SpirvOptimization::None) {
+		output.assign(input.begin(), input.end());
+		return true;
+	}
+
+	spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_3);
+	optimizer.SetMessageConsumer(
+	    [&diagnostics](spv_message_level_t, const char*, const spv_position_t& position,
+	                   const char* message) {
+		    diagnostics += std::to_string(position.line);
+		    diagnostics += ':';
+		    diagnostics += std::to_string(position.column);
+		    diagnostics += ": ";
+		    diagnostics += message != nullptr ? message : "unknown optimizer error";
+		    diagnostics += '\n';
+	    });
+	if (optimization == SpirvOptimization::Size) {
+		optimizer.RegisterSizePasses(true);
+	} else {
+		optimizer.RegisterPerformancePasses(true);
+	}
+	return optimizer.Run(input.data(), input.size(), &output);
 }
 
 } // namespace Libs::Graphics::ShaderRecompiler::Spirv

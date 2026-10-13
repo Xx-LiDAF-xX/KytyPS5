@@ -116,6 +116,18 @@ bool ReadShaderGuestMemory(void*, uint64_t address, std::span<uint32_t> values) 
 	return read;
 }
 
+ShaderRecompiler::SpirvOptimization ShaderOptimization() {
+	switch (Config::GetShaderOptimizationType()) {
+		case Config::ShaderOptimizationType::None:
+			return ShaderRecompiler::SpirvOptimization::None;
+		case Config::ShaderOptimizationType::Size:
+			return ShaderRecompiler::SpirvOptimization::Size;
+		case Config::ShaderOptimizationType::Performance:
+			return ShaderRecompiler::SpirvOptimization::Performance;
+	}
+	return ShaderRecompiler::SpirvOptimization::None;
+}
+
 void DumpShaderSpirv(const char* stage_name, uint64_t shader_hash,
                      const std::vector<uint32_t>& spirv) {
 	if (!Config::GraphicsDebugDumpEnabled()) {
@@ -394,6 +406,7 @@ struct PipelineCache::ProgramCache {
 		options.stage       = stage;
 		options.shader_hash = params.hash;
 		options.user_data   = user_data;
+		options.spirv_optimization = ShaderOptimization();
 		options.back_code      = params.back_code;
 		options.dump_ir     = Config::GetShaderLogDirection() != Config::LogDirection::Silent;
 		options.early_dump  = options.dump_ir;

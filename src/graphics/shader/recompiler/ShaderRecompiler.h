@@ -14,11 +14,14 @@
 
 namespace Libs::Graphics::ShaderRecompiler {
 
+enum class SpirvOptimization { None, Size, Performance };
+
 struct CompileOptions {
 	ShaderType                  stage           = ShaderType::Compute;
 	uint32_t                    wave_size       = 64;
 	uint32_t                    user_data_base  = 0;
 	uint64_t                    shader_hash     = 0;
+	SpirvOptimization           spirv_optimization = SpirvOptimization::None;
 	bool                        dump_ir                    = true;
 	bool                        early_dump                 = false;
 	const char*                 dump_label                 = nullptr;

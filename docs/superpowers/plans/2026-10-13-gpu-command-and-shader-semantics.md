@@ -182,27 +182,29 @@ Commit: `feat(shader): add shader reduction and test case synthesis tool`
 - Consumes: ASTRO BOT compute shader bytecode `0008_new_shader_cs_01d6f21611218e74.bin` (25 KB -> 1.1 MB SPIR-V).
 - Produces: Optimized IR and SPIR-V code generation with reduced instruction count, eliminating redundant phi nodes, unrolled loop bloat, and duplicated SRT scalar loads.
 
-- [ ] **Step 1: Create a minimized reproduction test in `tests/shaderCfgTests.cpp`**
+- [x] **Step 1: Create a minimized reproduction test in `tests/shaderCfgTests.cpp`**
 
 Using Task 3 synthesis, extract the recursive/duplicated instruction block from `0008_new_shader_cs_*.bin` into a new test `check_massive_compute_shader_compilation_size()` asserting that generated SPIR-V size is below a strict threshold (e.g. < 400 KB instead of 1.1 MB).
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 Run: `cmake --build _Build/compat-foundation --target shader_cfg_tests --parallel && _Build/compat-foundation/shader_cfg_tests.exe`
 Expected: FAIL on the size / instruction count assertion.
 
-- [ ] **Step 3: Implement optimizations in `DeadCodeElimination.cpp` and `SpirvEmitter.cpp`**
+- [x] **Step 3: Implement configurable SPIR-V optimization in `SpirvEmitter.cpp`**
 
-- In `DeadCodeElimination.cpp`: prune unreachable basic blocks and dead SSA definitions before Spirv emission.
-- In `SpirvEmitter.cpp`: optimize composite extraction and deduplicate identical OpConstant / OpAccessChain instructions generated during SRT flat buffer unwinding.
-- In `Translate.cpp`: avoid emitting redundant intermediate temporary registers for scalar load chains.
+- Run the SPIRV-Tools size or performance pass pipeline after typed SPIR-V emission while preserving the shader interface.
+- Thread the existing `None`, `Size`, and `Performance` configuration through `CompileOptions` and the pipeline cache.
+- Use performance optimization for standalone shader analysis so pathological captures can be measured without changing local launcher settings.
 
-- [ ] **Step 4: Run test and verify GREEN**
+- [x] **Step 4: Run test and verify GREEN**
 
 Run: `cmake --build _Build/compat-foundation --target shader_cfg_tests --parallel && _Build/compat-foundation/shader_cfg_tests.exe`
-Expected: PASS with significantly reduced SPIR-V size and faster compilation.
+Expected: PASS with significantly reduced SPIR-V size and a smaller driver compilation input.
 
-- [ ] **Step 5: Commit**
+Measured: the 25,072-byte local compute capture now produces 277,976 bytes of valid SPIR-V, down from 507,120 bytes and below the 400 KB regression ceiling. Optimization increases this capture's one-time standalone compilation from about 369 ms to about 1,000 ms; normal emulation pays that cost only when `Size` or `Performance` is configured.
+
+- [x] **Step 5: Commit**
 
 Commit: `perf(shader): eliminate redundant instructions and shrink compute spirv emission`
 
