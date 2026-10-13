@@ -17,17 +17,18 @@ namespace Libs::Graphics::ShaderRecompiler {
 enum class SpirvOptimization { None, Size, Performance };
 
 struct CompileOptions {
-	ShaderType                  stage           = ShaderType::Compute;
-	uint32_t                    wave_size       = 64;
-	uint32_t                    user_data_base  = 0;
-	uint64_t                    shader_hash     = 0;
-	SpirvOptimization           spirv_optimization = SpirvOptimization::None;
-	bool                        dump_ir                    = true;
-	bool                        early_dump                 = false;
-	const char*                 dump_label                 = nullptr;
-	std::span<const uint32_t>   user_data;
-	std::span<const uint32_t>   back_code;
-	ShaderStageInputInfo        input_info;
+	ShaderType                stage                        = ShaderType::Compute;
+	uint32_t                  wave_size                    = 64;
+	uint32_t                  user_data_base               = 0;
+	uint64_t                  shader_hash                  = 0;
+	SpirvOptimization         spirv_optimization           = SpirvOptimization::None;
+	uint32_t                  spirv_optimization_min_words = 0;
+	bool                      dump_ir                      = true;
+	bool                      early_dump                   = false;
+	const char*               dump_label                   = nullptr;
+	std::span<const uint32_t> user_data;
+	std::span<const uint32_t> back_code;
+	ShaderStageInputInfo      input_info;
 };
 
 struct TranslateResult {

@@ -886,7 +886,8 @@ CompileResult CompileProgram(TranslateResult translated, const CompileOptions& o
 	LOGF("%s phase begin: stage=%s hash=0x%016" PRIx64 " SPIR-V EmitProgram\n",
 	     GetDumpLabel(options), StageName(ir.stage), ir.shader_hash);
 	auto spirv = Spirv::EmitProgram(ir, options.input_info, push_data_start_dword);
-	if (options.spirv_optimization != SpirvOptimization::None) {
+	if (options.spirv_optimization != SpirvOptimization::None &&
+	    spirv.size() >= options.spirv_optimization_min_words) {
 		std::vector<uint32_t> optimized;
 		std::string           diagnostics;
 		if (!Spirv::OptimizeProgram(spirv, options.spirv_optimization, optimized, diagnostics)) {

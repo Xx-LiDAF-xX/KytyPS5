@@ -15361,6 +15361,28 @@ void TestSpirvOptimizationShrinksStructuredRedundancy() {
         "performance SPIR-V optimization did not remove structured redundancy");
 }
 
+void TestSpirvOptimizationThresholdSkipsSmallPrograms() {
+  const uint32_t shader[] = {
+      EncodeMubuf0(0x0e, 0),
+      EncodeMubuf1(0, 0, 1), // buffer_load_dwordx4 v[0:3]
+      EncodeMubuf0(0x1e, 16),
+      EncodeMubuf1(0, 0, 1), // buffer_store_dwordx4 v[0:3]
+      EncodeSopp(0x01),
+  };
+
+  auto unoptimized_options = MakeCompileOptions(ShaderType::Compute);
+  const auto unoptimized = RecompileForTest(shader, unoptimized_options);
+
+  auto threshold_options = unoptimized_options;
+  threshold_options.spirv_optimization =
+      ShaderRecompiler::SpirvOptimization::Performance;
+  threshold_options.spirv_optimization_min_words = ~uint32_t{};
+  const auto thresholded = RecompileForTest(shader, threshold_options);
+
+  Check(thresholded.spirv == unoptimized.spirv,
+        "small SPIR-V program ignored the optimization threshold");
+}
+
 void TestNewShaderRecompilerSpirvSizeBaselines() {
   const auto compile = [](const char *name, std::span<const uint32_t> shader,
                           const SpirvMetrics &budget,
@@ -15636,6 +15658,7 @@ int main() {
   TestSpirvRepeatedEmission();
   TestRepeatedExportsHaveOneInterface();
   TestSpirvOptimizationShrinksStructuredRedundancy();
+  TestSpirvOptimizationThresholdSkipsSmallPrograms();
   TestNewShaderRecompilerSpirvSizeBaselines();
   TestDemandDrivenSpirvDeclarations();
   TestNewShaderRecompilerSMovB32();

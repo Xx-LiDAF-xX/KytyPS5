@@ -128,6 +128,10 @@ ShaderRecompiler::SpirvOptimization ShaderOptimization() {
 	return ShaderRecompiler::SpirvOptimization::None;
 }
 
+// Optimizer passes run synchronously, so reserve them for pathological source-to-SPIR-V growth.
+constexpr uint32_t kRuntimeOptimizationMinSourceWords = (24u * 1024u) / sizeof(uint32_t);
+constexpr uint32_t kRuntimeOptimizationMinSpirvWords  = (400u * 1024u) / sizeof(uint32_t);
+
 void DumpShaderSpirv(const char* stage_name, uint64_t shader_hash,
                      const std::vector<uint32_t>& spirv) {
 	if (!Config::GraphicsDebugDumpEnabled()) {
@@ -406,7 +410,11 @@ struct PipelineCache::ProgramCache {
 		options.stage       = stage;
 		options.shader_hash = params.hash;
 		options.user_data   = user_data;
-		options.spirv_optimization = ShaderOptimization();
+		options.spirv_optimization =
+		    params.code.size() >= kRuntimeOptimizationMinSourceWords
+		        ? ShaderOptimization()
+		        : ShaderRecompiler::SpirvOptimization::None;
+		options.spirv_optimization_min_words = kRuntimeOptimizationMinSpirvWords;
 		options.back_code      = params.back_code;
 		options.dump_ir     = Config::GetShaderLogDirection() != Config::LogDirection::Silent;
 		options.early_dump  = options.dump_ir;
