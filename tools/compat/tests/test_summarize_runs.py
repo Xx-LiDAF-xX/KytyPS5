@@ -29,6 +29,7 @@ class SummarizeRunsTests(unittest.TestCase):
         presentation=None,
         configuration=None,
         executable="eboot.bin",
+        unsupported_imports=None,
     ):
         directory = self.root / title_id / f"attempt-{attempt:03d}"
         directory.mkdir(parents=True)
@@ -71,6 +72,8 @@ class SummarizeRunsTests(unittest.TestCase):
             }
             if presentation is not None:
                 diagnostics["presentation"] = presentation
+            if unsupported_imports is not None:
+                diagnostics["unsupported_imports"] = unsupported_imports
             (directory / "diagnostics.json").write_text(
                 json.dumps(diagnostics),
                 encoding="utf-8",
@@ -154,6 +157,109 @@ class SummarizeRunsTests(unittest.TestCase):
 
         self.assertIsNone(summary["results"][0]["presentation"])
         self.assertIsNone(summary["results"][1]["presentation"])
+
+    def test_unsupported_import_summary_is_preserved(self):
+        self.make_attempt(
+            "PPSA00011",
+            1,
+            runner_outcome="timeout",
+            diagnostics_outcome="running",
+            unsupported_imports={
+                "entries": [
+                    {
+                        "symbol": "func_nid_one",
+                        "program": "module-one.prx",
+                        "type": "Function",
+                        "binding": "Global",
+                        "call_count": 2,
+                    },
+                    {
+                        "symbol": "func_nid_two",
+                        "program": "module-two.prx",
+                        "type": "Function",
+                        "binding": "Weak",
+                        "call_count": 3,
+                    },
+                ],
+                "dropped_unique": 1,
+            },
+        )
+
+        summary = summarize_runs.summarize(self.root)
+
+        self.assertEqual(
+            {"unique": 2, "calls": 5, "dropped_unique": 1},
+            summary["results"][0]["unsupported_imports"],
+        )
+        self.assertIn("| Unsupported imports |", summarize_runs.render_markdown(summary))
+        self.assertIn("| 2 symbols / 5 calls |", summarize_runs.render_markdown(summary))
+
+    def test_malformed_import_summary_is_ignored(self):
+        valid_fields = {
+            "symbol": "func_nid",
+            "program": "module.prx",
+            "type": "Function",
+            "binding": "Global",
+            "call_count": 1,
+        }
+        malformed = [
+            [],
+            {"entries": "not-a-list", "dropped_unique": 0},
+            {"entries": [], "dropped_unique": True},
+            {"entries": [], "dropped_unique": -1},
+            {"entries": [{**valid_fields, "symbol": False}], "dropped_unique": 0},
+            {"entries": [{**valid_fields, "program": 42}], "dropped_unique": 0},
+            {"entries": [{**valid_fields, "type": None}], "dropped_unique": 0},
+            {"entries": [{**valid_fields, "binding": []}], "dropped_unique": 0},
+            {"entries": [{**valid_fields, "call_count": True}], "dropped_unique": 0},
+            {"entries": [{**valid_fields, "call_count": -1}], "dropped_unique": 0},
+            {"entries": [{**valid_fields, "call_count": 1.5}], "dropped_unique": 0},
+        ]
+        for index, unsupported_imports in enumerate(malformed, start=20):
+            self.make_attempt(
+                f"PPSA{index:05d}",
+                1,
+                runner_outcome="timeout",
+                diagnostics_outcome="running",
+                unsupported_imports=unsupported_imports,
+            )
+
+        summary = summarize_runs.summarize(self.root)
+
+        self.assertTrue(
+            all(result["unsupported_imports"] is None for result in summary["results"])
+        )
+
+    def test_import_program_paths_never_reach_public_outputs(self):
+        private_path = "C:/Users/private/proprietary-game/sce_module/private.prx"
+        private_symbol = "private_symbol_identifier"
+        self.make_attempt(
+            "PPSA00012",
+            1,
+            runner_outcome="timeout",
+            diagnostics_outcome="running",
+            unsupported_imports={
+                "entries": [
+                    {
+                        "symbol": private_symbol,
+                        "program": private_path,
+                        "type": "Function",
+                        "binding": "Global",
+                        "call_count": 4,
+                    }
+                ],
+                "dropped_unique": 0,
+            },
+        )
+
+        summary = summarize_runs.summarize(self.root)
+        markdown = summarize_runs.render_markdown(summary)
+        serialized = json.dumps(summary)
+
+        self.assertNotIn(private_path, serialized)
+        self.assertNotIn(private_symbol, serialized)
+        self.assertNotIn(private_path, markdown)
+        self.assertNotIn(private_symbol, markdown)
 
     def test_mixed_attempts_are_ordered_and_latest_is_selected(self):
         self.make_attempt(

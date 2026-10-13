@@ -120,6 +120,59 @@ def _presentation_metadata(document: dict[str, Any] | None) -> dict[str, Any] | 
     }
 
 
+def _non_negative_integer(value: Any) -> int | None:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        return None
+    return value
+
+
+def _unsupported_import_metadata(
+    document: dict[str, Any] | None,
+) -> dict[str, int] | None:
+    if document is None:
+        return None
+    unsupported_imports = document.get("unsupported_imports")
+    if not isinstance(unsupported_imports, dict):
+        return None
+    entries = unsupported_imports.get("entries")
+    dropped_unique = _non_negative_integer(
+        unsupported_imports.get("dropped_unique", 0)
+    )
+    if not isinstance(entries, list) or dropped_unique is None:
+        return None
+
+    unique = 0
+    calls = 0
+    invalid_entry = False
+    for entry in entries:
+        if not isinstance(entry, dict):
+            invalid_entry = True
+            continue
+        identifiers = (
+            entry.get("symbol"),
+            entry.get("program"),
+            entry.get("type"),
+            entry.get("binding"),
+        )
+        call_count = _non_negative_integer(entry.get("call_count"))
+        if (
+            any(not isinstance(value, str) or not value for value in identifiers)
+            or call_count is None
+        ):
+            invalid_entry = True
+            continue
+        unique += 1
+        calls += call_count
+
+    if invalid_entry and unique == 0 and dropped_unique == 0:
+        return None
+    return {
+        "unique": unique,
+        "calls": calls,
+        "dropped_unique": dropped_unique,
+    }
+
+
 def _configuration_metadata(metadata: dict[str, Any]) -> dict[str, str]:
     configuration = metadata.get("configuration")
     if not isinstance(configuration, dict):
@@ -171,6 +224,7 @@ def _summarize_attempt(directory: Path) -> dict[str, Any] | None:
         "gpu": _gpu_metadata(metadata),
         "configuration": _configuration_metadata(metadata),
         "presentation": _presentation_metadata(diagnostics),
+        "unsupported_imports": _unsupported_import_metadata(diagnostics),
         "attempt": _attempt_number(directory, runner),
         "outcome": outcome,
         "evidence": evidence,
@@ -252,9 +306,9 @@ def render_markdown(summary: dict[str, Any]) -> str:
         "",
         (
             "| Title ID | Version | Platform | Attempt | Outcome | Evidence | GPU | "
-            "Vulkan validation | Shader validation | Frames | FPS |"
+            "Vulkan validation | Shader validation | Unsupported imports | Frames | FPS |"
         ),
-        "| --- | --- | --- | ---: | --- | --- | --- | --- | --- | ---: | ---: |",
+        "| --- | --- | --- | ---: | --- | --- | --- | --- | --- | --- | ---: | ---: |",
     ]
     for result in summary["results"]:
         gpu_name = result["gpu"]["name"] if result["gpu"] is not None else "unknown"
@@ -263,6 +317,13 @@ def render_markdown(summary: dict[str, Any]) -> str:
             presentation["presented_frames"] if presentation is not None else "unknown"
         )
         current_fps = presentation["current_fps"] if presentation is not None else "unknown"
+        unsupported_imports = result["unsupported_imports"]
+        unsupported_import_summary = (
+            f"{unsupported_imports['unique']} symbols / "
+            f"{unsupported_imports['calls']} calls"
+            if unsupported_imports is not None
+            else "unknown"
+        )
         lines.append(
             "| "
             + " | ".join(
@@ -277,6 +338,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
                     gpu_name,
                     result["configuration"]["vulkan_validation"],
                     result["configuration"]["shader_validation"],
+                    unsupported_import_summary,
                     presented_frames,
                     current_fps,
                 )

@@ -199,28 +199,28 @@ git commit -m "fix(loader): verify unresolved import thunk abi"
 - Consumes: optional `unsupported_imports` diagnostic object from Task 3.
 - Produces: each summarized result has `unsupported_imports: {unique, calls, dropped_unique}` or `null`; Markdown gains `Unsupported imports` formatted as `N symbols / M calls`.
 
-- [ ] **Step 1: Write failing Python summary tests**
+- [x] **Step 1: Write failing Python summary tests**
 
 Add `test_unsupported_import_summary_is_preserved`, `test_malformed_import_summary_is_ignored`, and `test_import_program_paths_never_reach_public_outputs`. Include negative, Boolean, non-list, and non-string malformed values.
 
-- [ ] **Step 2: Run the focused suite and verify RED**
+- [x] **Step 2: Run the focused suite and verify RED**
 
 Run: `python -m unittest tools.compat.tests.test_summarize_runs -v`
 
 Expected: failures because results and Markdown do not contain unsupported-import totals.
 
-- [ ] **Step 3: Implement sanitized summary extraction**
+- [x] **Step 3: Implement sanitized summary extraction**
 
 Validate counts as finite non-negative integers, recompute `unique` and `calls` from valid entries, retain only aggregate totals in public artifacts, and never copy symbol names or program paths into `baseline.json` or Markdown.
 
-- [ ] **Step 4: Run the focused suite and verify GREEN**
+- [x] **Step 4: Run the focused suite and verify GREEN**
 
 Run: `python -m unittest tools.compat.tests.test_summarize_runs -v`
 Run: `python -m unittest discover -s tools/compat/tests -v`
 
 Expected: all compatibility-tool tests pass and generated output contains no fixture path.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tools/compat/summarize_runs.py tools/compat/tests/test_summarize_runs.py
