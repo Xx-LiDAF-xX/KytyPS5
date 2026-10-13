@@ -94,16 +94,16 @@ Commit: `feat(shader): add standalone shader recompilation CLI and driver`
 - Binary stream format: schema version header, packet array, register snapshot.
 - Driver: `replay_pm4.py --emulator <path> --input <stream>` validating execution without host crashes.
 
-- [ ] **Step 1: Write failing replay test cases**
+- [x] **Step 1: Write failing replay test cases**
 
 Create Python unit tests in `tools/gpu/tests/test_replay_pm4.py` testing packet stream parsing, execution of synthetic type 3 packets (SET_SH_REG, DRAW_INDEX_AUTO), rejection of corrupted packets, and exit status reporting.
 
-- [ ] **Step 2: Run the replay test and verify RED**
+- [x] **Step 2: Run the replay test and verify RED**
 
 Run: `python -m unittest tools/gpu/tests/test_replay_pm4.py -v`
 Expected: FAIL because `tools/gpu/replay_pm4.py` does not exist.
 
-- [ ] **Step 3: Implement PM4 replay mechanism in emulator and python runner**
+- [x] **Step 3: Implement PM4 replay mechanism in emulator and python runner**
 
 In `src/graphics/guest_gpu/pm4.cpp`:
 - Implement `bool ReplayPm4PacketStream(const uint32_t* cmd_buffer, uint32_t num_dw, HardwareContext* ctx)`.
@@ -115,13 +115,13 @@ In `src/main.cpp`:
 In `tools/gpu/replay_pm4.py`:
 - Parse and invoke replay, sanitize stdout/stderr.
 
-- [ ] **Step 4: Build and verify GREEN**
+- [x] **Step 4: Build and verify GREEN**
 
 Run: `cmake --build _Build/compat-foundation --target kyty_emulator --parallel`
 Run: `python -m unittest tools/gpu/tests/test_replay_pm4.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Commit: `feat(gpu): add offline pm4 stream replay harness`
 

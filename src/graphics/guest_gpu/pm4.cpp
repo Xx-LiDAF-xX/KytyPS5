@@ -4,6 +4,7 @@
 #include "common/file.h"
 
 #include <array>
+#include <fmt/format.h>
 
 namespace Libs::Graphics::Pm4 {
 
@@ -168,6 +169,149 @@ void DumpPm4PacketStream(Common::File* file, const uint32_t* cmd_buffer, uint32_
 		dw -= len + 1;
 		start_dw += len + 1;
 	}
+}
+
+bool ReplayPm4PacketStream(const uint32_t* cmd_buffer, uint32_t num_dw, HardwareContext* ctx) {
+	if (cmd_buffer == nullptr || num_dw == 0) {
+		return true;
+	}
+
+	HardwareContext local_ctx;
+	if (ctx == nullptr) {
+		ctx = &local_ctx;
+	}
+
+	ctx->stats.total_dwords = num_dw;
+
+	const uint32_t* cmd          = cmd_buffer;
+	uint32_t        remaining_dw = num_dw;
+
+	while (remaining_dw != 0) {
+		const uint32_t header = *cmd;
+
+		// 1-dword packets
+		if (header == 0x80000000u || (header & 0x3fffff00u) == 0x3fff1000u) {
+			ctx->stats.packets_parsed++;
+			ctx->stats.nop_packets++;
+			cmd++;
+			remaining_dw--;
+			continue;
+		}
+
+		const auto packet_type = static_cast<PacketType>(header >> 30u);
+		if (packet_type == PacketType::Type3) {
+			const uint32_t len          = PacketSizeDw(header) - 1u;
+			const uint32_t total_pkt_dw = len + 1u;
+			if (total_pkt_dw > remaining_dw) {
+				ctx->stats.error_count++;
+				ctx->stats.last_error = fmt::format(
+				    "Truncated Type3 packet at offset {}: requires {} dwords, but only {} remaining",
+				    num_dw - remaining_dw, total_pkt_dw, remaining_dw);
+				return false;
+			}
+
+			const uint8_t op = static_cast<uint8_t>((header >> 8u) & 0xffu);
+			ctx->stats.packets_parsed++;
+			ctx->stats.type3_packets++;
+
+			switch (op) {
+				case IT_NOP:
+					ctx->stats.nop_packets++;
+					break;
+				case IT_SET_SH_REG: {
+					ctx->stats.set_sh_reg_packets++;
+					if (len >= 2) {
+						const uint32_t reg_offset = cmd[1];
+						const uint32_t val_count  = len - 1;
+						for (uint32_t i = 0; i < val_count; ++i) {
+							const uint32_t cur_reg = reg_offset + i;
+							const uint32_t val     = cmd[2 + i];
+							if (cur_reg == COMPUTE_PGM_LO) {
+								ctx->sh_ctx.SetCsShader(HW::CsStageRegisters{
+								    .data_addr = (ctx->sh_ctx.GetCs().cs_regs.data_addr & 0xffffffff00000000ull) |
+								                 (static_cast<uint64_t>(val) << 8u)});
+							} else if (cur_reg == COMPUTE_PGM_HI) {
+								ctx->sh_ctx.SetCsShader(HW::CsStageRegisters{
+								    .data_addr = (ctx->sh_ctx.GetCs().cs_regs.data_addr & 0x00000000ffffffffull) |
+								                 (static_cast<uint64_t>(val) << 40u)});
+							}
+						}
+					}
+					break;
+				}
+				case IT_SET_CONTEXT_REG: {
+					ctx->stats.set_context_reg_packets++;
+					break;
+				}
+				case IT_SET_UCONFIG_REG:
+				case IT_SET_UCONFIG_REG_INDEX: {
+					ctx->stats.set_uconfig_reg_packets++;
+					if (len >= 2) {
+						const uint32_t reg_offset = cmd[1] & 0x0fffffffu;
+						const uint32_t val_count  = len - 1;
+						for (uint32_t i = 0; i < val_count; ++i) {
+							const uint32_t cur_reg = reg_offset + i;
+							const uint32_t val     = cmd[2 + i];
+							if (cur_reg == VGT_PRIMITIVE_TYPE) {
+								ctx->ucfg.SetPrimitiveType(static_cast<Prospero::PrimitiveType>(val));
+							} else if (cur_reg == GE_INDX_OFFSET) {
+								ctx->ucfg.SetIndexOffset(val);
+							} else if (cur_reg == VGT_OBJECT_ID) {
+								ctx->ucfg.SetObjectId(val);
+							}
+						}
+					}
+					break;
+				}
+				case IT_DRAW_INDEX_AUTO:
+				case IT_DRAW_INDEX_2:
+				case IT_DRAW_INDIRECT:
+				case IT_DRAW_INDEX_INDIRECT:
+				case IT_DRAW_INDIRECT_MULTI:
+				case IT_DRAW_INDEX_INDIRECT_MULTI:
+				case IT_DRAW_INDEX_OFFSET_2:
+					ctx->stats.draw_packets++;
+					break;
+				case IT_DISPATCH_DIRECT:
+				case IT_DISPATCH_INDIRECT:
+				case IT_DISPATCH_DRAW:
+				case IT_DISPATCH_DRAW_PREAMBLE:
+					ctx->stats.dispatch_packets++;
+					break;
+				default:
+					break;
+			}
+
+			cmd += total_pkt_dw;
+			remaining_dw -= total_pkt_dw;
+		} else if (packet_type == PacketType::Type2) {
+			ctx->stats.packets_parsed++;
+			ctx->stats.nop_packets++;
+			cmd++;
+			remaining_dw--;
+		} else if (packet_type == PacketType::Type0) {
+			const uint32_t count        = ((header >> 16u) & 0x3fffu) + 1u;
+			const uint32_t total_pkt_dw = count + 1u;
+			if (total_pkt_dw > remaining_dw) {
+				ctx->stats.error_count++;
+				ctx->stats.last_error = fmt::format(
+				    "Truncated Type0 packet at offset {}: requires {} dwords, but only {} remaining",
+				    num_dw - remaining_dw, total_pkt_dw, remaining_dw);
+				return false;
+			}
+			ctx->stats.packets_parsed++;
+			cmd += total_pkt_dw;
+			remaining_dw -= total_pkt_dw;
+		} else {
+			ctx->stats.error_count++;
+			ctx->stats.last_error = fmt::format(
+			    "Unsupported or invalid PM4 packet header 0x{:08X} at offset {}", header,
+			    num_dw - remaining_dw);
+			return false;
+		}
+	}
+
+	return true;
 }
 
 } // namespace Libs::Graphics::Pm4

@@ -7,6 +7,7 @@
 #include "common/threads.h"
 #include "common/virtualMemory.h"
 #include "emulator.h"
+#include "graphics/guest_gpu/pm4.h"
 #include "graphics/shader/recompiler/ShaderRecompiler.h"
 #include "graphics/shader/recompiler/frontend/decode/ShaderDecoder.h"
 #include "graphics/shader/recompiler/ir/passes/ResourceMaterialization.h"
@@ -108,6 +109,8 @@ static void PrintUsage() {
 	::printf("  --keymap <Control=Input>             DualSense mapping; may be repeated.\n");
 	::printf("  --recompile-shader <stage> <in.bin> [--out <out.spv>] [--disasm] [--no-validate]\n"
 	         "                                       Recompile guest shader binary to SPIR-V.\n");
+	::printf("  --replay-pm4 <stream.bin|stream.log> [--headless]\n"
+	         "                                       Replay PM4 command buffer stream offline.\n");
 	::printf("  --rd                                 Enable RenderDoc capture.\n");
 }
 
@@ -641,6 +644,121 @@ static int HandleRecompileShader(int argc, char* argv[], int opt_index) {
 	return 0;
 }
 
+static std::vector<uint32_t> ParseDwordsFromLog(const std::string& text) {
+	std::vector<uint32_t> dwords;
+	size_t pos = 0;
+	while ((pos = text.find('|', pos)) != std::string::npos) {
+		size_t next_pipe = text.find('|', pos + 1);
+		if (next_pipe == std::string::npos) {
+			break;
+		}
+		std::string segment = text.substr(pos + 1, next_pipe - pos - 1);
+		size_t hex_pos = segment.find("0x");
+		if (hex_pos != std::string::npos && hex_pos + 10 <= segment.size()) {
+			uint32_t val = 0;
+			auto res = std::from_chars(segment.data() + hex_pos + 2, segment.data() + hex_pos + 10, val, 16);
+			if (res.ec == std::errc{}) {
+				dwords.push_back(val);
+			}
+		}
+		pos = next_pipe + 1;
+	}
+	return dwords;
+}
+
+static int HandleReplayPm4(int argc, char* argv[], int opt_index) {
+	if (opt_index + 1 >= argc) {
+		::fprintf(stderr, "Error: --replay-pm4 requires <stream.bin|stream.log>\n");
+		return 1;
+	}
+
+	std::string input_path = argv[opt_index + 1];
+	bool is_headless = true;
+	for (int i = opt_index + 2; i < argc; ++i) {
+		std::string_view a = argv[i];
+		if (a == "--headless") {
+			is_headless = true;
+		}
+	}
+
+	const auto in_p = Common::PathFromUtf8(input_path);
+	if (!Common::File::IsFileExisting(in_p)) {
+		::fprintf(stderr, "Error: input stream file does not exist: %s\n", input_path.c_str());
+		nlohmann::json err_doc;
+		err_doc["status"] = "error";
+		err_doc["error"] = "Input stream file does not exist";
+		::printf("%s\n", err_doc.dump().c_str());
+		return 1;
+	}
+
+	Common::File in_file(in_p, Common::File::Mode::Read);
+	if (in_file.IsInvalid() || in_file.Size() == 0) {
+		::fprintf(stderr, "Error: failed to open input stream or file is empty: %s\n", input_path.c_str());
+		nlohmann::json err_doc;
+		err_doc["status"] = "error";
+		err_doc["error"] = "Failed to open input stream or file is empty";
+		::printf("%s\n", err_doc.dump().c_str());
+		return 1;
+	}
+
+	std::vector<uint32_t> dwords;
+	if (Common::EqualNoCase(in_p.extension().string(), ".log")) {
+		std::string text(in_file.Size(), '\0');
+		in_file.Read(text.data(), text.size());
+		dwords = ParseDwordsFromLog(text);
+	} else {
+		uint32_t magic = 0;
+		if (in_file.Size() >= 16) {
+			in_file.Read(&magic, sizeof(uint32_t));
+			if (magic == 0x344D504Bu /* 'KPM4' */) {
+				uint32_t version = 0, dword_count = 0, flags = 0;
+				in_file.Read(&version, sizeof(uint32_t));
+				in_file.Read(&dword_count, sizeof(uint32_t));
+				in_file.Read(&flags, sizeof(uint32_t));
+				dwords.resize(dword_count);
+				in_file.Read(dwords.data(), dword_count * sizeof(uint32_t));
+			} else {
+				in_file.Seek(0);
+				dwords.resize(in_file.Size() / sizeof(uint32_t));
+				in_file.Read(dwords.data(), in_file.Size());
+			}
+		} else {
+			dwords.resize(in_file.Size() / sizeof(uint32_t));
+			in_file.Read(dwords.data(), in_file.Size());
+		}
+	}
+
+	if (dwords.empty()) {
+		nlohmann::json err_doc;
+		err_doc["status"] = "error";
+		err_doc["error"] = "No dwords extracted from stream file";
+		::printf("%s\n", err_doc.dump().c_str());
+		return 1;
+	}
+
+	Libs::Graphics::Pm4::HardwareContext hw_ctx;
+	bool success = Libs::Graphics::Pm4::ReplayPm4PacketStream(dwords.data(), static_cast<uint32_t>(dwords.size()), &hw_ctx);
+
+	nlohmann::json doc;
+	doc["status"] = success ? "ok" : "error";
+	doc["headless"] = is_headless;
+	doc["dwords_read"] = dwords.size();
+	doc["packets_parsed"] = hw_ctx.stats.packets_parsed;
+	doc["type3_packets"] = hw_ctx.stats.type3_packets;
+	doc["set_sh_reg_packets"] = hw_ctx.stats.set_sh_reg_packets;
+	doc["set_context_reg_packets"] = hw_ctx.stats.set_context_reg_packets;
+	doc["set_uconfig_reg_packets"] = hw_ctx.stats.set_uconfig_reg_packets;
+	doc["draw_packets"] = hw_ctx.stats.draw_packets;
+	doc["dispatch_packets"] = hw_ctx.stats.dispatch_packets;
+	doc["nop_packets"] = hw_ctx.stats.nop_packets;
+	if (!success) {
+		doc["error"] = hw_ctx.stats.last_error;
+	}
+
+	::printf("%s\n", doc.dump().c_str());
+	return success ? 0 : 1;
+}
+
 static int Main(int argc, char* argv[]) {
 	VirtualMemory::Init();
 	InitializeThreads();
@@ -648,6 +766,9 @@ static int Main(int argc, char* argv[]) {
 	for (int i = 1; i < argc; ++i) {
 		if (std::string_view(argv[i]) == "--recompile-shader") {
 			return HandleRecompileShader(argc, argv, i);
+		}
+		if (std::string_view(argv[i]) == "--replay-pm4") {
+			return HandleReplayPm4(argc, argv, i);
 		}
 	}
 

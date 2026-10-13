@@ -3,6 +3,9 @@
 
 #include "common/abi.h"
 #include "common/common.h"
+#include "graphics/guest_gpu/hardwareContext.h"
+
+#include <string>
 
 namespace Common {
 class File;
@@ -1012,8 +1015,32 @@ constexpr uint32_t UC_NOP = 0xA2;
 
 constexpr uint32_t UC_NUM = 0x3FFF + 1;
 
+struct ReplayStats {
+	uint32_t    total_dwords            = 0;
+	uint32_t    packets_parsed          = 0;
+	uint32_t    type3_packets           = 0;
+	uint32_t    set_sh_reg_packets      = 0;
+	uint32_t    set_context_reg_packets = 0;
+	uint32_t    set_uconfig_reg_packets = 0;
+	uint32_t    draw_packets            = 0;
+	uint32_t    dispatch_packets        = 0;
+	uint32_t    nop_packets             = 0;
+	uint32_t    error_count             = 0;
+	std::string last_error;
+};
+
+struct HardwareContext {
+	HW::Context    ctx;
+	HW::UserConfig ucfg;
+	HW::Shader     sh_ctx;
+	ReplayStats    stats;
+};
+
 void DumpPm4PacketStream(Common::File* file, const uint32_t* cmd_buffer, uint32_t start_dw,
                          uint32_t num_dw);
+
+bool ReplayPm4PacketStream(const uint32_t* cmd_buffer, uint32_t num_dw,
+                          HardwareContext* ctx = nullptr);
 
 } // namespace Libs::Graphics::Pm4
 
