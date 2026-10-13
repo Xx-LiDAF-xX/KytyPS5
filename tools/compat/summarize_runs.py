@@ -28,6 +28,7 @@ COUNTED_OUTCOMES = (
     "launch_error",
     "unknown",
 )
+CONFIGURATION_FIELDS = ("vulkan_validation", "shader_validation")
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -119,6 +120,15 @@ def _presentation_metadata(document: dict[str, Any] | None) -> dict[str, Any] | 
     }
 
 
+def _configuration_metadata(metadata: dict[str, Any]) -> dict[str, str]:
+    configuration = metadata.get("configuration")
+    if not isinstance(configuration, dict):
+        configuration = {}
+    return {
+        field: _string(configuration.get(field)) for field in CONFIGURATION_FIELDS
+    }
+
+
 def _summarize_attempt(directory: Path) -> dict[str, Any] | None:
     runner = _read_json(directory / "run.json")
     diagnostics = _read_json(directory / "diagnostics.json")
@@ -159,6 +169,7 @@ def _summarize_attempt(directory: Path) -> dict[str, Any] | None:
         "platform": _string(metadata.get("platform")),
         "cpu_name": _string(metadata.get("cpu_name")),
         "gpu": _gpu_metadata(metadata),
+        "configuration": _configuration_metadata(metadata),
         "presentation": _presentation_metadata(diagnostics),
         "attempt": _attempt_number(directory, runner),
         "outcome": outcome,
@@ -169,7 +180,10 @@ def _summarize_attempt(directory: Path) -> dict[str, Any] | None:
     }
 
 
-def summarize(input_path: Path | str) -> dict[str, Any]:
+def summarize(
+    input_path: Path | str,
+    required_configuration: dict[str, str] | None = None,
+) -> dict[str, Any]:
     root = Path(input_path)
     results: list[dict[str, Any]] = []
     if root.is_dir():
@@ -177,7 +191,13 @@ def summarize(input_path: Path | str) -> dict[str, Any]:
             if not directory.is_dir():
                 continue
             result = _summarize_attempt(directory)
-            if result is not None:
+            if result is not None and (
+                required_configuration is None
+                or all(
+                    result["configuration"].get(key) == value
+                    for key, value in required_configuration.items()
+                )
+            ):
                 results.append(result)
 
     results.sort(
@@ -200,6 +220,7 @@ def summarize(input_path: Path | str) -> dict[str, Any]:
                 "outcome": result["outcome"],
                 "content_version": result["content_version"],
                 "platform": result["platform"],
+                "configuration": result["configuration"],
             }
 
     return {
@@ -229,8 +250,11 @@ def render_markdown(summary: dict[str, Any]) -> str:
         "",
         "Process outcomes do not establish a compatibility rung; manual evidence is required.",
         "",
-        "| Title ID | Version | Platform | Attempt | Outcome | Evidence | GPU | Frames | FPS |",
-        "| --- | --- | --- | ---: | --- | --- | --- | ---: | ---: |",
+        (
+            "| Title ID | Version | Platform | Attempt | Outcome | Evidence | GPU | "
+            "Vulkan validation | Shader validation | Frames | FPS |"
+        ),
+        "| --- | --- | --- | ---: | --- | --- | --- | --- | --- | ---: | ---: |",
     ]
     for result in summary["results"]:
         gpu_name = result["gpu"]["name"] if result["gpu"] is not None else "unknown"
@@ -251,6 +275,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
                     result["outcome"],
                     result["evidence"],
                     gpu_name,
+                    result["configuration"]["vulkan_validation"],
+                    result["configuration"]["shader_validation"],
                     presented_frames,
                     current_fps,
                 )
@@ -264,8 +290,9 @@ def write_summaries(
     input_path: Path | str,
     json_path: Path | str,
     markdown_path: Path | str,
+    required_configuration: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    summary = summarize(input_path)
+    summary = summarize(input_path, required_configuration=required_configuration)
     json_output = Path(json_path)
     markdown_output = Path(markdown_path)
     json_output.parent.mkdir(parents=True, exist_ok=True)
@@ -283,12 +310,27 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--json", type=Path, required=True)
     parser.add_argument("--markdown", type=Path, required=True)
+    parser.add_argument("--vulkan-validation", choices=("true", "false"))
+    parser.add_argument("--shader-validation", choices=("true", "false"))
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    summary = write_summaries(args.input, args.json, args.markdown)
+    required_configuration = {
+        key: value
+        for key, value in (
+            ("vulkan_validation", args.vulkan_validation),
+            ("shader_validation", args.shader_validation),
+        )
+        if value is not None
+    }
+    summary = write_summaries(
+        args.input,
+        args.json,
+        args.markdown,
+        required_configuration=required_configuration or None,
+    )
     print(f"summarized {len(summary['results'])} compatibility attempts")
     return 0
 

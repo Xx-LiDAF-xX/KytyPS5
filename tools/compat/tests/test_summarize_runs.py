@@ -27,6 +27,7 @@ class SummarizeRunsTests(unittest.TestCase):
         diagnostics_outcome=None,
         gpu=None,
         presentation=None,
+        configuration=None,
         executable="eboot.bin",
     ):
         directory = self.root / title_id / f"attempt-{attempt:03d}"
@@ -57,7 +58,7 @@ class SummarizeRunsTests(unittest.TestCase):
                     "content_version": "01.000.000",
                     "executable": executable,
                 },
-                "configuration": {},
+                "configuration": configuration or {},
             }
             if gpu is not None:
                 metadata["gpu"] = gpu
@@ -182,6 +183,49 @@ class SummarizeRunsTests(unittest.TestCase):
         self.assertEqual(1, summary["counts"]["completed"])
         self.assertEqual(1, summary["counts"]["fatal"])
         self.assertEqual(1, summary["counts"]["launch_error"])
+
+    def test_configuration_filter_prevents_mixed_validation_profiles(self):
+        self.make_attempt(
+            "PPSA00030",
+            1,
+            runner_outcome="timeout",
+            diagnostics_outcome="running",
+            configuration={
+                "vulkan_validation": "true",
+                "shader_validation": "true",
+            },
+        )
+        self.make_attempt(
+            "PPSA00030",
+            2,
+            runner_outcome="timeout",
+            diagnostics_outcome="running",
+            configuration={
+                "vulkan_validation": "true",
+                "shader_validation": "false",
+            },
+        )
+
+        summary = summarize_runs.summarize(
+            self.root,
+            required_configuration={
+                "vulkan_validation": "true",
+                "shader_validation": "true",
+            },
+        )
+
+        self.assertEqual([1], [item["attempt"] for item in summary["results"]])
+        self.assertEqual(1, summary["latest"][0]["attempt"])
+        self.assertEqual(
+            {
+                "vulkan_validation": "true",
+                "shader_validation": "true",
+            },
+            summary["results"][0]["configuration"],
+        )
+        markdown = summarize_runs.render_markdown(summary)
+        self.assertIn("| Vulkan validation | Shader validation |", markdown.splitlines()[6])
+        self.assertIn("| true | true |", markdown)
 
     def test_outputs_strip_absolute_executable_paths(self):
         private_path = "C:/Users/private/owned-game/eboot.bin"

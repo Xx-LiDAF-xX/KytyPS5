@@ -4,12 +4,16 @@
     "fatal": 22,
     "host_exception": 0,
     "launch_error": 0,
-    "timeout": 61,
+    "timeout": 65,
     "unknown": 0
   },
   "latest": [
     {
       "attempt": 8,
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.905.000",
       "outcome": "timeout",
       "platform": "Windows",
@@ -17,6 +21,10 @@
     },
     {
       "attempt": 11,
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.001.000",
       "outcome": "timeout",
       "platform": "Windows",
@@ -24,6 +32,10 @@
     },
     {
       "attempt": 7,
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.005.000",
       "outcome": "timeout",
       "platform": "Windows",
@@ -31,20 +43,32 @@
     },
     {
       "attempt": 24,
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "outcome": "timeout",
       "platform": "Windows",
       "title_id": "PPSA21567"
     },
     {
-      "attempt": 7,
+      "attempt": 8,
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.002.000",
       "outcome": "timeout",
       "platform": "Windows",
       "title_id": "PPSA25991"
     },
     {
-      "attempt": 9,
+      "attempt": 10,
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.000.000",
       "outcome": "timeout",
       "platform": "Windows",
@@ -52,13 +76,21 @@
     },
     {
       "attempt": 10,
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.000.003",
       "outcome": "timeout",
       "platform": "Windows",
       "title_id": "PPSA27624"
     },
     {
-      "attempt": 7,
+      "attempt": 9,
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "02.000.001",
       "outcome": "timeout",
       "platform": "Windows",
@@ -70,6 +102,10 @@
       "attempt": 1,
       "build_label": "Source build 369775f-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.905.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.172453,
@@ -87,6 +123,10 @@
       "attempt": 2,
       "build_label": "Source build 9c0f631-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.905.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.191964,
@@ -104,6 +144,10 @@
       "attempt": 3,
       "build_label": "Source build 9f56e86-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.905.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.250898,
@@ -121,6 +165,10 @@
       "attempt": 4,
       "build_label": "Source build 67b1528-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.905.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.284158,
@@ -143,6 +191,10 @@
       "attempt": 5,
       "build_label": "Source build 804efb5",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.905.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.275214,
@@ -165,6 +217,10 @@
       "attempt": 6,
       "build_label": "Source build e89f0a3",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.905.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.246379,
@@ -187,6 +243,10 @@
       "attempt": 7,
       "build_label": "Source build 79d0898",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.905.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.304094,
@@ -209,6 +269,10 @@
       "attempt": 8,
       "build_label": "Source build 07bcdaf",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.905.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.289806,
@@ -234,6 +298,10 @@
       "attempt": 1,
       "build_label": "Source build 369775f-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.001.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 3.598584,
@@ -256,6 +324,10 @@
       "attempt": 2,
       "build_label": "Source build 3f15f43-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.001.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 3.901194,
@@ -278,6 +350,10 @@
       "attempt": 3,
       "build_label": "Source build 3f15f43-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.001.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 3.702404,
@@ -300,6 +376,10 @@
       "attempt": 4,
       "build_label": "Source build 3f15f43-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.001.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 3.607272,
@@ -322,6 +402,10 @@
       "attempt": 5,
       "build_label": "Source build 3f15f43-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.001.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.247557,
@@ -339,6 +423,10 @@
       "attempt": 6,
       "build_label": "Source build 9c0f631-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.001.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.178197,
@@ -356,6 +444,10 @@
       "attempt": 7,
       "build_label": "Source build 9f56e86-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.001.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.186993,
@@ -373,6 +465,10 @@
       "attempt": 8,
       "build_label": "Source build 804efb5",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.001.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.232165,
@@ -395,6 +491,10 @@
       "attempt": 9,
       "build_label": "Source build e89f0a3",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.001.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.217775,
@@ -417,6 +517,10 @@
       "attempt": 10,
       "build_label": "Source build 79d0898",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.001.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.230841,
@@ -439,6 +543,10 @@
       "attempt": 11,
       "build_label": "Source build 07bcdaf",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.001.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.236364,
@@ -464,6 +572,10 @@
       "attempt": 1,
       "build_label": "Source build 369775f-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.005.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.226766,
@@ -481,6 +593,10 @@
       "attempt": 2,
       "build_label": "Source build 9c0f631-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.005.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.24016,
@@ -498,6 +614,10 @@
       "attempt": 3,
       "build_label": "Source build 9f56e86-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.005.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.258719,
@@ -515,6 +635,10 @@
       "attempt": 4,
       "build_label": "Source build 804efb5",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.005.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.231467,
@@ -537,6 +661,10 @@
       "attempt": 5,
       "build_label": "Source build e89f0a3",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.005.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.264999,
@@ -559,6 +687,10 @@
       "attempt": 6,
       "build_label": "Source build 79d0898",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.005.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.225754,
@@ -581,6 +713,10 @@
       "attempt": 7,
       "build_label": "Source build 07bcdaf",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.005.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.240784,
@@ -606,6 +742,10 @@
       "attempt": 1,
       "build_label": "Source build 369775f-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 13.211654,
@@ -628,6 +768,10 @@
       "attempt": 2,
       "build_label": "Source build 9c0f631",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 4.051055,
@@ -650,6 +794,10 @@
       "attempt": 3,
       "build_label": "Source build 9c0f631-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 3.685578,
@@ -672,6 +820,10 @@
       "attempt": 4,
       "build_label": "Source build 9c0f631-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 3.707235,
@@ -694,6 +846,10 @@
       "attempt": 5,
       "build_label": "Source build 9c0f631-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 3.583989,
@@ -716,6 +872,10 @@
       "attempt": 6,
       "build_label": "Source build 9c0f631-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 3.920465,
@@ -738,6 +898,10 @@
       "attempt": 7,
       "build_label": "Source build 9c0f631-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 3.634188,
@@ -760,6 +924,10 @@
       "attempt": 8,
       "build_label": "Source build 9c0f631-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 4.241618,
@@ -782,6 +950,10 @@
       "attempt": 9,
       "build_label": "Source build 9c0f631-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 3.658795,
@@ -804,6 +976,10 @@
       "attempt": 10,
       "build_label": "Source build 9c0f631-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.195102,
@@ -821,6 +997,10 @@
       "attempt": 11,
       "build_label": "Source build 9c0f631-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.193508,
@@ -838,6 +1018,10 @@
       "attempt": 12,
       "build_label": "Source build 9f56e86-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.198178,
@@ -855,6 +1039,10 @@
       "attempt": 13,
       "build_label": "Source build 804efb5",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.198746,
@@ -877,6 +1065,10 @@
       "attempt": 14,
       "build_label": "Source build e89f0a3",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 12.460688,
@@ -899,6 +1091,10 @@
       "attempt": 15,
       "build_label": "Source build e89f0a3-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 5.185694,
@@ -921,6 +1117,10 @@
       "attempt": 16,
       "build_label": "Source build e89f0a3-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 3.608677,
@@ -943,6 +1143,10 @@
       "attempt": 17,
       "build_label": "Source build e89f0a3-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 3.518137,
@@ -965,6 +1169,10 @@
       "attempt": 18,
       "build_label": "Source build e89f0a3-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 3.563927,
@@ -987,6 +1195,10 @@
       "attempt": 19,
       "build_label": "Source build e89f0a3-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 3.58917,
@@ -1009,6 +1221,10 @@
       "attempt": 20,
       "build_label": "Source build e89f0a3-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 3.584945,
@@ -1031,6 +1247,10 @@
       "attempt": 21,
       "build_label": "Source build e89f0a3-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 3.555824,
@@ -1053,6 +1273,10 @@
       "attempt": 22,
       "build_label": "Source build e89f0a3-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.260882,
@@ -1075,6 +1299,10 @@
       "attempt": 23,
       "build_label": "Source build 79d0898",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.2004,
@@ -1097,6 +1325,10 @@
       "attempt": 24,
       "build_label": "Source build 07bcdaf",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.018.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.189059,
@@ -1122,6 +1354,10 @@
       "attempt": 1,
       "build_label": "Source build 369775f-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.002.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.20891,
@@ -1139,6 +1375,10 @@
       "attempt": 2,
       "build_label": "Source build 9c0f631-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.002.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.217782,
@@ -1156,6 +1396,10 @@
       "attempt": 3,
       "build_label": "Source build 9f56e86-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.002.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.230584,
@@ -1173,6 +1417,10 @@
       "attempt": 4,
       "build_label": "Source build 804efb5",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.002.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.221118,
@@ -1195,6 +1443,10 @@
       "attempt": 5,
       "build_label": "Source build e89f0a3",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.002.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.245681,
@@ -1217,6 +1469,10 @@
       "attempt": 6,
       "build_label": "Source build 79d0898",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.002.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.218423,
@@ -1239,6 +1495,10 @@
       "attempt": 7,
       "build_label": "Source build 07bcdaf",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.002.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.225354,
@@ -1261,9 +1521,42 @@
       "title_name": "Senua's Saga: Hellblade II"
     },
     {
+      "attempt": 8,
+      "build_label": "Source build 07bcdaf",
+      "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
+      "content_version": "01.002.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 90.264555,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 22.0,
+        "presented_frames": 1696
+      },
+      "title_id": "PPSA25991",
+      "title_name": "Senua's Saga: Hellblade II"
+    },
+    {
       "attempt": 1,
       "build_label": "Source build 369775f-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.000.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.190039,
@@ -1281,6 +1574,10 @@
       "attempt": 2,
       "build_label": "Source build 9c0f631-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.000.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.227172,
@@ -1298,6 +1595,10 @@
       "attempt": 3,
       "build_label": "Source build 9f56e86-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.000.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.270241,
@@ -1315,6 +1616,10 @@
       "attempt": 4,
       "build_label": "Source build 804efb5",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.000.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 17.213217,
@@ -1337,6 +1642,10 @@
       "attempt": 5,
       "build_label": "Source build 804efb5-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.000.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.333868,
@@ -1359,6 +1668,10 @@
       "attempt": 6,
       "build_label": "Source build e89f0a3",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.000.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.338832,
@@ -1381,6 +1694,10 @@
       "attempt": 7,
       "build_label": "Source build e89f0a3",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.000.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.318504,
@@ -1403,6 +1720,10 @@
       "attempt": 8,
       "build_label": "Source build 79d0898",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.000.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.307691,
@@ -1425,6 +1746,10 @@
       "attempt": 9,
       "build_label": "Source build 07bcdaf",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.000.000",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.305175,
@@ -1447,9 +1772,42 @@
       "title_name": "The Mound: Omen of Cthulhu"
     },
     {
+      "attempt": 10,
+      "build_label": "Source build 07bcdaf",
+      "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
+      "content_version": "01.000.000",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 90.351901,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 28.0,
+        "presented_frames": 588
+      },
+      "title_id": "PPSA26223",
+      "title_name": "The Mound: Omen of Cthulhu"
+    },
+    {
       "attempt": 1,
       "build_label": "Source build 369775f-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.000.003",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.172363,
@@ -1467,6 +1825,10 @@
       "attempt": 2,
       "build_label": "Source build 9c0f631-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.000.003",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.174384,
@@ -1484,6 +1846,10 @@
       "attempt": 3,
       "build_label": "Source build 9f56e86-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.000.003",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.178555,
@@ -1501,6 +1867,10 @@
       "attempt": 4,
       "build_label": "Source build 804efb5",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.000.003",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.187116,
@@ -1523,6 +1893,10 @@
       "attempt": 5,
       "build_label": "Source build e89f0a3",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.000.003",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.207472,
@@ -1545,6 +1919,10 @@
       "attempt": 6,
       "build_label": "Source build 79d0898",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.000.003",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.178157,
@@ -1567,6 +1945,10 @@
       "attempt": 7,
       "build_label": "Source build 79d0898",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.000.003",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 90.204543,
@@ -1589,6 +1971,10 @@
       "attempt": 8,
       "build_label": "Source build 79d0898",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.000.003",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 90.204318,
@@ -1611,6 +1997,10 @@
       "attempt": 9,
       "build_label": "Source build ddeae4b-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.000.003",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.215726,
@@ -1636,6 +2026,10 @@
       "attempt": 10,
       "build_label": "Source build 07bcdaf",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "01.000.003",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.175076,
@@ -1661,6 +2055,10 @@
       "attempt": 1,
       "build_label": "Source build 369775f-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "02.000.001",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.23087,
@@ -1678,6 +2076,10 @@
       "attempt": 2,
       "build_label": "Source build 9c0f631-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "02.000.001",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.218446,
@@ -1695,6 +2097,10 @@
       "attempt": 3,
       "build_label": "Source build 9f56e86-dirty",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "02.000.001",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.269935,
@@ -1712,6 +2118,10 @@
       "attempt": 4,
       "build_label": "Source build 804efb5",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "02.000.001",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.2569,
@@ -1734,6 +2144,10 @@
       "attempt": 5,
       "build_label": "Source build e89f0a3",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "02.000.001",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.240127,
@@ -1756,6 +2170,10 @@
       "attempt": 6,
       "build_label": "Source build 79d0898",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "02.000.001",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.246436,
@@ -1778,6 +2196,10 @@
       "attempt": 7,
       "build_label": "Source build 07bcdaf",
       "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
       "content_version": "02.000.001",
       "cpu_name": "AMD Ryzen 7 5800X 8-Core",
       "duration_seconds": 25.257729,
@@ -1795,6 +2217,64 @@
       "presentation": {
         "current_fps": 0.0,
         "presented_frames": 448
+      },
+      "title_id": "PPSA31162",
+      "title_name": "Super Meat Boy 3D"
+    },
+    {
+      "attempt": 8,
+      "build_label": "Source build 07bcdaf",
+      "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
+      "content_version": "02.000.001",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 90.402481,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 16.0,
+        "presented_frames": 1120
+      },
+      "title_id": "PPSA31162",
+      "title_name": "Super Meat Boy 3D"
+    },
+    {
+      "attempt": 9,
+      "build_label": "Source build 07bcdaf",
+      "compatibility_rung": "unknown",
+      "configuration": {
+        "shader_validation": "true",
+        "vulkan_validation": "true"
+      },
+      "content_version": "02.000.001",
+      "cpu_name": "AMD Ryzen 7 5800X 8-Core",
+      "duration_seconds": 50.386788,
+      "evidence": "runner",
+      "executable": "eboot.bin",
+      "exit_code": null,
+      "gpu": {
+        "device_id": 10245,
+        "driver_version": 2588573696,
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "vendor_id": 4318
+      },
+      "outcome": "timeout",
+      "platform": "Windows",
+      "presentation": {
+        "current_fps": 15.0,
+        "presented_frames": 777
       },
       "title_id": "PPSA31162",
       "title_name": "Super Meat Boy 3D"

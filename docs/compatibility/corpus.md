@@ -76,8 +76,12 @@ record only hashes, measurements, and defect notes in sanitized evidence.
 Generate candidate public summaries with:
 
 ```text
-python tools/compat/summarize_runs.py --input _CompatibilityRuns --json docs/compatibility/baseline.json --markdown docs/compatibility/baseline.md
+python tools/compat/summarize_runs.py --input _CompatibilityRuns --json docs/compatibility/baseline.json --markdown docs/compatibility/baseline.md --vulkan-validation true --shader-validation true
 ```
+
+This command intentionally publishes only the validation-enabled correctness profile. Generate
+runtime-performance summaries separately with validation disabled in both the manifest and summary
+filters. Do not compare FPS samples across different validation profiles.
 
 Before committing, search both generated files for drive letters, home
 directories, game paths, executable contents, and copied log payloads. Leave a

@@ -8,8 +8,14 @@ placeholder with paths to games you lawfully own, and run:
 
 ```text
 python tools/compat/run_corpus.py --manifest tools/compat/corpus.local.json --emulator _Build/windows/kyty_emulator.exe --output _CompatibilityRuns
-python tools/compat/summarize_runs.py --input _CompatibilityRuns --json docs/compatibility/baseline.json --markdown docs/compatibility/baseline.md
+python tools/compat/summarize_runs.py --input _CompatibilityRuns --json docs/compatibility/baseline.json --markdown docs/compatibility/baseline.md --vulkan-validation true --shader-validation true
 ```
+
+Keep correctness and runtime-performance evidence separate. The committed baseline is the
+validation-enabled (`true`/`true`) profile. For representative gameplay measurements, run a second
+corpus with both validation layers disabled and summarize it with matching `false`/`false` filters.
+The summary records both settings on every row; a zero FPS sample from a validation-enabled run may
+be a transient validation stall rather than a guest or GPU deadlock.
 
 Review generated files before committing them. A process outcome alone never proves a compatibility
 rung; visual, audio, input, save/reload, stability, and frame-pacing evidence must be reviewed using
