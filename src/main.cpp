@@ -7,7 +7,12 @@
 #include "common/threads.h"
 #include "common/virtualMemory.h"
 #include "emulator.h"
+#include "graphics/shader/recompiler/ShaderRecompiler.h"
+#include "graphics/shader/recompiler/frontend/decode/ShaderDecoder.h"
+#include "graphics/shader/recompiler/ir/passes/ResourceMaterialization.h"
+#include "graphics/shader/shader.h"
 #include "kytyGitVersion.h"
+#include "spirv-tools/libspirv.hpp"
 
 #include <charconv>
 #include <cstdio>
@@ -16,6 +21,7 @@
 #include <vector>
 #include <fmt/format.h>
 #include <magic_enum.hpp>
+#include <nlohmann/json.hpp>
 
 using namespace Common;
 using namespace Emulator;
@@ -100,6 +106,8 @@ static void PrintUsage() {
 	::printf("  --redzone                            Protect the guest SysV red zone.\n");
 #endif
 	::printf("  --keymap <Control=Input>             DualSense mapping; may be repeated.\n");
+	::printf("  --recompile-shader <stage> <in.bin> [--out <out.spv>] [--disasm] [--no-validate]\n"
+	         "                                       Recompile guest shader binary to SPIR-V.\n");
 	::printf("  --rd                                 Enable RenderDoc capture.\n");
 }
 
@@ -492,9 +500,156 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 	return show_help || (!options.app0_dir.empty() && !options.elf.empty());
 }
 
+static int HandleRecompileShader(int argc, char* argv[], int opt_index) {
+	if (opt_index + 2 >= argc) {
+		::fprintf(stderr, "Error: --recompile-shader requires <stage> and <input.bin>\n");
+		return 1;
+	}
+
+	std::string stage_str = argv[opt_index + 1];
+	std::string input_path = argv[opt_index + 2];
+	std::string output_path;
+	bool do_disasm = false;
+	bool do_validate = true;
+
+	for (int i = opt_index + 3; i < argc; ++i) {
+		std::string_view a = argv[i];
+		if (a == "--out" && i + 1 < argc) {
+			output_path = argv[++i];
+		} else if (a == "--disasm") {
+			do_disasm = true;
+		} else if (a == "--validate") {
+			do_validate = true;
+		} else if (a == "--no-validate") {
+			do_validate = false;
+		}
+	}
+
+	using namespace Libs::Graphics;
+	ShaderType stage_type = ShaderType::Compute;
+	if (Common::EqualNoCase(stage_str, "cs") || Common::EqualNoCase(stage_str, "compute")) {
+		stage_type = ShaderType::Compute;
+	} else if (Common::EqualNoCase(stage_str, "vs") || Common::EqualNoCase(stage_str, "vertex")) {
+		stage_type = ShaderType::Vertex;
+	} else if (Common::EqualNoCase(stage_str, "ps") || Common::EqualNoCase(stage_str, "pixel")) {
+		stage_type = ShaderType::Pixel;
+	} else {
+		::fprintf(stderr, "Error: unknown shader stage '%s'\n", stage_str.c_str());
+		return 1;
+	}
+
+	const auto in_p = Common::PathFromUtf8(input_path);
+	if (!Common::File::IsFileExisting(in_p)) {
+		::fprintf(stderr, "Error: input file does not exist: %s\n", input_path.c_str());
+		return 1;
+	}
+
+	Common::File in_file(in_p, Common::File::Mode::Read);
+	if (in_file.IsInvalid() || in_file.Size() == 0) {
+		::fprintf(stderr, "Error: failed to open input file or file is empty: %s\n", input_path.c_str());
+		return 1;
+	}
+
+	std::vector<uint32_t> code(in_file.Size() / sizeof(uint32_t));
+	in_file.Read(code.data(), in_file.Size());
+
+	static const ShaderVertexInputInfo vertex_info{};
+	static const ShaderPixelInputInfo pixel_info{};
+	static const ShaderComputeInputInfo compute_info{};
+	static const auto user_data = [] {
+		std::array<uint32_t, 64> data{};
+		data[3] = 3u << 28u;
+		return data;
+	}();
+
+	ShaderRecompiler::CompileOptions options;
+	options.stage = stage_type;
+	options.user_data = user_data;
+	options.dump_ir = false;
+	options.dump_label = "recompile_shader_cli";
+	switch (stage_type) {
+		case ShaderType::Vertex: options.input_info.vertex = &vertex_info; break;
+		case ShaderType::Pixel: options.input_info.pixel = &pixel_info; break;
+		case ShaderType::Compute: options.input_info.compute = &compute_info; break;
+		default: break;
+	}
+
+	static auto StandaloneReadMemory = [](void*, uint64_t address, std::span<uint32_t> values) -> bool {
+		if (address < 0x1000 || values.empty()) {
+			std::ranges::fill(values, 0u);
+			return true;
+		}
+		return false;
+	};
+
+	auto translated = ShaderRecompiler::TranslateProgram(code, options);
+	auto plan = ShaderRecompiler::IR::ExtractResourcePlan(translated.program);
+	ShaderRecompiler::IR::ResourceSnapshot resources;
+	ShaderRecompiler::IR::ResourceSpecialization specialization;
+	const ShaderRecompiler::IR::SrtRuntime runtime{
+		.user_data = options.user_data,
+		.shader_base = reinterpret_cast<uint64_t>(code.data()),
+		.read_memory = StandaloneReadMemory,
+		.userdata = nullptr,
+		.read_specialization_memory = StandaloneReadMemory,
+	};
+	ShaderRecompiler::IR::MaterializeResources(plan, runtime, resources, specialization);
+	auto compiled = ShaderRecompiler::CompileProgram(std::move(translated), options, specialization, 0);
+
+	if (do_validate) {
+		spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_3);
+		std::string val_messages;
+		tools.SetMessageConsumer([&val_messages](spv_message_level_t, const char*,
+		                                         const spv_position_t& pos, const char* msg) {
+			val_messages += fmt::format("{}:{}: {}\n", pos.line, pos.column, msg);
+		});
+		if (!tools.Validate(compiled.spirv)) {
+			::fprintf(stderr, "Error: SPIR-V validation failed:\n%s\n", val_messages.c_str());
+			return 2;
+		}
+	}
+
+	if (do_disasm) {
+		spvtools::SpirvTools disasm(SPV_ENV_VULKAN_1_3);
+		std::string text;
+		disasm.Disassemble(compiled.spirv, &text,
+		                   SPV_BINARY_TO_TEXT_OPTION_NO_HEADER |
+		                   SPV_BINARY_TO_TEXT_OPTION_FRIENDLY_NAMES |
+		                   SPV_BINARY_TO_TEXT_OPTION_INDENT);
+		::printf("--- SPIR-V Disassembly ---\n%s\n", text.c_str());
+	}
+
+	if (!output_path.empty()) {
+		const auto out_p = Common::PathFromUtf8(output_path);
+		Common::File::CreateDirectories(out_p.parent_path());
+		Common::File out_file(out_p);
+		if (out_file.IsInvalid()) {
+			::fprintf(stderr, "Error: cannot create output file: %s\n", output_path.c_str());
+			return 1;
+		}
+		out_file.Write(compiled.spirv.data(), compiled.spirv.size() * sizeof(uint32_t));
+	}
+
+	nlohmann::json doc;
+	doc["status"] = "ok";
+	doc["stage"] = stage_str;
+	doc["input_size_bytes"] = code.size() * sizeof(uint32_t);
+	doc["output_size_dwords"] = compiled.spirv.size();
+	doc["output_size_bytes"] = compiled.spirv.size() * sizeof(uint32_t);
+
+	::printf("%s\n", doc.dump().c_str());
+	return 0;
+}
+
 static int Main(int argc, char* argv[]) {
 	VirtualMemory::Init();
 	InitializeThreads();
+
+	for (int i = 1; i < argc; ++i) {
+		if (std::string_view(argv[i]) == "--recompile-shader") {
+			return HandleRecompileShader(argc, argv, i);
+		}
+	}
 
 	RunOptions options;
 	bool       show_help = false;

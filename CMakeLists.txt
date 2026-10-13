@@ -649,6 +649,11 @@ if(BUILD_TESTING)
 	                 -s "${CMAKE_SOURCE_DIR}/tools/compat/tests"
 	                 -p "test_*.py" -v)
 	set_tests_properties(compat_corpus_tool PROPERTIES LABELS core)
+	add_test(NAME shader_tool_tests
+	         COMMAND ${Python3_EXECUTABLE} -m unittest discover
+	                 -s "${CMAKE_SOURCE_DIR}/tools/shader/tests"
+	                 -p "test_*.py" -v)
+	set_tests_properties(shader_tool_tests PROPERTIES LABELS core)
 	add_test(NAME shader_vertex_metadata COMMAND $<TARGET_FILE:shader_vertex_metadata_tests>)
 	add_test(NAME resource_materialization COMMAND $<TARGET_FILE:resource_materialization_tests>)
 	add_test(NAME resource_tracking COMMAND $<TARGET_FILE:resource_tracking_tests>)
@@ -736,6 +741,7 @@ if(BUILD_TESTING)
 		lru_cache
 		run_diagnostics
 		compat_corpus_tool
+		shader_tool_tests
 		shader_vertex_metadata
 		resource_materialization
 		resource_tracking

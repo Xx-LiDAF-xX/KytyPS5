@@ -44,16 +44,16 @@
 - Output: writes SPIR-V binary and prints JSON summary (instruction count, SPIR-V size in dwords, compilation status).
 - Python: `recompile_shader.py --emulator <path> --stage <cs|vs|ps> --input <file.bin> --output <file.spv>`.
 
-- [ ] **Step 1: Write failing Python tests for shader recompiler CLI runner**
+- [x] **Step 1: Write failing Python tests for shader recompiler CLI runner**
 
 Add tests covering valid compute shader compilation from synthetic binary bytes, invalid stage name rejection, nonexistent input file rejection, and output validation verification.
 
-- [ ] **Step 2: Run the Python test and verify RED**
+- [x] **Step 2: Run the Python test and verify RED**
 
 Run: `python -m unittest tools/shader/tests/test_recompile_shader.py -v`
 Expected: FAIL because `tools/shader/recompile_shader.py` does not exist.
 
-- [ ] **Step 3: Implement `--recompile-shader` CLI handler in `src/main.cpp` and `tools/shader/recompile_shader.py`**
+- [x] **Step 3: Implement `--recompile-shader` CLI handler in `src/main.cpp` and `tools/shader/recompile_shader.py`**
 
 In `src/main.cpp`:
 - Parse `--recompile-shader <stage> <input.bin>`.
@@ -66,13 +66,13 @@ In `src/main.cpp`:
 
 Implement `tools/shader/recompile_shader.py` with standard argument parsing wrapping the CLI.
 
-- [ ] **Step 4: Build and run tests to verify GREEN**
+- [x] **Step 4: Build and run tests to verify GREEN**
 
 Run: `cmake --build _Build/compat-foundation --target kyty_emulator --parallel`
 Run: `python -m unittest tools/shader/tests/test_recompile_shader.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Commit: `feat(shader): add standalone shader recompilation CLI and driver`
 
