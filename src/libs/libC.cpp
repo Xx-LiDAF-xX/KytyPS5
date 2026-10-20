@@ -95,7 +95,7 @@ static void PrintAbortStringCandidate(const char* name, uint64_t addr) {
 	}
 
 	if (len >= 4) {
-		LOGF("\t %s string = \"%s\"\n", name, buf);
+		std::printf("\t %s string = \"%s\"\n", name, buf);
 	}
 }
 
@@ -123,7 +123,7 @@ static void PrintAbortWideStringCandidate(const char* name, uint64_t addr) {
 	}
 
 	if (len >= 4) {
-		LOGF("\t %s u16 = \"%s\"\n", name, buf);
+		std::printf("\t %s u16 = \"%s\"\n", name, buf);
 	}
 }
 
@@ -143,11 +143,11 @@ static void PrintAbortBytesCandidate(const char* name, uint64_t addr) {
 		return;
 	}
 
-	LOGF("\t %s bytes =", name);
+	std::printf("\t %s bytes =", name);
 	for (size_t i = 0; i < len; i++) {
-		LOGF(" %02" PRIx8, bytes[i]);
+		std::printf(" %02" PRIx8, bytes[i]);
 	}
-	LOGF("\n");
+	std::printf("\n");
 }
 
 static void PrintAbortPointerCandidate(const char* name, uint64_t addr) {
@@ -176,7 +176,7 @@ static void PrintAbortPointerArrayCandidate(const char* name, uint64_t addr) {
 			continue;
 		}
 
-		LOGF("\t %s[%d] = 0x%016" PRIx64 "\n", name, i, value);
+		std::printf("\t %s[%d] = 0x%016" PRIx64 "\n", name, i, value);
 		const auto child_name = fmt::format("{}[{}]", name, i);
 		PrintAbortPointerCandidate(child_name.c_str(), value);
 	}
@@ -196,17 +196,17 @@ static void PrintAbortPointerArrayCandidate(const char* name, uint64_t addr) {
 
 	const auto ret = reinterpret_cast<uint64_t>(__builtin_return_address(0));
 
-	LOGF("Guest abort diagnostics:\n"
-	     "\t return = 0x%016" PRIx64 "\n"
-	     "\t rbp    = 0x%016" PRIx64 "\n"
-	     "\t rsp    = 0x%016" PRIx64 "\n"
-	     "\t arg0   = 0x%016" PRIx64 "\n"
-	     "\t arg1   = 0x%016" PRIx64 "\n"
-	     "\t arg2   = 0x%016" PRIx64 "\n"
-	     "\t arg3   = 0x%016" PRIx64 "\n"
-	     "\t arg4   = 0x%016" PRIx64 "\n"
-	     "\t arg5   = 0x%016" PRIx64 "\n",
-	     ret, rbp, rsp, arg0, arg1, arg2, arg3, arg4, arg5);
+	std::printf("Guest abort diagnostics:\n"
+	            "\t return = 0x%016" PRIx64 "\n"
+	            "\t rbp    = 0x%016" PRIx64 "\n"
+	            "\t rsp    = 0x%016" PRIx64 "\n"
+	            "\t arg0   = 0x%016" PRIx64 "\n"
+	            "\t arg1   = 0x%016" PRIx64 "\n"
+	            "\t arg2   = 0x%016" PRIx64 "\n"
+	            "\t arg3   = 0x%016" PRIx64 "\n"
+	            "\t arg4   = 0x%016" PRIx64 "\n"
+	            "\t arg5   = 0x%016" PRIx64 "\n",
+	            ret, rbp, rsp, arg0, arg1, arg2, arg3, arg4, arg5);
 
 	PrintAbortPointerCandidate("arg0", arg0);
 	PrintAbortPointerCandidate("arg1", arg1);
@@ -226,7 +226,7 @@ static void PrintAbortPointerArrayCandidate(const char* name, uint64_t addr) {
 	}
 
 	if (rsp != 0) {
-		LOGF("Guest abort stack words:\n");
+		std::printf("Guest abort stack words:\n");
 		auto* linker = Common::Singleton<Loader::RuntimeLinker>::Instance();
 		for (int i = 0; i < 16; i++) {
 			const auto addr = rsp + static_cast<uint64_t>(i) * sizeof(uint64_t);
@@ -237,15 +237,16 @@ static void PrintAbortPointerArrayCandidate(const char* name, uint64_t addr) {
 			auto*      program = linker->FindProgramByAddr(value);
 			if (program != nullptr) {
 				auto module_name = Common::PathToString(program->file_name.filename());
-				LOGF("\t [%02d] 0x%016" PRIx64 " %s+0x%016" PRIx64 "\n", i, value,
-				     module_name.c_str(), value - program->base_vaddr);
+				std::printf("\t [%02d] 0x%016" PRIx64 " %s+0x%016" PRIx64 "\n", i, value,
+				            module_name.c_str(), value - program->base_vaddr);
 			} else {
-				LOGF("\t [%02d] 0x%016" PRIx64 "\n", i, value);
+				std::printf("\t [%02d] 0x%016" PRIx64 "\n", i, value);
 			}
 			PrintAbortPointerCandidate(fmt::format("stack[{:02d}]", i).c_str(), value);
 			PrintAbortPointerArrayCandidate(fmt::format("stack[{:02d}]", i).c_str(), value);
 		}
 	}
+	std::fflush(stdout);
 
 	EXIT("Guest abort()\n");
 	std::abort();

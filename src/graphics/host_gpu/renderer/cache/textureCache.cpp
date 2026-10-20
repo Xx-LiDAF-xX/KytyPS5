@@ -2086,7 +2086,7 @@ bool TextureCache::CopyImage(ImageId destination_id, ImageId source_id, const ch
 		Profiler::CountFrameEvent(Profiler::FrameEvent::ImageCopyD16);
 		lossless = false;
 		path     = "d16-convert";
-	} else {
+	} else if (destination.CanCopyViaBuffer(source)) {
 		if (source.backing.samples != 1 || destination.backing.samples != 1) {
 			EXIT("TextureCache: cross-format multisample image copy is unsupported\n");
 		}
@@ -2094,6 +2094,19 @@ bool TextureCache::CopyImage(ImageId destination_id, ImageId source_id, const ch
 		destination.CopyImageWithBuffer(source, copy_buffer, m_tiler);
 		Profiler::CountFrameEvent(Profiler::FrameEvent::ImageCopyViaBuffer);
 		path = "via-buffer";
+	} else {
+		// Incompatible format or block sizes for direct GPU copy:
+		// Fall back to buffer-mediated reconstruction
+		if (AliasBytesEnabled() && !source.info.data.Empty()) {
+			MaterializeOwnedBytes(source.info.data, source_id, {}, "incompatible-copy");
+		}
+		destination.MarkBufferModified();
+		HangTrace::RecordTransfer(HangTrace::TransferKind::ImageCopy, "incompatible-fallback",
+		                          context, destination.info.data.address,
+		                          static_cast<uint32_t>(destination.backing.format),
+		                          destination.info.extent.width, destination.info.extent.height,
+		                          0, 0);
+		return false;
 	}
 	HangTrace::RecordTransfer(HangTrace::TransferKind::ImageCopy, path, context,
 	                          destination.info.data.address,
@@ -4754,6 +4767,38 @@ void TextureCache::SyncAliasFromOwner(ImageId id) {
 			image.MarkBufferModified();
 			trace_sync("partial-owner", moved);
 			return;
+		}
+		// If formats or block structures are incompatible for GPU-to-GPU copy (e.g. BC block
+		// compressed vs uncompressed RGBA/R, or mismatched bytes-per-pixel in aliased memory),
+		// materialize the owner's bytes into guest buffer and rebuild this alias in its own format.
+		const bool same_transform =
+		    other->info.GetColorTransform() == image.info.GetColorTransform();
+		const bool source_depth = other->info.IsDepth();
+		const bool dest_depth   = image.info.IsDepth();
+		const bool direct_copy =
+		    same_transform &&
+		    (other->backing.image_type == image.backing.image_type ||
+		     (other->backing.image_type != vk::ImageType::e1D &&
+		      image.backing.image_type != vk::ImageType::e1D)) &&
+		    (other->backing.format == image.backing.format ||
+		     (!source_depth && !dest_depth &&
+		      vk::blockSize(other->backing.format) == vk::blockSize(image.backing.format)));
+		const bool can_shader_depth_color =
+		    same_transform && (source_depth != dest_depth);
+		const bool can_d16_copy =
+		    (source_depth != dest_depth);
+		const bool can_buffer_copy = image.CanCopyViaBuffer(*other);
+		const bool can_gpu_copy =
+		    direct_copy || can_shader_depth_color || can_d16_copy || can_buffer_copy;
+
+		if (!can_gpu_copy) {
+			if (AliasBytesEnabled()) {
+				const auto moved =
+				    MaterializeOwnedBytes(image.info.data, other_id, {}, "alias-sync-incompatible");
+				image.MarkBufferModified();
+				trace_sync("incompatible-owner", moved);
+				return;
+			}
 		}
 		// Skip the copy when this alias already holds exactly the owner's native bits: its last
 		// contents came from a lossless full copy of the owner (or the other way round) and

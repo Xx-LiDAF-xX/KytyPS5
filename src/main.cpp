@@ -7,6 +7,7 @@
 #include "common/threads.h"
 #include "common/virtualMemory.h"
 #include "emulator.h"
+#include "common/u59Preset.h"
 #include "kytyGitVersion.h"
 #include "loader/x64InstructionEmulator.h"
 
@@ -23,11 +24,20 @@
 #include <magic_enum.hpp>
 
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #endif
 #include <windows.h>
 #endif
@@ -730,7 +740,33 @@ static void InitCudaEarly() {
 
 static int Main(int argc, char* argv[]) {
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+
+#if 1
+#endif
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 	InitCudaEarly();
+	// If launched standalone from CLI without launcher, auto-apply u59-preset.json if present
+	if (std::getenv("KYTY_SRT_VARIANT_READS") == nullptr) {
+		wchar_t exe_buf[MAX_PATH] {};
+		GetModuleFileNameW(nullptr, exe_buf, MAX_PATH);
+		const std::filesystem::path exe_dir = std::filesystem::path(exe_buf).parent_path();
+		const auto result = Common::U59Preset::Load({
+			exe_dir,
+			exe_dir / "tools",
+			exe_dir.parent_path() / "tools",
+			std::filesystem::current_path(),
+			std::filesystem::current_path() / "tools"
+		});
+		if (result.status == Common::U59Preset::Status::Loaded) {
+			for (const auto& entry: result.entries) {
+				if (std::getenv(entry.key.c_str()) == nullptr) {
+					_putenv_s(entry.key.c_str(), entry.value.c_str());
+				}
+			}
+		}
+	}
+#endif
+
 #endif
 	VirtualMemory::Init();
 	InitializeThreads();

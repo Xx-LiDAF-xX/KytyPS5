@@ -1,0 +1,5 @@
+{
+  "KYTY_PROGRAM_CACHE": "1",
+  "KYTY_IMAGE_LOOKUP": "fast",
+  "KYTY_FAST_BACKING_TRANSFERS": "1"
+}

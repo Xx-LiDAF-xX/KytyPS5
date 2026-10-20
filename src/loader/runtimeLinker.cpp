@@ -1790,18 +1790,19 @@ void RuntimeLinker::StackTrace(uint64_t frame_ptr, uint64_t stack_ptr) {
 	void* stack[20];
 	int   depth = WalkGuestStack(frame_ptr, stack_ptr, stack, static_cast<int>(std::size(stack)));
 
-	LOGF("Stack trace [thread = %d]:\n", Common::Thread::GetThreadIdUnique());
+	std::printf("Stack trace [thread = %d]:\n", Common::Thread::GetThreadIdUnique());
 
 	for (int i = 0; i < depth; i++) {
 		auto  vaddr = reinterpret_cast<uint64_t>(stack[i]);
 		auto* p     = FindProgramByAddr(vaddr);
-		LOGF("[%d] %016" PRIx64 ", off=%016" PRIx64 ", %s\n", i, vaddr,
+		std::printf("[%d] %016" PRIx64 ", off=%016" PRIx64 ", %s\n", i, vaddr,
 		     (p == nullptr ? 0 : vaddr - p->base_vaddr),
 		     (p == nullptr
 		          ? "???"
 		          : Common::FilenameWithoutDirectory(Common::PathToGenericString(p->file_name))
 		                .c_str()));
 	}
+	std::fflush(stdout);
 }
 
 void RuntimeLinker::StopAllModules() {

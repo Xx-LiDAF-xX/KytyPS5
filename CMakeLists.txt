@@ -765,6 +765,19 @@ target_compile_definitions(u59_preset_tests PRIVATE
 if(LINUX)
 	target_link_libraries(u59_preset_tests Threads::Threads)
 endif()
+
+# EngineProfile (common/engineProfile.h): automatic game engine fingerprinting and optimization
+# presets for PlayStation Studios and third-party engine families.
+add_executable(engine_profile_tests EXCLUDE_FROM_ALL
+	"${KYTY_TESTS_DIR}/EngineProfileTests.cpp"
+)
+target_link_libraries(engine_profile_tests common)
+target_include_directories(engine_profile_tests PRIVATE ${inc_headers})
+target_compile_definitions(engine_profile_tests PRIVATE
+	KYTY_ENGINE_PRESETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tools/engine-presets")
+if(LINUX)
+	target_link_libraries(engine_profile_tests Threads::Threads)
+endif()
 add_executable(lru_cache_tests EXCLUDE_FROM_ALL
 	"${KYTY_TESTS_DIR}/LruCacheTests.cpp"
 )

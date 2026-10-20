@@ -1,0 +1,58 @@
+{
+    "id": "PPSA29340",
+    "name": "Halloween: The Game",
+    "version": "01.011.000",
+    "process": "eboot.bin",
+    "mods": [
+        {
+            "name": "[Crash Fix] Stable Lumen Software Ray Tracing (Prevents nvoglv64 vkCreateComputePipelines crash)",
+            "enabled": true,
+            "memory": []
+        },
+        {
+            "name": "[Physics] Chaos Physics Sub-stepping (Fixes ragdoll explosion, falling through floor & cloth glitches)",
+            "enabled": true,
+            "memory": []
+        },
+        {
+            "name": "[Stability] Lock 60 FPS & Frame Pacing (Smooth delta time, prevents physics acceleration)",
+            "enabled": true,
+            "memory": []
+        },
+        {
+            "name": "[Graphics] Preserve Lumen Global Illumination & Dynamic Lighting Shaders",
+            "enabled": true,
+            "memory": []
+        },
+        {
+            "name": "[Graphics Fix] Fix Virtual Shadow Map (VSM) Flickering & Page Purge Cache Thrash",
+            "enabled": true,
+            "memory": []
+        },
+        {
+            "name": "[Graphics Fix] Fix Nanite Mesh LOD Collapse & Edge Artifacts",
+            "enabled": true,
+            "memory": []
+        },
+        {
+            "name": "[Memory] Optimized 4GB Texture Streaming Pool (Eliminates asset streaming hitching)",
+            "enabled": true,
+            "memory": []
+        },
+        {
+            "name": "[Resolution] Balanced 1440p Internal (75% TSR Upscale - Solid 60 FPS)",
+            "enabled": true,
+            "memory": []
+        },
+        {
+            "name": "[Resolution] Quality 1800p Internal (85% TSR Upscale - High Fidelity)",
+            "enabled": false,
+            "memory": []
+        },
+        {
+            "name": "[Resolution] Native 4K Internal (100% Scale - Demanding)",
+            "enabled": false,
+            "memory": []
+        }
+    ]
+}

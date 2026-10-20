@@ -120,6 +120,7 @@ public:
 	void Resolve(Image& source, const ImageSubresourceRange& source_range,
 	             const ImageSubresourceRange& destination_range);
 	void CopyImageWithBuffer(Image& source, Buffer& buffer, TileManager& tiler);
+	[[nodiscard]] bool CanCopyViaBuffer(const Image& source) const noexcept;
 	void CopyMip(Image& source, uint32_t mip, uint32_t layer);
 
 	// Native contents identity. Every recorded write to this image gives it a fresh serial

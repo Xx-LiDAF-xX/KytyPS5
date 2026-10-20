@@ -12,6 +12,7 @@
 #include "common/systemInfo.h"
 #include "common/threads.h"
 #include "common/u59Preset.h"
+#include "common/engineProfile.h"
 #include "graphics/host_gpu/renderer/pipeline/pipelineList.h"
 #include "graphics/presentation/systemOverlay.h"
 #include "graphics/presentation/window.h"
@@ -143,6 +144,23 @@ static void Init(const Config::ConfigOptions& cfg, const std::filesystem::path& 
 			Libs::LibKernel::Memory::SetFlexibleMemorySize(flexible_memory_size);
 		}
 	}
+
+	std::string title_id;
+	Loader::SystemContentParamSfoGetString("TITLE_ID", &title_id);
+	if (title_id.empty()) {
+		std::string content_id;
+		if (Loader::SystemContentParamSfoGetString("CONTENT_ID", &content_id) &&
+		    content_id.size() == 36 && content_id[6] == '-' && content_id[16] == '_') {
+			title_id = content_id.substr(7, 9);
+		}
+	}
+	std::string app_name;
+	Loader::SystemContentParamSfoGetString("TITLE", &app_name);
+
+	const auto engine_profile = Common::EngineProfile::DetectAndProfile(
+	    param_json.parent_path().parent_path(), title_id, app_name);
+	Common::EngineProfile::ApplyEngineProfile(engine_profile);
+
 	if (cfg.splash_enabled) {
 		Libs::Graphics::InitializeSplashScreen(param_json.parent_path());
 	}

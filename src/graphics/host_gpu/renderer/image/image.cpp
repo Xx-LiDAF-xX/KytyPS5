@@ -683,10 +683,34 @@ uint32_t Image::CopyRows(uint64_t row_size, uint32_t rows, uint64_t capacity) no
 	return static_cast<uint32_t>(std::min<uint64_t>(rows, capacity / row_size));
 }
 
+bool Image::CanCopyViaBuffer(const Image& source) const noexcept {
+	if (source.backing.samples != 1 || backing.samples != 1) {
+		return false;
+	}
+	const uint32_t levels = std::min(source.backing.mip_levels, backing.mip_levels);
+	if (levels == 0) {
+		return false;
+	}
+	const auto source_bytes = DepthAspectTransferBytes(source.backing.format) != 0
+	                              ? DepthAspectTransferBytes(source.backing.format)
+	                              : source.info.bytes_per_block;
+	const auto destination_bytes = DepthAspectTransferBytes(backing.format) != 0
+	                                   ? DepthAspectTransferBytes(backing.format)
+	                                   : info.bytes_per_block;
+	if (source_bytes == 0 || destination_bytes == 0 || source_bytes != destination_bytes) {
+		return false;
+	}
+	const uint32_t source_block      = source.info.IsBlock() ? 4u : 1u;
+	const uint32_t destination_block = info.IsBlock() ? 4u : 1u;
+	return source_block == destination_block;
+}
+
 void Image::CopyImageWithBuffer(Image& source, Buffer& buffer, TileManager& tiler) {
 	KYTY_GPU_OP_SITE("image.copy_via_buffer");
 	NoteContentWrite();
-	EXIT_IF(buffer.Handle() == nullptr || source.backing.samples != 1 || backing.samples != 1);
+	if (buffer.Handle() == nullptr || source.backing.samples != 1 || backing.samples != 1) {
+		return;
+	}
 	m_scheduler.EndRendering();
 	const uint32_t levels = std::min(source.backing.mip_levels, backing.mip_levels);
 	const auto     source_aspect =
@@ -701,8 +725,10 @@ void Image::CopyImageWithBuffer(Image& source, Buffer& buffer, TileManager& tile
 	                                       : info.bytes_per_block;
 	const uint32_t source_block      = source.info.IsBlock() ? 4u : 1u;
 	const uint32_t destination_block = info.IsBlock() ? 4u : 1u;
-	EXIT_IF(levels == 0 || source_bytes == 0 || source_bytes != destination_bytes ||
-	        source_block != destination_block);
+	if (levels == 0 || source_bytes == 0 || source_bytes != destination_bytes ||
+	    source_block != destination_block) {
+		return;
+	}
 	const auto source_transform = source.info.GetColorTransform();
 	const auto target_transform = info.GetColorTransform();
 
@@ -784,7 +810,9 @@ void Image::CopyImageWithBuffer(Image& source, Buffer& buffer, TileManager& tile
 		const auto row_size =
 		    static_cast<uint64_t>((width + source_block - 1) / source_block) * source_bytes;
 		const auto rows_per_copy = CopyRows(row_size, block_rows, buffer.Size());
-		EXIT_IF(slices == 0 || rows_per_copy == 0);
+		if (slices == 0 || rows_per_copy == 0) {
+			continue;
+		}
 		for (uint32_t slice = 0; slice < slices; slice++) {
 			for (uint32_t block_row = 0; block_row < block_rows; block_row += rows_per_copy) {
 				const auto          copy_rows   = std::min(rows_per_copy, block_rows - block_row);
@@ -828,16 +856,22 @@ void Image::CopyImageWithBuffer(Image& source, Buffer& buffer, TileManager& tile
 void Image::CopyMip(Image& source, uint32_t mip, uint32_t layer) {
 	KYTY_GPU_OP_SITE("image.copy_mip");
 	NoteContentWrite();
-	EXIT_IF(source.backing.samples != backing.samples || mip >= backing.mip_levels ||
-	        layer >= backing.layers);
+	if (source.backing.samples != backing.samples || mip >= backing.mip_levels ||
+	    layer >= backing.layers) {
+		return;
+	}
 	m_scheduler.EndRendering();
 	const auto width  = std::max(backing.extent.width >> mip, 1u);
 	const auto height = std::max(backing.extent.height >> mip, 1u);
 	const auto depth  = std::max(backing.extent.depth >> mip, 1u);
-	EXIT_IF(width != source.backing.extent.width || height != source.backing.extent.height);
+	if (width != source.backing.extent.width || height != source.backing.extent.height) {
+		return;
+	}
 	const auto [source_layers, destination_layers] = SanitizeCopyLayers(source, *this, depth);
 	const auto aspects                             = FullAspectMask(source.backing.format);
-	EXIT_IF(aspects != FullAspectMask(backing.format));
+	if (aspects != FullAspectMask(backing.format)) {
+		return;
+	}
 	std::array<vk::ImageCopy, 2> copies {};
 	uint32_t                     copy_count = 0;
 	for (const auto aspect: {vk::ImageAspectFlagBits::eColor, vk::ImageAspectFlagBits::eDepth,

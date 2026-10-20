@@ -1,0 +1,6 @@
+{
+  "KYTY_LOD_STATS_MODE": "gpu",
+  "KYTY_PIPELINE_FAST_FIRST": "1",
+  "KYTY_BINDING_LEAN_MISS": "1",
+  "KYTY_DIRTY_IMAGE_QUERY": "direct"
+}
