@@ -178,6 +178,9 @@ std::vector<Common::U59Preset::Entry> GetEnginePresetOverrides(EngineFamily fami
 		    {"KYTY_SUBMISSION_COALESCE", "1"},
 		    {"KYTY_SRT_ARITHMETIC_TAPES", "1"},
 		    {"KYTY_VRAM_GC_BUDGET", "1"},
+		    {"KYTY_PIPELINE_FAST_FIRST", "0"},
+		    {"KYTY_FUNCTION_ARRAY_SHRINK", "0"},
+		    {"KYTY_PIPELINE_PREWARM_COMPUTE", "0"},
 		};
 		break;
 
