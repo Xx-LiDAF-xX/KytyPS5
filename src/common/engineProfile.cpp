@@ -168,7 +168,8 @@ std::vector<Common::U59Preset::Entry> GetEnginePresetOverrides(EngineFamily fami
 		entries = {
 		    {"KYTY_BDA_WRITES", "1"},
 		    {"KYTY_BDA_INCREMENTAL_SYNC", "1"},
-		    {"KYTY_RT_SOFTWARE", "1"},
+		    {"KYTY_RT_SOFTWARE", "0"},
+		    {"KYTY_RT_STUB", "1"},
 		    {"KYTY_RT_NODE_BUDGET", "16384"},
 		    {"KYTY_PIPELINE_PREFETCH", "1"},
 		    {"KYTY_PIPELINE_PREFETCH_PROGRAMS", "1"},
@@ -181,6 +182,7 @@ std::vector<Common::U59Preset::Entry> GetEnginePresetOverrides(EngineFamily fami
 		    {"KYTY_PIPELINE_FAST_FIRST", "0"},
 		    {"KYTY_FUNCTION_ARRAY_SHRINK", "0"},
 		    {"KYTY_PIPELINE_PREWARM_COMPUTE", "0"},
+		    {"KYTY_PREDICATION_NO_DRAIN", "1"},
 		};
 		break;
 
