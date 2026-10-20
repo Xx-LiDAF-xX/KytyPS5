@@ -5,6 +5,43 @@
     "process": "eboot.bin",
     "mods": [
         {
+            "name": "[Stability] Disable GameThread RenderThread 120s Timeout Watchdog (RenderingThread.cpp:1107)",
+            "enabled": true,
+            "memory": [
+                {
+                    "offset": "0x1533950",
+                    "off": "554889E54157415641554154534881EC",
+                    "on": "C3909090909090909090909090909090"
+                },
+                {
+                    "offset": "0x1534847",
+                    "off": "7E3B",
+                    "on": "EB3B"
+                },
+                {
+                    "offset": "0x15349cb",
+                    "off": "7F5C",
+                    "on": "9090"
+                }
+            ]
+        },
+        {
+            "name": "[Stability] Bypass RenderThread WaitOnRHIThreadFence Deadlock (RHICommandList.cpp:1816)",
+            "enabled": true,
+            "memory": [
+                {
+                    "offset": "0x147e7d0",
+                    "off": "554889E541574156",
+                    "on": "C390909090909090"
+                },
+                {
+                    "offset": "0x2a12060",
+                    "off": "803DC9976D08010F8515010000",
+                    "on": "C3909090909090909090909090"
+                }
+            ]
+        },
+        {
             "name": "[Crash Fix] Stable Lumen Software Ray Tracing (Prevents nvoglv64 vkCreateComputePipelines crash)",
             "enabled": true,
             "memory": []
