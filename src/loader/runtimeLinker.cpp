@@ -865,6 +865,17 @@ static bool KytyExceptionHandler(const Common::HostException::ExceptionInfo& exc
 	    info->access_violation_type == Common::HostException::AccessViolationType::Unknown) {
 		return false;
 	}
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+	// If the fault happened in an external host DLL (e.g. CoreMessaging, USER32, graphics hooks),
+	// pass it to Windows SEH (__try/__except). Only fatal if in guest memory or emulator binary.
+	HMODULE host_mod = nullptr;
+	if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+	                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+	                       reinterpret_cast<LPCWSTR>(info->exception_address), &host_mod) != 0 &&
+	    host_mod != nullptr && host_mod != GetModuleHandleW(nullptr)) {
+		return false;
+	}
+#endif
 	// Report whatever guest context can be read safely before terminating: which guest thread
 	// faulted, the module the fault is in, the register file, the faulting code bytes, the top of
 	// its stack and the host call chain. One block through the log (the console and the printf
