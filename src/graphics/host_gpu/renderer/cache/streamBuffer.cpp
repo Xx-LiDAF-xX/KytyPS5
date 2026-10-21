@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/renderer/cache/streamBuffer.h"
 
+#include "common/environment.h"
 #include "common/alignment.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -107,10 +108,7 @@ Buffer::Buffer(GraphicContext& graphics, CommandScheduler& scheduler, MemoryUsag
 	// pMappedData and flushes/invalidates go through vmaFlush/InvalidateAllocation, both
 	// allocation-relative. The allocator was created with VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT,
 	// so its blocks carry the device-address flag.
-	static const bool shared_blocks = [] {
-		const auto* value = std::getenv("KYTY_BDA_SHARED_BLOCKS");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool shared_blocks = Common::ReadEnvFlag("KYTY_BDA_SHARED_BLOCKS", true);
 	static constexpr uint64_t SharedBlockMax = 64ull * 1024 * 1024;
 	const bool with_bda = bool(flags & vk::BufferUsageFlagBits::eShaderDeviceAddress);
 	const VmaAllocationCreateFlags bda_flag =

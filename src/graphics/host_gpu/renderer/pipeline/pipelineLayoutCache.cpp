@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/renderer/pipeline/pipelineLayoutCache.h"
 
+#include "common/environment.h"
 #include "common/assert.h"
 #include "common/profiler.h"
 #include "graphics/host_gpu/graphicContext.h"
@@ -62,10 +63,7 @@ PipelineLayoutHandles CreateLayouts(GraphicContext&                             
 } // namespace
 
 bool PipelineLayoutInterningEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_LAYOUT_INTERN");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_LAYOUT_INTERN", true);
 	return enabled;
 }
 

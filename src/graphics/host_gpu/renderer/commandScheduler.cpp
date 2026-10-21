@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/renderer/commandScheduler.h"
 
+#include "common/environment.h"
 #include "common/assert.h"
 #include "common/cpuPlacement.h"
 #include "common/hangTrace.h"
@@ -437,10 +438,7 @@ void CommandScheduler::DeferPriorityOperation(Common::UniqueFunction<void>&& ope
 }
 
 bool CommandScheduler::PriorityWakeupsBatched() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_PRIORITY_WAKE_BATCH");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_PRIORITY_WAKE_BATCH", true);
 	return enabled;
 }
 

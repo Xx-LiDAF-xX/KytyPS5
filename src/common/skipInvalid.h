@@ -1,6 +1,7 @@
 #ifndef EMULATOR_SRC_COMMON_SKIP_INVALID_H_
 #define EMULATOR_SRC_COMMON_SKIP_INVALID_H_
 
+#include "common/environment.h"
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
@@ -12,10 +13,7 @@
 namespace Common {
 
 [[nodiscard]] inline bool SkipInvalidEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_SKIP_INVALID");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_SKIP_INVALID", true);
 	return enabled;
 }
 

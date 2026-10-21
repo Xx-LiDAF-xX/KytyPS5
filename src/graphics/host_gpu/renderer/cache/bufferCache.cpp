@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/renderer/cache/bufferCache.h"
 
+#include "common/environment.h"
 #include "common/alignment.h"
 #include "common/assert.h"
 #include "common/guestLoad.h"
@@ -225,10 +226,7 @@ int BdaDirtyLogVerifyMode() {
 // KYTY_UPLOAD_BATCH_SCOPED_FLUSH=0 restores recording every pending barrier at the end of each
 // outermost UploadBatch scope, even when the scope queued no upload.
 bool UploadBatchScopedFlushEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_UPLOAD_BATCH_SCOPED_FLUSH");
-		return value == nullptr || !(value[0] == '0' && value[1] == '\0');
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_UPLOAD_BATCH_SCOPED_FLUSH", true);
 	return enabled;
 }
 
@@ -241,10 +239,7 @@ bool SideReadbackEnabled() {
 // GPU-thread reads (CP reads of GPU-written data, GPU-thread faults) also use side copies and wait
 // for them in place, unless KYTY_READBACK_SIDE_GPU_THREAD is "0" (then they always drain).
 bool SideReadbackGpuThreadEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_READBACK_SIDE_GPU_THREAD");
-		return value == nullptr || !(value[0] == '0' && value[1] == '\0');
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_READBACK_SIDE_GPU_THREAD", true);
 	return enabled;
 }
 
@@ -636,10 +631,7 @@ bool RelaxedQueriesEnabled() {
 // KYTY_BINDING_EPOCH_MEMO (default on; =0 off): read bindings reused within a sync epoch
 // (BufferCache::BindingMemo).
 bool BindingEpochMemoEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_BINDING_EPOCH_MEMO");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_BINDING_EPOCH_MEMO", true);
 	return enabled;
 }
 
@@ -1164,8 +1156,7 @@ void BufferCache::ChangeRegister(BufferId id) {
 static bool BufferLruSkipEnabled() {
 	static std::atomic<int64_t> enabled_once {Common::OnceUnset};
 	const auto enabled = static_cast<bool>(Common::Once(enabled_once, [] {
-		const auto* value = std::getenv("KYTY_BUFFER_LRU_SKIP");
-		return value != nullptr && std::strcmp(value, "1") == 0;
+		return Common::ReadEnvEquals("KYTY_BUFFER_LRU_SKIP", "1");
 	}));
 	return enabled;
 }
@@ -1414,10 +1405,7 @@ void BufferCache::ForEachPublishedPart(uint64_t address, uint64_t size, Emit&& e
 // Idea from BryanKAdams/KytyPS5 a25a2b9 (measured there on ReBAR; this machine has ReBAR off, so
 // the ring sits in the 256 MiB BAR window today).
 static bool StreamRingHostEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_STREAM_RING_HOST");
-		return value != nullptr && std::strcmp(value, "1") == 0;
-	}();
+	static const bool enabled = Common::ReadEnvEquals("KYTY_STREAM_RING_HOST", "1");
 	return enabled;
 }
 
@@ -3634,8 +3622,7 @@ struct BindingMemoStats {
 bool BindingMemoStatsEnabled() {
 	static std::atomic<int64_t> on_once {Common::OnceUnset};
 	const auto on = static_cast<bool>(Common::Once(on_once, [] {
-		const char* value = std::getenv("KYTY_BINDING_MEMO_STATS");
-		return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+		return Common::ReadNonEmptyEnvFlag("KYTY_BINDING_MEMO_STATS");
 	}));
 	return on;
 }
@@ -5509,10 +5496,7 @@ void BufferCache::PrepareBdaWrites() {
 // KYTY_BDA_STORE_LOG_STATS=1: "BdaSettle 10s: ..." console lines while BDA-writing dispatches
 // settle (none printed: none settled). GPU thread.
 static void NoteBdaSettleStats(size_t logged, uint32_t dropped) {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_BDA_STORE_LOG_STATS");
-		return value != nullptr && std::strcmp(value, "1") == 0;
-	}();
+	static const bool enabled = Common::ReadEnvEquals("KYTY_BDA_STORE_LOG_STATS", "1");
 	if (!enabled) {
 		return;
 	}

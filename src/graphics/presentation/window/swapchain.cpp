@@ -1,4 +1,5 @@
 #include "common/assert.h"
+#include "common/environment.h"
 #include "common/common.h"
 #include "common/emulatorConfig.h"
 #include "common/logging/log.h"
@@ -737,10 +738,7 @@ bool Swapchain::PrepareSystemOverlay() {
 
 // KYTY_PRESENT_BOX_DOWNSCALE=1: present 1-2x downscales with PresentFilter (windowInternal.h).
 static bool PresentBoxDownscaleEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_PRESENT_BOX_DOWNSCALE");
-		return value != nullptr && std::strcmp(value, "1") == 0;
-	}();
+	static const bool enabled = Common::ReadEnvEquals("KYTY_PRESENT_BOX_DOWNSCALE", "1");
 	return enabled;
 }
 
@@ -1232,10 +1230,7 @@ Presenter::Presenter(WindowContext& window): m_impl(std::make_unique<Impl>(windo
 // renderer's lock the GPU thread waited for that whole recording and submission once a frame. (This
 // tree has no frame generation, which shares the renderer's state and keeps the lock in theirs.)
 static bool PresentUnlocked() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_PRESENT_UNLOCKED");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_PRESENT_UNLOCKED", true);
 	return enabled;
 }
 

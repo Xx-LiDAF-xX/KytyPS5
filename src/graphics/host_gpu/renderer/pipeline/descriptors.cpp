@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/renderer/pipeline/descriptors.h"
 
+#include "common/environment.h"
 #include "graphics/host_gpu/renderer/drawPrep/ownedCounters.h"
 
 #include "common/alignment.h"
@@ -155,8 +156,7 @@ static bool IsMultisampledTexture(Prospero::ImageType type) {
 static bool PreciseWriteRangesEnabled() {
 	static std::atomic<int64_t> enabled_once {Common::OnceUnset};
 	const auto enabled = static_cast<bool>(Common::Once(enabled_once, [] {
-		const auto* value = std::getenv("KYTY_PRECISE_WRITE_RANGES");
-		return value == nullptr || std::strcmp(value, "0") != 0;
+		return Common::ReadEnvFlag("KYTY_PRECISE_WRITE_RANGES", true);
 	}));
 	return enabled;
 }
@@ -176,8 +176,7 @@ static uint32_t WriteRangeLogLimit() {
 static bool WriteRangeImageStatsEnabled() {
 	static std::atomic<int64_t> enabled_once {Common::OnceUnset};
 	const auto enabled = static_cast<bool>(Common::Once(enabled_once, [] {
-		const auto* value = std::getenv("KYTY_WRITE_RANGE_STATS");
-		return value == nullptr || std::strcmp(value, "0") != 0;
+		return Common::ReadEnvFlag("KYTY_WRITE_RANGE_STATS", true);
 	}));
 	return enabled;
 }
@@ -1169,10 +1168,7 @@ void RenderExecutor::ResolveTextureFull(const ShaderRecompiler::IR::ImageResourc
 }
 
 static bool SamplerMemoEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_SAMPLER_MEMO");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_SAMPLER_MEMO", true);
 	return enabled;
 }
 
@@ -1276,8 +1272,7 @@ static vk::DescriptorBufferInfo NativeUpload(RenderContext&            context,
 static bool UploadDedupEnabled() {
 	static std::atomic<int64_t> enabled_once {Common::OnceUnset};
 	const auto enabled = static_cast<bool>(Common::Once(enabled_once, [] {
-		const auto* value = std::getenv("KYTY_UPLOAD_DEDUP");
-		return value == nullptr || std::strcmp(value, "0") != 0;
+		return Common::ReadEnvFlag("KYTY_UPLOAD_DEDUP", true);
 	}));
 	return enabled;
 }
@@ -1289,8 +1284,7 @@ static bool UploadDedupEnabled() {
 static bool UploadDedupTableEnabled() {
 	static std::atomic<int64_t> enabled_once {Common::OnceUnset};
 	const auto enabled = static_cast<bool>(Common::Once(enabled_once, [] {
-		const auto* value = std::getenv("KYTY_UPLOAD_DEDUP_TABLE");
-		return value != nullptr && std::strcmp(value, "1") == 0;
+		return Common::ReadEnvEquals("KYTY_UPLOAD_DEDUP_TABLE", "1");
 	}));
 	return enabled;
 }
@@ -1428,10 +1422,7 @@ void RenderExecutor::ResetBindings() {
 // bits 31:16, size in bits 15:0), so the log shows which counters a pass uses.
 static void NoteGdsProgram(const ShaderRecompiler::IR::CompiledShaderInfo& program,
                            const ShaderRecompiler::IR::ResourceSnapshot&   snapshot) {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_GDS_TRACE");
-		return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadNonEmptyEnvFlag("KYTY_GDS_TRACE");
 	if (!enabled) {
 		return;
 	}
@@ -2406,8 +2397,7 @@ static void CountDescriptorPushMiss(int32_t result, std::span<const vk::WriteDes
 static bool DescriptorOffsetAuditEnabled() {
 	static std::atomic<int64_t> enabled_once {Common::OnceUnset};
 	const auto enabled = static_cast<bool>(Common::Once(enabled_once, [] {
-		const auto* value = std::getenv("KYTY_DESCRIPTOR_OFFSET_AUDIT");
-		return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+		return Common::ReadNonEmptyEnvFlag("KYTY_DESCRIPTOR_OFFSET_AUDIT");
 	}));
 	return enabled;
 }

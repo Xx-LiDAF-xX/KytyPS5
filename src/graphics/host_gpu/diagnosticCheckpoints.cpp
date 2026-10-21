@@ -1,4 +1,5 @@
 #include "common/hangWatchdog.h"
+#include "common/environment.h"
 #include "common/logging/log.h"
 #include "graphics/host_gpu/aftermath.h"
 #include "graphics/host_gpu/gpuBreadcrumbs.h"
@@ -93,10 +94,7 @@ uint64_t NewestDiagnosticSequence() {
 }
 
 bool DeviceFaultDiagnosticsEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_DEVICE_FAULT_DIAGNOSTICS");
-		return value != nullptr && std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_DEVICE_FAULT_DIAGNOSTICS", false);
 	return enabled;
 }
 

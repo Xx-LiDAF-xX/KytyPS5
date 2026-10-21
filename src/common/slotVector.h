@@ -49,43 +49,38 @@ public:
 	KYTY_CLASS_NO_COPY(SlotVector);
 
 	[[nodiscard]] T& operator[](SlotId id) noexcept {
-		if (g_slot_vector_dense.load(std::memory_order_relaxed)) {
-			EXIT_IF(!dense_allocated(id));
-			return *dense_record(id.index).value;
-		}
-		EXIT_IF(!is_allocated(id));
-		return *m_values[id.index].value;
+		auto* value = try_get(id);
+		EXIT_IF(value == nullptr);
+		return *value;
 	}
 
 	[[nodiscard]] const T& operator[](SlotId id) const noexcept {
-		if (g_slot_vector_dense.load(std::memory_order_relaxed)) {
-			EXIT_IF(!dense_allocated(id));
-			return *dense_record(id.index).value;
-		}
-		EXIT_IF(!is_allocated(id));
-		return *m_values[id.index].value;
+		const auto* value = try_get(id);
+		EXIT_IF(value == nullptr);
+		return *value;
 	}
 
 	[[nodiscard]] T* try_get(SlotId id) noexcept {
-		if (g_slot_vector_dense.load(std::memory_order_relaxed)) {
-			return dense_allocated(id) ? dense_record(id.index).value : nullptr;
-		}
-		return is_allocated(id) ? &*m_values[id.index].value : nullptr;
+		return const_cast<T*>(std::as_const(*this).try_get(id));
 	}
 
 	[[nodiscard]] const T* try_get(SlotId id) const noexcept {
 		if (g_slot_vector_dense.load(std::memory_order_relaxed)) {
-			return dense_allocated(id) ? dense_record(id.index).value : nullptr;
+			if (id.index >= m_dense_size) {
+				return nullptr;
+			}
+			const auto& record = dense_record(id.index);
+			return record.state == LiveState(id.generation) ? record.value : nullptr;
 		}
-		return is_allocated(id) ? &*m_values[id.index].value : nullptr;
+		if (id.index >= m_values.size()) {
+			return nullptr;
+		}
+		const auto& slot = m_values[id.index];
+		return slot.generation == id.generation && slot.value.has_value() ? &*slot.value : nullptr;
 	}
 
 	[[nodiscard]] bool is_allocated(SlotId id) const noexcept {
-		if (g_slot_vector_dense.load(std::memory_order_relaxed)) {
-			return dense_allocated(id);
-		}
-		return id && id.index < m_values.size() &&
-		       m_values[id.index].generation == id.generation && m_values[id.index].value.has_value();
+		return try_get(id) != nullptr;
 	}
 
 	template <typename... Args>
@@ -167,10 +162,6 @@ private:
 	}
 	[[nodiscard]] const DenseRecord& dense_record(uint32_t index) const noexcept {
 		return m_dense_chunks[index >> DenseChunkBits][index & (DenseChunkSize - 1u)];
-	}
-	// An invalid id's index (INVALID_INDEX) is never below the size.
-	[[nodiscard]] bool dense_allocated(SlotId id) const noexcept {
-		return id.index < m_dense_size && dense_record(id.index).state == LiveState(id.generation);
 	}
 	void dense_push_dead(uint32_t index) {
 		EXIT_IF(index != m_dense_size);

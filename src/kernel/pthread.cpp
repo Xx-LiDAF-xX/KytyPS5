@@ -1,5 +1,6 @@
 #include "kernel/pthread.h"
 
+#include "common/environment.h"
 #include "common/assert.h"
 #include "common/common.h"
 #include "common/condWaitUntil.h"
@@ -3280,10 +3281,7 @@ int PthreadTakeLowestPendingSignal(Pthread thread, int limit) {
 }
 
 bool GuestSchedLegacy() {
-	static const bool legacy = [] {
-		const auto* value = std::getenv("KYTY_GUEST_SCHED");
-		return value != nullptr && std::strcmp(value, "legacy") == 0;
-	}();
+	static const bool legacy = Common::ReadEnvEquals("KYTY_GUEST_SCHED", "legacy");
 	return legacy;
 }
 

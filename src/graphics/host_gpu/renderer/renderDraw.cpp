@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/renderer/renderDraw.h"
 
+#include "common/environment.h"
 #include "graphics/host_gpu/renderer/drawPrep/ownedCounters.h"
 
 #include "common/assert.h"
@@ -71,8 +72,7 @@ namespace Libs::Graphics {
 static bool MeshRestartEnabled() {
 	static std::atomic<int64_t> enabled_once {Common::OnceUnset};
 	const auto enabled = static_cast<bool>(Common::Once(enabled_once, [] {
-		const auto* value = std::getenv("KYTY_MESH_RESTART");
-		return value != nullptr && std::strcmp(value, "1") == 0;
+		return Common::ReadEnvEquals("KYTY_MESH_RESTART", "1");
 	}));
 	return enabled;
 }
@@ -403,8 +403,7 @@ static void LogDrawInputState(const CommandBuffer& buffer, const RenderColorInfo
 static bool DynamicStateShadowEnabled() {
 	static std::atomic<int64_t> enabled_once {Common::OnceUnset};
 	const auto enabled = static_cast<bool>(Common::Once(enabled_once, [] {
-		const auto* value = std::getenv("KYTY_DYNAMIC_STATE_SHADOW");
-		return value == nullptr || std::strcmp(value, "0") != 0;
+		return Common::ReadEnvFlag("KYTY_DYNAMIC_STATE_SHADOW", true);
 	}));
 	return enabled;
 }
@@ -1167,10 +1166,7 @@ static bool IsMetadataColorMode(uint8_t mode) {
 // no draw bound the target in between. Astro Bot's water input uses exactly this CMASK route:
 // dropping the eliminate exposes stale scene texels at normal and top-down camera angles.
 static bool MetadataColorMaterializeEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_CB_METADATA_MATERIALIZE");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_CB_METADATA_MATERIALIZE", true);
 	return enabled;
 }
 

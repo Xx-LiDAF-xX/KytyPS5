@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/renderer/drawPrep/drawRun.h"
 
+#include "common/environment.h"
 #include "graphics/host_gpu/renderer/drawPrep/ownedCounters.h"
 
 #include "common/assert.h"
@@ -135,10 +136,7 @@ void NoteForeignActivity(const char* what) noexcept {
 }
 
 bool QuietOpsEnabled() {
-	static const bool enabled = [] {
-		const char* value = std::getenv("KYTY_DRAW_RUN_QUIET_OPS");
-		return value == nullptr || value[0] == '\0' || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_DRAW_RUN_QUIET_OPS", true);
 	return enabled;
 }
 
@@ -151,10 +149,7 @@ bool QuietSyntheticEnabled() {
 }
 
 bool IndirectRunsEnabled() {
-	static const bool enabled = [] {
-		const char* value = std::getenv("KYTY_DRAW_RUN_INDIRECT");
-		return value == nullptr || value[0] == '\0' || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_DRAW_RUN_INDIRECT", true);
 	return enabled;
 }
 

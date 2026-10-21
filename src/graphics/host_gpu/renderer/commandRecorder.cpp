@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/renderer/commandRecorder.h"
 
+#include "common/environment.h"
 #include "common/assert.h"
 #include "common/cpuPlacement.h"
 #include "common/hangWatchdog.h"
@@ -246,10 +247,7 @@ bool CommandRecorder::VerifyEnabled() {
 }
 
 bool CommandRecorder::VerifyExits() {
-	static const bool exits = [] {
-		const auto* value = std::getenv("KYTY_CP_RECORDER_VERIFY");
-		return value != nullptr && std::strcmp(value, "exit") == 0;
-	}();
+	static const bool exits = Common::ReadEnvEquals("KYTY_CP_RECORDER_VERIFY", "exit");
 	return exits;
 }
 

@@ -1,5 +1,6 @@
 #include "common/threads.h"
 
+#include "common/environment.h"
 #include "common/assert.h"
 #include "common/cpuPlacement.h"
 #include "common/hangWatchdog.h"
@@ -29,10 +30,7 @@
 namespace Common {
 
 bool ShortSleepsBlock() {
-	static const bool enabled = [] {
-		const char* value = std::getenv("KYTY_SHORT_SLEEP_BLOCK");
-		return value != nullptr && value[0] == '1' && value[1] == '\0';
-	}();
+	static const bool enabled = Common::ReadEnvEquals("KYTY_SHORT_SLEEP_BLOCK", "1");
 	return enabled;
 }
 

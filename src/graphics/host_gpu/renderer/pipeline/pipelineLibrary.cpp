@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/renderer/pipeline/pipelineLibrary.h"
 
+#include "common/environment.h"
 #include "common/assert.h"
 #include "graphics/host_gpu/graphicContext.h"
 
@@ -80,10 +81,7 @@ void WriteStencil(KeyWriter& key, const vk::StencilOpState& state) {
 } // namespace
 
 bool PipelineLibraryRequested() {
-	static const bool requested = [] {
-		const auto* value = std::getenv("KYTY_PIPELINE_LIBRARY");
-		return value != nullptr && *value != '\0' && std::strcmp(value, "0") != 0;
-	}();
+	static const bool requested = Common::ReadNonEmptyEnvFlag("KYTY_PIPELINE_LIBRARY");
 	return requested;
 }
 
@@ -93,10 +91,7 @@ namespace {
 // is linked from libraries even when the driver's own cache already holds it (measures the cold
 // path on a machine whose caches are warm).
 bool ProbeEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_PIPELINE_LIBRARY_PROBE");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_PIPELINE_LIBRARY_PROBE", true);
 	return enabled;
 }
 

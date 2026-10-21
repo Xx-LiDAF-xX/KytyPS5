@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/renderer/colorRenderTarget.h"
 
+#include "common/environment.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "common/onceValue.h"
@@ -28,20 +29,14 @@ namespace Libs::Graphics {
 static std::atomic<uint32_t> g_render_color_log_count = 0;
 
 bool TargetDescMemoEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_TARGET_DESC_MEMO");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_TARGET_DESC_MEMO", true);
 	return enabled;
 }
 
 // KYTY_CMASK_FAST_CLEAR=0 ignores CMASK fast clears as before: the target keeps its previous
 // contents wherever the game fast-cleared it.
 bool CmaskFastClearEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_CMASK_FAST_CLEAR");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_CMASK_FAST_CLEAR", true);
 	return enabled;
 }
 

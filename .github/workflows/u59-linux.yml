@@ -67,7 +67,7 @@ jobs:
         run: |
           set -o pipefail
           cmake --build _Build/linux --target launcher kyty_emulator page_manager_tests memory_tracker_tests \
-            lru_cache_tests virtual_memory_allocation_tests resource_tracking_tests scalar_provenance_tests \
+            lru_cache_tests environment_tests slot_vector_tests virtual_memory_allocation_tests resource_tracking_tests scalar_provenance_tests \
             resource_materialization_tests shader_vertex_metadata_tests device_compat_tests --parallel \
             -- -k 0 2>&1 | tee linux-build.log
 
@@ -87,7 +87,7 @@ jobs:
         shell: bash
         run: |
           ctest --test-dir _Build/linux --output-on-failure \
-            -R '^(lru_cache|memory_tracker|page_manager|resource_tracking|scalar_provenance|resource_materialization|shader_vertex_metadata|virtual_memory_allocation|device_compat)$' \
+            -R '^(lru_cache|environment|slot_vector|memory_tracker|page_manager|resource_tracking|scalar_provenance|resource_materialization|shader_vertex_metadata|virtual_memory_allocation|device_compat)$' \
             2>&1 | tee linux-test.log
 
       - name: Show test failures

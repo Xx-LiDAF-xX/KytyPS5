@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/renderer/image/image.h"
 
+#include "common/environment.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "common/profiler.h"
@@ -50,10 +51,7 @@ const TransitSkipConfig& TransitSkip() {
 
 // KYTY_GUEST_STORAGE_REPEAT (Image::GuestTransitScope): default off.
 bool GuestStorageRepeatEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_GUEST_STORAGE_REPEAT");
-		return value != nullptr && std::strcmp(value, "1") == 0;
-	}();
+	static const bool enabled = Common::ReadEnvEquals("KYTY_GUEST_STORAGE_REPEAT", "1");
 	return enabled;
 }
 thread_local bool g_guest_transit = false;
@@ -67,10 +65,7 @@ std::atomic<uint64_t> g_recorded_transitions {0};
 
 // KYTY_COPY_VIA_BUFFER_BATCH=0: Image::CopyImageWithBuffer copies one region per barrier pair.
 bool CopyViaBufferBatchEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_COPY_VIA_BUFFER_BATCH");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_COPY_VIA_BUFFER_BATCH", true);
 	return enabled;
 }
 

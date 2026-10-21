@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/aftermath.h"
 
+#include "common/environment.h"
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -19,10 +20,7 @@
 namespace Libs::Graphics::Aftermath {
 
 bool Requested() {
-	static const bool requested = [] {
-		const auto* value = std::getenv("KYTY_AFTERMATH");
-		return value != nullptr && std::strcmp(value, "0") != 0 && value[0] != '\0';
-	}();
+	static const bool requested = Common::ReadNonEmptyEnvFlag("KYTY_AFTERMATH");
 	return requested;
 }
 

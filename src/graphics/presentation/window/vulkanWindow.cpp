@@ -1,4 +1,5 @@
 #include <SDL3/SDL.h>
+#include "common/environment.h"
 #include <SDL3/SDL_vulkan.h>
 
 #include "common/assert.h"
@@ -677,10 +678,7 @@ static vk::Device VulkanCreateDevice(GraphicContext& graphics,
 			family_queue_count = families[queue_family].queueCount;
 		}
 	}
-	const bool side_queue_requested = [] {
-		const auto* value = std::getenv("KYTY_SIDE_QUEUE");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	const bool side_queue_requested = Common::ReadEnvFlag("KYTY_SIDE_QUEUE", true);
 	graphics.side_queue_index = side_queue_requested && family_queue_count >= 2 ? 1u : 0u;
 	std::printf("Kyty side-copy queue: %s (family %u has %u queues, KYTY_SIDE_QUEUE)\n",
 	       graphics.side_queue_index != 0 ? "queue 1" : "shared with queue 0", queue_family,

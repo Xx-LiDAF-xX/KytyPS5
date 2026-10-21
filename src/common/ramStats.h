@@ -1,6 +1,7 @@
 #ifndef EMULATOR_SRC_COMMON_RAMSTATS_H_
 #define EMULATOR_SRC_COMMON_RAMSTATS_H_
 
+#include "common/environment.h"
 #include <cinttypes>
 #include <cstdint>
 #include <cstdio>
@@ -12,10 +13,7 @@
 namespace Common::RamStats {
 
 inline bool Enabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_RAM_STATS");
-		return value != nullptr && std::strcmp(value, "1") == 0;
-	}();
+	static const bool enabled = Common::ReadEnvEquals("KYTY_RAM_STATS", "1");
 	return enabled;
 }
 

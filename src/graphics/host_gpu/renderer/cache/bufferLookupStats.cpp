@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/renderer/cache/bufferLookupStats.h"
 
+#include "common/environment.h"
 #include <array>
 #include <chrono>
 #include <cinttypes>
@@ -25,10 +26,7 @@ bool ReadEnabled() {
 } // namespace Detail
 
 bool KeysEnabled() {
-	static const bool keys = [] {
-		const auto* value = std::getenv("KYTY_BUFFER_LOOKUP_STATS");
-		return value != nullptr && std::strcmp(value, "keys") == 0;
-	}();
+	static const bool keys = Common::ReadEnvEquals("KYTY_BUFFER_LOOKUP_STATS", "keys");
 	return keys;
 }
 

@@ -1,6 +1,7 @@
 #ifndef EMULATOR_SRC_GRAPHICS_HOST_GPU_CLEANVERDICTCACHE_H_
 #define EMULATOR_SRC_GRAPHICS_HOST_GPU_CLEANVERDICTCACHE_H_
 
+#include "common/environment.h"
 #include "common/onceValue.h"
 #include "graphics/host_gpu/coherenceLog.h"
 
@@ -30,8 +31,7 @@ namespace Libs::Graphics::CleanVerdict {
 inline bool Enabled() {
 	static std::atomic<int64_t> enabled_once {Common::OnceUnset};
 	const auto enabled = static_cast<bool>(Common::Once(enabled_once, [] {
-		const auto* value = std::getenv("KYTY_CLEAN_VERDICT_CACHE");
-		return value == nullptr || std::strcmp(value, "0") != 0;
+		return Common::ReadEnvFlag("KYTY_CLEAN_VERDICT_CACHE", true);
 	}));
 	return enabled;
 }

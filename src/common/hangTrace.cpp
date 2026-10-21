@@ -1,5 +1,6 @@
 #include "common/hangTrace.h"
 
+#include "common/environment.h"
 #include "common/cpuPlacement.h"
 #include "common/hangWatchdog.h"
 
@@ -412,10 +413,7 @@ std::vector<std::string> g_pending_frame_rows; // guarded by g_compile_mutex
 uint64_t                 g_frame_rows_total = 0;
 uint64_t                 g_previous_flip_ns = 0;
 bool FrameTimesEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_HANG_TRACE_FRAME_TIMES");
-		return value != nullptr && std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_HANG_TRACE_FRAME_TIMES", false);
 	return enabled;
 }
 

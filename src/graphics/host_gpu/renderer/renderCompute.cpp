@@ -1,4 +1,5 @@
 #include "common/assert.h"
+#include "common/environment.h"
 #include "common/common.h"
 #include "common/emulatorConfig.h"
 #include "common/file.h"
@@ -114,10 +115,7 @@ static bool FillSourcesDisjoint(std::span<const ShaderRecompiler::IR::Descriptor
 // writes to the metadata memory are kept for readers that reuse it as an ordinary buffer. Off, the
 // recorded clear consumes the dispatch, as before.
 static bool ComputeMetaClearDispatchEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_COMPUTE_META_CLEAR_DISPATCH");
-		return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadNonEmptyEnvFlag("KYTY_COMPUTE_META_CLEAR_DISPATCH");
 	return enabled;
 }
 

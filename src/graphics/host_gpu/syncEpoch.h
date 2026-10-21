@@ -1,6 +1,7 @@
 #ifndef EMULATOR_SRC_GRAPHICS_HOST_GPU_SYNCEPOCH_H_
 #define EMULATOR_SRC_GRAPHICS_HOST_GPU_SYNCEPOCH_H_
 
+#include "common/environment.h"
 #include "common/profiler.h"
 
 #include <atomic>
@@ -34,10 +35,7 @@ inline std::atomic<uint64_t> g_submission {1};
 
 // KYTY_SYNC_EPOCH=0 disables every consumer of the epoch (they then check on every use).
 [[nodiscard]] inline bool Enabled() noexcept {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_SYNC_EPOCH");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_SYNC_EPOCH", true);
 	return enabled;
 }
 

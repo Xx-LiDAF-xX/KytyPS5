@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/renderer/debug.h"
 
+#include "common/environment.h"
 #include "common/assert.h"
 #include "common/common.h"
 #include "common/emulatorConfig.h"
@@ -117,8 +118,7 @@ uint32_t render_target_mask_slot(uint32_t mask, uint32_t slot) {
 bool SkipInactivePixelShadersEnabled() {
 	static std::atomic<int64_t> enabled_once {Common::OnceUnset};
 	const auto enabled = static_cast<bool>(Common::Once(enabled_once, [] {
-		const char* value = std::getenv("KYTY_SKIP_INACTIVE_PS");
-		return value != nullptr && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
+		return Common::ReadNonEmptyEnvFlag("KYTY_SKIP_INACTIVE_PS");
 	}));
 	return enabled;
 }

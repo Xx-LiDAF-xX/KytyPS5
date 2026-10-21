@@ -1,5 +1,6 @@
 #include "graphics/shader/recompiler/ir/passes/SrtWalker.h"
 
+#include "common/environment.h"
 #include "common/assert.h"
 #include "common/liveSwitch.h"
 #include "common/logging/log.h"
@@ -653,10 +654,7 @@ uint32_t ArithmeticArity(const ResourcePlan::EvaluationRecipe& recipe) {
 }
 
 void BuildSrtEvaluationRecipes(ResourcePlan& program) {
-	static const bool enabled = [] {
-		const auto* setting = std::getenv("KYTY_SRT_COMPILED_RECIPES");
-		return setting != nullptr && std::strcmp(setting, "1") == 0;
-	}();
+	static const bool enabled = Common::ReadEnvEquals("KYTY_SRT_COMPILED_RECIPES", "1");
 	if (!enabled) return;
 	using Operand = ResourcePlan::EvaluationOperand;
 	using Recipe = ResourcePlan::EvaluationRecipe;
@@ -761,10 +759,7 @@ void BuildSrtEvaluationRecipes(ResourcePlan& program) {
 			if (operands(inst.NumArgs())) recipe.kind = Kind::Operation;
 		}
 	}
-	static const bool decode_roots = [] {
-		const auto* setting = std::getenv("KYTY_SRT_DECODED_ROOTS");
-		return setting != nullptr && std::strcmp(setting, "1") == 0;
-	}();
+	static const bool decode_roots = Common::ReadEnvEquals("KYTY_SRT_DECODED_ROOTS", "1");
 	if (!decode_roots) return;
 	program.descriptor_roots.resize(program.descriptor_sources.size());
 	for (size_t source = 0; source < program.descriptor_sources.size(); ++source) {
@@ -787,10 +782,7 @@ void BuildSrtEvaluationRecipes(ResourcePlan& program) {
 }
 
 void BuildSrtArithmeticTapes(ResourcePlan& program) {
-	static const bool enabled = [] {
-		const auto* setting = std::getenv("KYTY_SRT_ARITHMETIC_TAPES");
-		return setting != nullptr && std::strcmp(setting, "1") == 0;
-	}();
+	static const bool enabled = Common::ReadEnvEquals("KYTY_SRT_ARITHMETIC_TAPES", "1");
 	if (!enabled || program.evaluation_recipes.empty()) return;
 	using Operand = ResourcePlan::EvaluationOperand;
 	using Recipe = ResourcePlan::EvaluationRecipe;
@@ -2340,10 +2332,7 @@ bool IsTracePure(ValueOpcode op) {
 
 // Statistics (verify, or KYTY_SRT_TRACE_STATS=1): how refreshes went, with reasons.
 bool TraceStatsEnabled() {
-	static const bool stats = [] {
-		const auto* value = std::getenv("KYTY_SRT_TRACE_STATS");
-		return value != nullptr && std::strcmp(value, "0") != 0;
-	}();
+	static const bool stats = Common::ReadEnvFlag("KYTY_SRT_TRACE_STATS", false);
 	return stats || g_srt_trace.Get() >= 2;
 }
 

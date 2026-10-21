@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/renderer/pipeline/stagePrepWorker.h"
 
+#include "common/environment.h"
 #include "common/assert.h"
 #include "common/profiler.h"
 #include "graphics/host_gpu/gpuReadDelegate.h"
@@ -32,10 +33,7 @@ uint64_t NowNs() {
 }
 
 bool ParallelEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_STAGE_PREP_PARALLEL");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_STAGE_PREP_PARALLEL", true);
 	return enabled;
 }
 

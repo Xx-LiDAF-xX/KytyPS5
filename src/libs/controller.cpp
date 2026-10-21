@@ -1,5 +1,6 @@
 #include "libs/controller.h"
 
+#include "common/environment.h"
 #include <SDL3/SDL.h>
 #include "common/assert.h"
 #include "common/common.h"
@@ -451,10 +452,7 @@ void EmergencyShutdown() {
 }
 
 static bool HostInputOnly() {
-	static const bool enabled = [] {
-		const char* value = std::getenv("KYTY_HOST_INPUT_ONLY");
-		return value != nullptr && std::strcmp(value, "1") == 0;
-	}();
+	static const bool enabled = Common::ReadEnvEquals("KYTY_HOST_INPUT_ONLY", "1");
 	return enabled;
 }
 

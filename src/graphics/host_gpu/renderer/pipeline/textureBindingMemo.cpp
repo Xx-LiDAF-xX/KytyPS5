@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/renderer/pipeline/textureBindingMemo.h"
 
+#include "common/environment.h"
 #include "common/assert.h"
 #include "common/onceValue.h"
 #include "common/profiler.h"
@@ -58,10 +59,7 @@ namespace {
 // and the version are redone exactly as Record() does them, under the same lock. If the lookup
 // still returns the recorded image, the entry (and its view) stay valid for the new version.
 bool RevalidateEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_TEXTURE_MEMO_REVALIDATE");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_TEXTURE_MEMO_REVALIDATE", true);
 	return enabled;
 }
 
@@ -127,8 +125,7 @@ TextureBindingMemo::~TextureBindingMemo() = default;
 bool TextureBindingMemo::Enabled() {
 	static std::atomic<int64_t> enabled_once {Common::OnceUnset};
 	const auto enabled = static_cast<bool>(Common::Once(enabled_once, [] {
-		const auto* value = std::getenv("KYTY_TEXTURE_BINDING_MEMO");
-		return value == nullptr || std::strcmp(value, "0") != 0;
+		return Common::ReadEnvFlag("KYTY_TEXTURE_BINDING_MEMO", true);
 	}));
 	return enabled;
 }

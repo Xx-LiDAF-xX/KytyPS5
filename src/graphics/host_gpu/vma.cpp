@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/vulkanCommon.h"
 
+#include "common/environment.h"
 #if defined(__clang__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wnullability-completeness"
@@ -83,20 +84,14 @@ size_t RetiredImageCountLimit() {
 }
 
 bool NativeImagePoolEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_NATIVE_IMAGE_POOL");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_NATIVE_IMAGE_POOL", true);
 	return enabled;
 }
 
 // KYTY_IMAGE_SYSMEM_FALLBACK=0: an image that does not fit in video memory ends the emulator
 // ("failed to create image") instead of going to system memory.
 static bool ImageSystemMemoryFallbackEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_IMAGE_SYSMEM_FALLBACK");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_IMAGE_SYSMEM_FALLBACK", true);
 	return enabled;
 }
 

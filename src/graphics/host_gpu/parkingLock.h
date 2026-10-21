@@ -1,6 +1,7 @@
 #ifndef EMULATOR_SRC_GRAPHICS_HOST_GPU_PARKINGLOCK_H_
 #define EMULATOR_SRC_GRAPHICS_HOST_GPU_PARKINGLOCK_H_
 
+#include "common/environment.h"
 #include "common/hangWatchdog.h"
 #include "common/profiler.h"
 
@@ -21,10 +22,7 @@ namespace Libs::Graphics {
 // KYTY_TRACKER_LOCK_PARK=0: the resource-tracking locks (memory tracker regions, texture cache,
 // page manager regions) spin until they are free, as before.
 [[nodiscard]] inline bool TrackerLockParkEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_TRACKER_LOCK_PARK");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_TRACKER_LOCK_PARK", true);
 	return enabled;
 }
 

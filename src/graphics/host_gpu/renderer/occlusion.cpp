@@ -1,4 +1,5 @@
 #include "graphics/host_gpu/renderer/occlusion.h"
+#include "common/environment.h"
 #include "common/hangTrace.h"
 #include "common/alignment.h"
 #include "common/profiler.h"
@@ -65,10 +66,7 @@ void OcclusionCounter::DebugLog(const char* format, ...) {
 }
 
 bool OcclusionCounter::Enabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_GPU_OCCLUSION");
-		return value != nullptr && std::strcmp(value, "1") == 0;
-	}();
+	static const bool enabled = Common::ReadEnvEquals("KYTY_GPU_OCCLUSION", "1");
 	return enabled;
 }
 
@@ -86,10 +84,7 @@ bool OcclusionCounter::BatchEnabled() {
 }
 
 bool OcclusionCounter::BatchVerifyEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_OCCLUSION_BATCH");
-		return value != nullptr && std::strcmp(value, "verify") == 0;
-	}();
+	static const bool enabled = Common::ReadEnvEquals("KYTY_OCCLUSION_BATCH", "verify");
 	return enabled;
 }
 
@@ -402,10 +397,7 @@ void OcclusionCounter::UpdateGate(OcclusionDumpPairs::Kind kind, uint64_t addres
 }
 
 bool OcclusionCounter::StrictState() {
-	static const bool strict = [] {
-		const auto* value = std::getenv("KYTY_OCCLUSION_STRICT");
-		return value != nullptr && std::strcmp(value, "1") == 0;
-	}();
+	static const bool strict = Common::ReadEnvEquals("KYTY_OCCLUSION_STRICT", "1");
 	return strict;
 }
 

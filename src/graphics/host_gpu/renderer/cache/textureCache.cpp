@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/renderer/cache/textureCache.h"
 
+#include "common/environment.h"
 #include "common/alignment.h"
 #include "common/assert.h"
 #include "common/hangTrace.h"
@@ -3948,10 +3949,7 @@ void TextureCache::MaterializeCmaskClear(ImageId id, const ImageDesc& desc,
 	// bytes become 0xFF. It needs no readback; the DCC helper when KYTY_DCC_GPU=1 created it,
 	// otherwise a CMASK-only instance.
 	// KYTY_CMASK_NATIVE=0 decides them by readback instead.
-	static const bool native_enabled = [] {
-		const auto* value = std::getenv("KYTY_CMASK_NATIVE");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool native_enabled = Common::ReadEnvFlag("KYTY_CMASK_NATIVE", true);
 	static_assert(DccClearHelper::ClearCodes[0] == 0x00);
 	if (native_enabled && m_dcc_clear == nullptr && m_cmask_clear == nullptr) {
 		m_cmask_clear = std::make_unique<DccClearHelper>(m_graphics, m_scheduler);
@@ -4989,10 +4987,7 @@ bool TextureCache::ClearImageFromBuffer(CommandBuffer& command, uint64_t address
 	if (aspect == vk::ImageAspectFlagBits::eColor) {
 		// KYTY_WIDE_FILL_CLEAR (default off): a fill of an image with 64- or 128-bit texels is a clear
 		// too; otherwise only a zero RGBA16F fill and the 32-bit formats are.
-		static const bool wide_fill = [] {
-			const auto* value = std::getenv("KYTY_WIDE_FILL_CLEAR");
-			return value != nullptr && std::strcmp(value, "1") == 0;
-		}();
+		static const bool wide_fill = Common::ReadEnvEquals("KYTY_WIDE_FILL_CLEAR", "1");
 		if (!(wide_fill ? DecodeFilledColorClear(image.info.pixel_format, packed_clear, clear.color)
 		                : DecodeColorDwordFill(image.info.pixel_format, packed_clear, clear.color))) {
 			return false;
@@ -5448,10 +5443,8 @@ uint64_t TextureCache::MaterializeOwnedBytes(GuestRange range, ImageId only, Ima
 		// Match SafeToSyncIntoBuffer's CPU-dirty rejection. InitializeImage also excludes
 		// definitely CPU-dirty images from its own-byte preservation before a rebuild.
 		if (image->IsCpuDirty()) {
-			static const bool diagnose = [] {
-				const auto* value = std::getenv("KYTY_ALIAS_CPU_WRITE_DIAGNOSTICS");
-				return value != nullptr && std::strcmp(value, "1") == 0;
-			}();
+			static const bool diagnose =
+			    Common::ReadEnvEquals("KYTY_ALIAS_CPU_WRITE_DIAGNOSTICS", "1");
 			static std::atomic<uint32_t> logged {0};
 			if (diagnose && logged.fetch_add(1, std::memory_order_relaxed) < 8) {
 				std::fprintf(stderr,
@@ -5751,10 +5744,7 @@ uint64_t BufferCache::RecordImageDownload(Buffer& buffer, ImageId id, bool skip_
 // range GPU-dirty until a readback, and images created there later start from those bytes; the
 // Sky Garden water sampled such stale data (a never-written quarter-res input) and rendered white.
 bool BufferCache::ImageWritebackOnGpuWriteEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_IMAGE_WRITEBACK_ON_GPU_WRITE");
-		return value != nullptr && std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_IMAGE_WRITEBACK_ON_GPU_WRITE", false);
 	return enabled;
 }
 

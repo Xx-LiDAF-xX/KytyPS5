@@ -693,6 +693,13 @@ add_executable(bit_array_tests EXCLUDE_FROM_ALL
 )
 target_include_directories(bit_array_tests PRIVATE ${inc_headers})
 
+add_executable(slot_vector_tests EXCLUDE_FROM_ALL "${KYTY_TESTS_DIR}/SlotVectorTests.cpp")
+target_link_libraries(slot_vector_tests common)
+target_include_directories(slot_vector_tests PRIVATE ${inc_headers})
+
+add_executable(environment_tests EXCLUDE_FROM_ALL "${KYTY_TESTS_DIR}/EnvironmentTests.cpp")
+target_include_directories(environment_tests PRIVATE ${inc_headers})
+
 add_executable(hang_watchdog_tests EXCLUDE_FROM_ALL "${KYTY_TESTS_DIR}/HangWatchdogTests.cpp")
 target_link_libraries(hang_watchdog_tests common)
 target_include_directories(hang_watchdog_tests PRIVATE ${inc_headers})
@@ -1246,6 +1253,8 @@ if(BUILD_TESTING)
 	add_test(NAME avplayer_file COMMAND $<TARGET_FILE:avplayer_file_tests>)
 	add_test(NAME vdecsw COMMAND $<TARGET_FILE:vdecsw_tests>)
 	add_test(NAME bit_array COMMAND $<TARGET_FILE:bit_array_tests>)
+	add_test(NAME slot_vector COMMAND $<TARGET_FILE:slot_vector_tests>)
+	add_test(NAME environment COMMAND $<TARGET_FILE:environment_tests>)
 	add_test(NAME hang_watchdog COMMAND $<TARGET_FILE:hang_watchdog_tests>)
 	add_test(NAME hang_watchdog_fire COMMAND $<TARGET_FILE:hang_watchdog_tests> --fire)
 	add_test(NAME hang_watchdog_fatal_shutdown COMMAND $<TARGET_FILE:hang_watchdog_tests> --fatal-shutdown)
@@ -2476,6 +2485,8 @@ if(BUILD_TESTING)
 		avplayer_file_tests
 		vdecsw_tests
 		bit_array_tests
+		slot_vector_tests
+		environment_tests
 		lod_stats_report_tests
 		occlusion_pairs_tests
 		occlusion_query_state_tests

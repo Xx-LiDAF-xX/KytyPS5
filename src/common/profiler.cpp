@@ -1,5 +1,6 @@
 #include "common/profiler.h"
 
+#include "common/environment.h"
 #include "common/cpuPlacement.h"
 #include "common/emulatorConfig.h"
 #include "common/hangTrace.h"
@@ -1438,10 +1439,7 @@ void PublishFrameWork() {
 }
 
 bool LoadingEnabled() {
-	static const bool enabled = [] {
-		const auto* setting = std::getenv("KYTY_PROFILE_LOADING");
-		return setting != nullptr && std::strcmp(setting, "1") == 0;
-	}();
+	static const bool enabled = Common::ReadEnvEquals("KYTY_PROFILE_LOADING", "1");
 	return enabled;
 }
 

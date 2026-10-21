@@ -1,4 +1,5 @@
 #include "kernel/memory.h"
+#include "common/environment.h"
 #include "common/prepPhases.h"
 
 #include "common/assert.h"
@@ -119,10 +120,7 @@ static void NoteGuestProtection(uint64_t vaddr, uint64_t size, VirtualMemory::Mo
 // pages get the tracker's protection back. Without it CPU writes to still-tracked buffers there
 // stopped faulting and the GPU kept using stale bytes (chenxiao07 3f3825158 / e6dfd8e6b).
 static bool RemapTrackerProtectionEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_REMAP_TRACKER_PROTECTION");
-		return value == nullptr || !(value[0] == '0' && value[1] == '\0');
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_REMAP_TRACKER_PROTECTION", true);
 	return enabled;
 }
 
@@ -269,10 +267,7 @@ static bool g_test_fail_next_range_replace = false;
 // (VirtualRanges::m_generation). Buffer bindings clamp every V# range (tens of thousands per
 // frame); the locked lookup was about 1.2 ms per flip on the command processor (U49).
 static bool ClampRangeMemoEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_CLAMP_RANGE_MEMO");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_CLAMP_RANGE_MEMO", true);
 	return enabled;
 }
 
@@ -1165,10 +1160,7 @@ static bool TryReadGpuCleanBackingExact(uint64_t vaddr, void* data, uint64_t siz
 }
 
 bool BackingInPlaceEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_BACKING_INPLACE");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_BACKING_INPLACE", true);
 	return enabled;
 }
 
@@ -1194,10 +1186,7 @@ static bool TryInspectBacking(uint64_t vaddr, uint64_t size, Inspect& inspect,
 // commit decides with the exact predicate either way. KYTY_DRAW_PREP_LOCKFREE_HINT_VERIFY=1|exit
 // also takes the locks and checks the mirror against the bits (equal under the locks).
 static bool LockFreeHintEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_DRAW_PREP_LOCKFREE_HINT");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_DRAW_PREP_LOCKFREE_HINT", true);
 	return enabled;
 }
 
@@ -1220,10 +1209,7 @@ static int LockFreeHintVerifyMode() {
 // hint refused ~98% of those reads (2/3 of all draws fell back, 104 -> 84 ms per frame without it);
 // Astro Bot's Sky Garden start view went from 27.6 to 30.2 fps with a steadier 2-vblank pacing.
 static bool GpuDirtyHintEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_DRAW_PREP_GPU_DIRTY_HINT");
-		return value != nullptr && std::strcmp(value, "1") == 0;
-	}();
+	static const bool enabled = Common::ReadEnvEquals("KYTY_DRAW_PREP_GPU_DIRTY_HINT", "1");
 	return enabled;
 }
 

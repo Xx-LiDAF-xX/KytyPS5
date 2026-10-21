@@ -1,4 +1,5 @@
 #include "graphics/host_gpu/renderer/pipeline/pipelineCache.h"
+#include "common/environment.h"
 #include "common/ramStats.h"
 
 #include "common/assert.h"
@@ -550,10 +551,7 @@ struct ProgramCompileTimes {
 // journal replays), and once per shader when it reaches 8 such permutations, with the number of
 // V#s KYTY_SPEC_UNMAPPED_NULL has nulled so far. KYTY_SPEC_CHURN_LOG=0 turns it off.
 void NotePermutationChurn(uint64_t hash, size_t permutations) {
-	static const bool enabled = [] {
-		const auto* env = std::getenv("KYTY_SPEC_CHURN_LOG");
-		return env == nullptr || std::strcmp(env, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_SPEC_CHURN_LOG", true);
 	if (!enabled) return;
 	static std::mutex                                mutex;
 	static std::vector<std::pair<uint64_t, uint32_t>> window;
@@ -713,10 +711,7 @@ struct ShaderReadAttempt {
 };
 
 bool NativeDccEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_DCC_GPU");
-		return value != nullptr && std::strcmp(value, "1") == 0;
-	}();
+	static const bool enabled = Common::ReadEnvEquals("KYTY_DCC_GPU", "1");
 	return enabled;
 }
 
@@ -757,10 +752,7 @@ bool ReadShaderGuestMemory(void* userdata, uint64_t address, std::span<uint32_t>
 }
 
 bool SrtReadRunsEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_SRT_READ_RUNS");
-		return value != nullptr && std::strcmp(value, "1") == 0;
-	}();
+	static const bool enabled = Common::ReadEnvEquals("KYTY_SRT_READ_RUNS", "1");
 	return enabled;
 }
 
@@ -780,26 +772,17 @@ bool TryReadShaderCleanBacking(void*, uint64_t address, std::span<uint32_t> valu
 }
 
 bool ResourceReuseEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_RESOURCE_REUSE");
-		return value != nullptr && std::strcmp(value, "1") == 0;
-	}();
+	static const bool enabled = Common::ReadEnvEquals("KYTY_RESOURCE_REUSE", "1");
 	return enabled;
 }
 
 bool ResourceDependencyCacheEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_RESOURCE_DEPENDENCY_CACHE");
-		return value != nullptr && std::strcmp(value, "1") == 0;
-	}();
+	static const bool enabled = Common::ReadEnvEquals("KYTY_RESOURCE_DEPENDENCY_CACHE", "1");
 	return enabled;
 }
 
 bool SharedResourceEvaluationEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_SRT_SHARED_CLEAN_VALUES");
-		return value != nullptr && std::strcmp(value, "1") == 0;
-	}();
+	static const bool enabled = Common::ReadEnvEquals("KYTY_SRT_SHARED_CLEAN_VALUES", "1");
 	return enabled;
 }
 
@@ -1715,10 +1698,7 @@ struct PipelineCache::ProgramCache {
 	};
 
 	static bool LookupMemoEnabled() {
-		static const bool enabled = [] {
-			const auto* value = std::getenv("KYTY_PROGRAM_LOOKUP_MEMO");
-			return value == nullptr || std::strcmp(value, "0") != 0;
-		}();
+		static const bool enabled = Common::ReadEnvFlag("KYTY_PROGRAM_LOOKUP_MEMO", true);
 		return enabled;
 	}
 
@@ -7345,10 +7325,7 @@ PipelineCache::Pipeline* PipelineCache::GetGraphicsPipelineImpl(
 	// the comparison is the map's own key equality, and pipeline objects are never destroyed
 	// before the cache is; an object replaced by an optimized build (pipeline libraries) bumps
 	// m_pipeline_generation, which invalidates every memo.
-	static const bool memo_enabled = [] {
-		const auto* value = std::getenv("KYTY_PIPELINE_MEMO");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool memo_enabled = Common::ReadEnvFlag("KYTY_PIPELINE_MEMO", true);
 	struct LastPipeline {
 		const PipelineCache* cache      = nullptr;
 		Pipeline*            pipeline   = nullptr;

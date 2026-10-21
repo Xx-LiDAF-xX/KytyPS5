@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/queueSubmission.h"
 
+#include "common/environment.h"
 #include "common/cpuPlacement.h"
 #include "common/hangWatchdog.h"
 #include "common/profiler.h"
@@ -83,10 +84,7 @@ void NoteHostWait(uint64_t start_ns) {
 } // namespace
 
 bool SubmitWaitBeforeSignal() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_SUBMIT_WAIT_BEFORE_SIGNAL");
-		return value != nullptr && std::strcmp(value, "1") == 0;
-	}();
+	static const bool enabled = Common::ReadEnvEquals("KYTY_SUBMIT_WAIT_BEFORE_SIGNAL", "1");
 	return enabled;
 }
 

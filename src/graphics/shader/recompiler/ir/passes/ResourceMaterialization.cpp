@@ -1,4 +1,5 @@
 #include "graphics/shader/recompiler/ir/passes/ResourceMaterialization.h"
+#include "common/environment.h"
 #include "common/prepPhases.h"
 
 #include "common/assert.h"
@@ -1462,10 +1463,8 @@ bool MaterializeResources(const ResourcePlan& program, const SrtRuntime& runtime
                           ResourceSpecialization& specialization) {
 	KYTY_PROFILER_DETAIL_FUNCTION();
 	Profiler::ScopedFrameWait frame_wait(Profiler::FrameWait::ResourceMaterialization);
-	static const bool optimized = [] {
-		const auto* setting = std::getenv("KYTY_RESOURCE_MATERIALIZATION");
-		return setting != nullptr && std::strcmp(setting, "optimized") == 0;
-	}();
+	static const bool optimized =
+	    Common::ReadEnvEquals("KYTY_RESOURCE_MATERIALIZATION", "optimized");
 	bool       trace_used = false;
 	const bool ok =
 	    optimized

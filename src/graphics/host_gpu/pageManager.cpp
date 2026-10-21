@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/pageManager.h"
 
+#include "common/environment.h"
 #include "common/alignment.h"
 #include "common/liveSwitch.h"
 #include "common/profiler.h"
@@ -174,10 +175,7 @@ std::atomic<uint32_t> g_dp_lost_logged {0};
 // the pages that race are only counted (race_pages) and the update then leaves them looser than
 // their counts (lost_pages).
 bool DeferRaceOld() {
-	static const bool old = [] {
-		const auto* value = std::getenv("KYTY_DEFER_PROTECTS_RACE");
-		return value != nullptr && std::strcmp(value, "old") == 0;
-	}();
+	static const bool old = Common::ReadEnvEquals("KYTY_DEFER_PROTECTS_RACE", "old");
 	return old;
 }
 std::atomic<uint32_t> g_dp_logged {0};
@@ -1130,10 +1128,7 @@ PageManager::ThreadProtectTotals PageManager::ThreadProtects() noexcept {
 }
 
 void PageManager::NoteCpFlip() noexcept {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_DEFER_PROTECTS_STATS");
-		return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadNonEmptyEnvFlag("KYTY_DEFER_PROTECTS_STATS");
 	if (!enabled) {
 		return;
 	}

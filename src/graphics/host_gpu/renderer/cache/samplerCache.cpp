@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/renderer/cache/samplerCache.h"
 
+#include "common/environment.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "graphics/guest_gpu/gpu_defs.h"
@@ -15,10 +16,7 @@ namespace Libs::Graphics {
 
 // KYTY_SAMPLER_REDUCTION=0 ignores the S# FILTER_MODE (min/max filtering), as before U50.
 static bool SamplerReductionEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_SAMPLER_REDUCTION");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_SAMPLER_REDUCTION", true);
 	return enabled;
 }
 

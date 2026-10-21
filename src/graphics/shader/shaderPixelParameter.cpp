@@ -1,5 +1,6 @@
 #include "graphics/shader/shader.h"
 
+#include "common/environment.h"
 #include "common/assert.h"
 #include "graphics/shader/recompiler/CodegenOptions.h"
 #include "graphics/shader/recompiler/ir/ShaderIR.h"
@@ -16,10 +17,7 @@ constexpr uint32_t PsInputFlatShade  = 0x00000400u;
 } // namespace
 
 bool ShaderCbShaderMaskExports() {
-	static const bool enabled = [] {
-		const char* value = std::getenv("KYTY_CB_SHADER_MASK_EXPORTS");
-		return value != nullptr && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
-	}();
+	static const bool enabled = Common::ReadNonEmptyEnvFlag("KYTY_CB_SHADER_MASK_EXPORTS");
 	return enabled;
 }
 

@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/renderer/image/tiler.h"
 
+#include "common/environment.h"
 #include "common/alignment.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -652,18 +653,12 @@ void TileManager::TileImage(Image& image, std::span<const vk::BufferImageCopy> r
 }
 
 bool TileManager::ImageDirectEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_TILER_IMAGE_DIRECT");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_TILER_IMAGE_DIRECT", true);
 	return enabled;
 }
 
 bool TileManager::ImageDirectVerifyEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_TILER_IMAGE_DIRECT_VERIFY");
-		return value != nullptr && std::strcmp(value, "1") == 0;
-	}();
+	static const bool enabled = Common::ReadEnvEquals("KYTY_TILER_IMAGE_DIRECT_VERIFY", "1");
 	return enabled;
 }
 

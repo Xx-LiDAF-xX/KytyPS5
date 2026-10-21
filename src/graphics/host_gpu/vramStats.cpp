@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/vramStats.h"
 
+#include "common/environment.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -88,10 +89,7 @@ std::chrono::steady_clock::time_point& Start() {
 } // namespace
 
 bool Enabled() noexcept {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_VRAM_STATS");
-		return value != nullptr && std::strcmp(value, "1") == 0;
-	}();
+	static const bool enabled = Common::ReadEnvEquals("KYTY_VRAM_STATS", "1");
 	return enabled;
 }
 

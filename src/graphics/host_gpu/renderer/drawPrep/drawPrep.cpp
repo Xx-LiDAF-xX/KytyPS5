@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/renderer/drawPrep/drawPrep.h"
 
+#include "common/environment.h"
 #include "graphics/host_gpu/renderer/drawPrep/ownedCounters.h"
 
 #include "common/assert.h"
@@ -1483,10 +1484,7 @@ Engine::Slot& Engine::ReadyHead() {
 }
 
 bool Engine::IndirectEnabled() {
-	static const bool enabled = [] {
-		const char* value = std::getenv("KYTY_DRAW_PREP_INDIRECT");
-		return value == nullptr || value[0] == '\0' || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_DRAW_PREP_INDIRECT", true);
 	return enabled;
 }
 

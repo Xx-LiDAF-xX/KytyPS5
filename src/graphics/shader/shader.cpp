@@ -1,5 +1,6 @@
 #include "graphics/shader/shader.h"
 
+#include "common/environment.h"
 #include "common/assert.h"
 #include "common/common.h"
 #include "common/emulatorConfig.h"
@@ -71,10 +72,7 @@ struct ShaderBinaryInfo {
 
 // Startup-only: registration captures identities and workers retain code certificates.
 static bool RegisteredShaderCodeEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_REGISTERED_SHADER_CODE");
-		return value != nullptr && std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_REGISTERED_SHADER_CODE", false);
 	return enabled;
 }
 
@@ -145,10 +143,7 @@ uint64_t ShaderMapGeneration() {
 }
 
 static bool ShaderMapMemoEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_SHADER_MAP_MEMO");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_SHADER_MAP_MEMO", true);
 	return enabled;
 }
 
@@ -205,10 +200,7 @@ static ShaderMapEntry ShaderGetMappedData(uint64_t addr, const char* label) {
 // KYTY_SHADER_METADATA_BATCH=0 restores one clean-backing probe per header word, vertex
 // attribute and vertex-buffer descriptor.
 static bool ShaderMetadataBatchEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_SHADER_METADATA_BATCH");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_SHADER_METADATA_BATCH", true);
 	return enabled;
 }
 
@@ -285,10 +277,8 @@ static bool CopyMetadataForPreparation(const ShaderMappedData& data, Preparation
 }
 
 static uint64_t GetDeclaredShaderHash(uint64_t shader_addr) {
-	static const bool use_clean_backing = [] {
-		const auto* value = std::getenv("KYTY_SHADER_METADATA_BACKING");
-		return value != nullptr && std::strcmp(value, "1") == 0;
-	}();
+	static const bool use_clean_backing =
+	    Common::ReadEnvEquals("KYTY_SHADER_METADATA_BACKING", "1");
 	// A draw-prep preparation reads only through recorded probes (a clean probe returns the
 	// bytes the mapped read would) and never falls back to the guest mapping.
 	const bool speculative = DrawPrep::Speculative();
@@ -345,30 +335,21 @@ static uint64_t GetDeclaredShaderHash(uint64_t shader_addr) {
 // clean-backing read proves the exact code bytes are not GPU-owned; otherwise the in-place hash
 // keeps the fault/readback path.
 static bool ShaderHashBackingEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_SHADER_HASH_BACKING");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_SHADER_HASH_BACKING", true);
 	return enabled;
 }
 
 // KYTY_DRAW_PREP_CODE_CERT=0 restores failing every draw-prep preparation of a shader without an
 // AGC header hash (Uncertified): the preparation then never reads or hashes the code.
 static bool DrawPrepCodeCertEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_DRAW_PREP_CODE_CERT");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_DRAW_PREP_CODE_CERT", true);
 	return enabled;
 }
 
 // KYTY_DRAW_PREP_CODE_DIGEST=0 certifies the code of headerless shaders by its bytes, as before,
 // instead of by the digest the preparation computes from them (readSet.h, digest reads).
 static bool DrawPrepCodeDigestEnabled() {
-	static const bool enabled = [] {
-		const auto* value = std::getenv("KYTY_DRAW_PREP_CODE_DIGEST");
-		return value == nullptr || std::strcmp(value, "0") != 0;
-	}();
+	static const bool enabled = Common::ReadEnvFlag("KYTY_DRAW_PREP_CODE_DIGEST", true);
 	return enabled;
 }
 
@@ -827,10 +808,8 @@ static void ShaderApplyAttribSemantics(ShaderVertexInputInfo& info,
 	EXIT_IF(attrib == nullptr || buffer == nullptr);
 
 	const bool debug_dump = Config::GraphicsDebugDumpEnabled();
-	static const bool use_clean_backing_env = [] {
-		const auto* value = std::getenv("KYTY_SHADER_METADATA_BACKING");
-		return value != nullptr && std::strcmp(value, "1") == 0;
-	}();
+	static const bool use_clean_backing_env =
+	    Common::ReadEnvEquals("KYTY_SHADER_METADATA_BACKING", "1");
 	// A draw-prep preparation reads only through recorded probes and stops at the first failed
 	// one (which already failed the preparation) instead of reading the guest mapping.
 	const bool speculative       = DrawPrep::Speculative();
