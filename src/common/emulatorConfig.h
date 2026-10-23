@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Config {
@@ -26,6 +27,16 @@ enum class ShaderOptimizationType { None, Size, Performance };
 enum class LogDirection { Silent, Console, File };
 
 enum class PresentMode { Fifo, Mailbox, Immediate };
+
+enum class UpscalerType : uint8_t { Off = 0, Fsr = 1, Dlss = 2 };
+
+enum class UpscaleQuality : uint8_t {
+	NativeAA         = 0, // 1.0x scale
+	Quality          = 1, // 1.5x scale
+	Balanced         = 2, // 1.7x scale
+	Performance      = 3, // 2.0x scale
+	UltraPerformance = 4, // 3.0x scale
+};
 
 using Keymap = std::vector<std::string>;
 using ControllerColor = std::array<uint8_t, 3>;
@@ -64,6 +75,10 @@ struct ConfigOptions {
 	uint32_t               audio_objects_volume           = 100;
 	bool                   audio_objects_enabled          = true;
 	PresentMode            present_mode                = PresentMode::Mailbox;
+	UpscalerType           upscaler_type               = UpscalerType::Off;
+	UpscaleQuality         upscale_quality             = UpscaleQuality::Quality;
+	uint32_t               upscale_sharpness           = 50;
+	bool                   frame_generation_enabled    = false;
 	int32_t                gpu_index                   = -1;
 	bool                   fullscreen_enabled          = false;
 	bool                   hdr_enabled                 = false;
@@ -121,6 +136,28 @@ uint32_t GetAudioPadSpeakerOnMainVolume();
 uint32_t GetAudioObjectsVolume();
 bool     AudioObjectsEnabled();
 PresentMode GetPresentMode();
+UpscalerType GetUpscalerType();
+void         SetUpscalerType(UpscalerType type);
+UpscalerType CycleUpscalerType();
+std::string_view UpscalerTypeToString(UpscalerType type) noexcept;
+UpscalerType     ParseUpscalerType(std::string_view str) noexcept;
+
+UpscaleQuality   GetUpscaleQuality();
+void             SetUpscaleQuality(UpscaleQuality quality);
+std::string_view UpscaleQualityToString(UpscaleQuality quality) noexcept;
+UpscaleQuality   ParseUpscaleQuality(std::string_view str) noexcept;
+
+uint32_t GetUpscaleSharpness();
+void     SetUpscaleSharpness(uint32_t sharpness);
+
+bool FrameGenerationEnabled();
+void SetFrameGenerationEnabled(bool enabled);
+bool ToggleFrameGeneration();
+
+float GetUpscaleFactor(UpscaleQuality quality) noexcept;
+void  GetInternalRenderResolution(uint32_t display_width, uint32_t display_height,
+                                  uint32_t& out_width, uint32_t& out_height) noexcept;
+std::string FormatUpscalerStatusTag();
 int32_t GetGpuIndex();
 bool     FullscreenEnabled();
 bool     HdrEnabled();

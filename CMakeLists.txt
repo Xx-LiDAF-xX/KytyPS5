@@ -790,6 +790,15 @@ add_executable(lru_cache_tests EXCLUDE_FROM_ALL
 )
 target_include_directories(lru_cache_tests PRIVATE ${inc_headers})
 
+add_executable(upscaler_frame_gen_tests EXCLUDE_FROM_ALL
+	"${KYTY_TESTS_DIR}/UpscalerFrameGenTests.cpp"
+)
+target_link_libraries(upscaler_frame_gen_tests common)
+target_include_directories(upscaler_frame_gen_tests PRIVATE ${inc_headers})
+if(LINUX)
+	target_link_libraries(upscaler_frame_gen_tests Threads::Threads)
+endif()
+
 # KYTY_FUNCTION_ARRAY_SHRINK: the SPIR-V pass that shrinks Function-storage arrays to their proven
 # index bound (graphics/host_gpu/spirvLocalArrays.h).
 add_executable(spirv_local_arrays_tests EXCLUDE_FROM_ALL
