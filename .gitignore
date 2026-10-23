@@ -8,20 +8,32 @@ cmake-build-debug/
 _PipelineCache/
 
 # Local configuration, handoffs, runtime data and diagnostics
+/.agent/
+/.agents/
 /.claude/
 /.codex/
+/.codex-tmp-ooz/
+/.gemini/
 /.vscode/
 /CLAUDE_HANDOFF.md
 /docs/claude-handoff/
 /Profiling/
+/openspec/
+/graphify-out/
+/sandbox/
+/scratch/
+skills-lock.json
+
 Kyty.ini
 imgui.ini
+_Patches/
 _SaveData/
 _Shaders/
 _Buffers/
 _TempData/
 _DownloadData/
 _Textures/
+_HangTrace/
 *.tracy
 *.rdc
 *.etl

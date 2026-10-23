@@ -186,7 +186,7 @@ void MainDialogPrivate::FindInterpreter() {
 	}
 
 	bool found = QFile::exists(m_interpreter);
-	m_ui->widget->SetRuntimeDirectory(QFileInfo(m_interpreter).absolutePath());
+	m_ui->widget->SetRuntimeDirectory(QApplication::applicationDirPath());
 
 	if (found) {
 		m_ui->label_Interpreter->setText(tr("Emulator: ") + m_interpreter);
@@ -516,7 +516,7 @@ void MainDialog::RunInterpreter(QProcess* process, const Configuration& info) {
 	process->setProgram(interpreter);
 	process->setArguments(args);
 #endif
-	process->setWorkingDirectory(dir.path());
+	process->setWorkingDirectory(QApplication::applicationDirPath());
 #if defined(_WIN32)
 	process->setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* args) {
 		args->flags |= static_cast<uint32_t>(CREATE_NEW_CONSOLE);
