@@ -4,6 +4,7 @@
 #include "common/assert.h"
 #include "common/emulatorConfig.h"
 #include "common/file.h"
+#include "common/liveSwitch.h"
 #include "common/logging/log.h"
 #include "common/profiler.h"
 #include "common/singleton.h"
@@ -151,6 +152,7 @@ static void Init(const Config::ConfigOptions& cfg, const std::filesystem::path& 
 	const auto engine_profile = Common::EngineProfile::DetectAndProfile(
 	    param_json.parent_path().parent_path(), title_id, app_name);
 	Common::EngineProfile::ApplyEngineProfile(engine_profile);
+	Live::InitializeFromEnvironment();
 
 	if (cfg.splash_enabled) {
 		Libs::Graphics::InitializeSplashScreen(param_json.parent_path());

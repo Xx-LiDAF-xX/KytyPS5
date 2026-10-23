@@ -68,11 +68,7 @@ uint64_t RetiredImageByteLimit(const GraphicContext& graphics) {
 		const auto* value = std::getenv("KYTY_NATIVE_IMAGE_POOL_MB");
 		return (value != nullptr ? std::strtoull(value, nullptr, 10) : 1024ull) * 1024ull * 1024ull;
 	}();
-	static const uint64_t limit = [&graphics] {
-		const auto budget = graphics.GetTotalMemoryBudget();
-		return budget != 0 ? std::min(configured, budget / 8) : configured;
-	}();
-	return limit;
+	return VramBudget::RetainedImageLimit(configured, graphics.GetTotalMemoryBudget());
 }
 
 size_t RetiredImageCountLimit() {
@@ -584,7 +580,7 @@ uint64_t GraphicContext::ReleaseRetainedMemory() {
 
 void GraphicContext::TrimRetiredImages() {
 	const auto idle = RetiredImageIdleLimit();
-	if (idle.count() == 0 || allocator == nullptr) {
+	if (allocator == nullptr) {
 		return;
 	}
 	// Called per garbage collection (every completed submission): look at most every 100 ms.
@@ -593,10 +589,15 @@ void GraphicContext::TrimRetiredImages() {
 		return;
 	}
 	m_retired_trim_next = now + std::chrono::milliseconds(100);
+	// Budget changes must release idle storage even with expiry disabled and no new images.
+	const auto byte_limit  = PoolPressure(*this) ? 0 : RetiredImageByteLimit(*this);
+	const auto count_limit = RetiredImageCountLimit();
 	std::scoped_lock lock(m_retired_image_mutex);
 	// Retired in order: the oldest entries are at the front.
 	size_t expired = 0;
-	while (expired < m_retired_images.size() && now - m_retired_images[expired].retired >= idle) {
+	while (expired < m_retired_images.size() &&
+	       (m_retired_image_bytes > byte_limit || m_retired_images.size() - expired > count_limit ||
+	        (idle.count() != 0 && now - m_retired_images[expired].retired >= idle))) {
 		const auto& retired = m_retired_images[expired];
 		DestroyNativeImage(allocator, retired.image, retired.allocation);
 		EXIT_IF(retired.bytes > m_retired_image_bytes);
@@ -703,14 +704,12 @@ uint64_t GraphicContext::GetDeviceMemoryUsage() const {
 	}
 	VmaBudget budgets[VK_MAX_MEMORY_HEAPS] {};
 	vmaGetHeapBudgets(allocator, budgets);
-	const bool discrete =
-	    physical_device_properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu;
 	uint64_t usage = 0;
 	for (uint32_t heap = 0; heap < physical_device_memory_properties.memoryHeapCount; heap++) {
 		const bool device_local =
 		    static_cast<bool>(physical_device_memory_properties.memoryHeaps[heap].flags &
 		                      vk::MemoryHeapFlagBits::eDeviceLocal);
-		if (!discrete || device_local) {
+		if (device_local) {
 			usage += budgets[heap].usage;
 		}
 	}
@@ -726,29 +725,17 @@ uint64_t GraphicContext::GetTotalMemoryBudget() const {
 	const bool discrete =
 	    physical_device_properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu;
 	uint64_t budget = 0;
-	uint64_t local  = 0;
-	uint64_t usage  = 0;
 	for (uint32_t heap = 0; heap < physical_device_memory_properties.memoryHeapCount; heap++) {
 		const auto& properties = physical_device_memory_properties.memoryHeaps[heap];
 		const bool  device_local =
 		    static_cast<bool>(properties.flags & vk::MemoryHeapFlagBits::eDeviceLocal);
+		// Count the same heaps as GetDeviceMemoryUsage. Non-local host heaps are not extra
+		// device-local capacity, including on integrated GPUs with more than one heap.
 		if (device_local) {
-			local += properties.size;
-		}
-		if (!discrete || device_local) {
 			budget += CanReportMemoryUsage() ? budgets[heap].budget : properties.size;
-			usage += CanReportMemoryUsage() ? budgets[heap].usage : 0;
 		}
 	}
-	if (const auto cap = BudgetCapBytes(); cap != 0) {
-		budget = std::min(budget, cap);
-	}
-	if (discrete) {
-		return budget - std::min<uint64_t>(budget / 8, 1024ull * 1024 * 1024);
-	}
-	constexpr uint64_t system_reserve = 8ull * 1024 * 1024 * 1024;
-	const auto         available      = budget > usage ? budget - usage : uint64_t {0};
-	return std::max(local, available > system_reserve ? available - system_reserve : uint64_t {0});
+	return VramBudget::PlanningBudget(budget, discrete, CanReportMemoryUsage(), BudgetCapBytes());
 }
 
 bool GraphicContext::CreateImage(const vk::ImageCreateInfo& image_info, VulkanImage& image) {
@@ -912,7 +899,7 @@ void GraphicContext::DeleteImage(VulkanImage& image) {
 				std::scoped_lock lock(m_retired_image_mutex);
 				while (!m_retired_images.empty() &&
 				       (m_retired_images.size() >= count_limit ||
-				        bytes > byte_limit - m_retired_image_bytes)) {
+				        !VramBudget::RetainedImageFits(m_retired_image_bytes, bytes, byte_limit))) {
 					const auto oldest = m_retired_images.front();
 					DestroyNativeImage(allocator, oldest.image, oldest.allocation);
 					m_retired_image_bytes -= oldest.bytes;

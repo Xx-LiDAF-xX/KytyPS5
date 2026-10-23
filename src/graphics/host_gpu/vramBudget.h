@@ -31,6 +31,31 @@ namespace Libs::Graphics::VramBudget {
 
 constexpr uint64_t DefaultAgeFrames = 30;
 
+// A total process budget, not the memory still free after our current allocations. The driver
+// already accounts for other applications in its budget. Without that extension, shared-memory
+// GPUs need extra headroom for the OS, proportional to the heap on smaller PCs.
+[[nodiscard]] constexpr uint64_t PlanningBudget(uint64_t budget, bool discrete,
+                                               bool driver_budget, uint64_t cap = 0) noexcept {
+	if (cap != 0) {
+		budget = std::min(budget, cap);
+	}
+	constexpr uint64_t GiB = 1024ull * 1024 * 1024;
+	const auto reserve = discrete || driver_budget ? std::min(budget / 8, GiB)
+	                                               : std::min(budget / 4, 8 * GiB);
+	return budget - reserve;
+}
+
+[[nodiscard]] constexpr uint64_t RetainedImageLimit(uint64_t configured, uint64_t budget) noexcept {
+	return std::min(configured, budget / 8);
+}
+
+// The budget can shrink below the retained bytes. Check that before subtracting, or unsigned
+// underflow would let the pool grow while it is already over its new limit.
+[[nodiscard]] constexpr bool RetainedImageFits(uint64_t retained, uint64_t incoming,
+                                              uint64_t limit) noexcept {
+	return retained <= limit && incoming <= limit - retained;
+}
+
 [[nodiscard]] constexpr uint64_t ImageTrigger(uint64_t budget) noexcept {
 	return budget / 4 * 3;
 }

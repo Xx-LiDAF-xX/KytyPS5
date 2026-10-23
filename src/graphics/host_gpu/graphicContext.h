@@ -219,14 +219,16 @@ struct GraphicContext {
 	void               DestroyAllocator();
 	void               LogMemoryBudget() const;
 	[[nodiscard]] bool CanReportMemoryUsage() const noexcept { return memory_budget_ext_enabled; }
+	// Current usage and total planning budget of device-local heaps, including shared heaps on
+	// integrated GPUs. The budget includes allocations already made by this process.
 	[[nodiscard]] uint64_t GetDeviceMemoryUsage() const;
 	[[nodiscard]] uint64_t GetTotalMemoryBudget() const;
 	[[nodiscard]] bool     CreateImage(const vk::ImageCreateInfo& info, VulkanImage& image);
 	void                   DeleteImage(VulkanImage& image);
 	// KYTY_VRAM_STATS report lines (vramStats.h): VMA heaps, allocation kinds, native image pool.
 	void                   ReportVramStats();
-	// KYTY_NATIVE_IMAGE_POOL_IDLE_MS (vma.cpp): destroys retained native images unused that long
-	// (GPU thread, from the garbage collector; rate-limited).
+	// Destroys retained native images over the current budget or older than
+	// KYTY_NATIVE_IMAGE_POOL_IDLE_MS (GPU thread, from the garbage collector; rate-limited).
 	void                   TrimRetiredImages();
 	// An allocation failed for lack of device memory: destroys what is only retained for reuse
 	// (the native image pool) before the caller retries. Returns the bytes released.

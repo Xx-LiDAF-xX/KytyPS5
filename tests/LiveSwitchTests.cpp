@@ -92,6 +92,24 @@ Live::Switch g_count_twin("KYTY_LIVE_TEST_COUNT", ParseCount);
 Live::Switch g_on("KYTY_LIVE_TEST_ON", Live::ParseDefaultOn, Hook);
 Live::Switch g_off("KYTY_LIVE_TEST_OFF", Live::ParseDefaultOff);
 
+void TestStartupEnvironment() {
+	Check(g_count.Get() == 8 && !g_off.On(), "static switches precede preset loading");
+	SetEnv("KYTY_LIVE_TEST_COUNT", "12");
+	SetEnv("KYTY_LIVE_TEST_OFF", "1");
+	SetEnv("KYTY_LIVE_TEST_ON", "0");
+	Live::InitializeFromEnvironment();
+	Check(g_count.Get() == 12 && g_count_twin.Get() == 12, "preset reaches both static switches");
+	Check(g_off.On() && !g_on.On(), "startup explicit enable and disable both respected");
+	Check(g_hook_calls == 0, "startup does not call hooks before their resources exist");
+	Live::InitializeFromEnvironment();
+	Check(g_count.Get() == 12 && g_hook_calls == 0, "startup initialization is idempotent");
+	SetEnv("KYTY_LIVE_TEST_COUNT", "");
+	SetEnv("KYTY_LIVE_TEST_OFF", "");
+	SetEnv("KYTY_LIVE_TEST_ON", "");
+	Live::InitializeFromEnvironment();
+	Check(g_count.Get() == 8 && !g_off.On() && g_on.On(), "unset startup settings use defaults");
+}
+
 void TestApply() {
 	Check(g_count.Get() == 8 && g_count_twin.Get() == 8, "startup default");
 	Check(g_on.Get() == 1 && g_off.Get() == 0, "default on / default off");
@@ -198,6 +216,8 @@ void TestRegistration() {
 	Live::Testing::StageText("KYTY_LIVE_SEQ=21\nKYTY_LIVE_TEST_ENV=\n");
 	Live::OnCpFlip();
 	Check(from_env.Get() == 8, "unset after an environment value");
+	Live::InitializeFromEnvironment();
+	Check(from_env.Get() == 8 && lazy.Get() == 5, "startup refresh preserves applied live overrides");
 	TakeLog();
 	std::printf("registration: ok\n");
 }
@@ -338,6 +358,7 @@ void TestThread() {
 
 int main() {
 	Live::Testing::SetLogSink(Sink);
+	TestStartupEnvironment();
 	TestApply();
 	TestRegistration();
 	TestSpin();

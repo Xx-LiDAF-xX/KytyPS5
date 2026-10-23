@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <initializer_list>
+#include <limits>
 
 namespace {
 
@@ -28,6 +30,46 @@ void TestMarks() {
 	Expect(BufferTrigger(budget) == budget, "buffer collector only at the budget");
 	Expect(BufferCritical(budget) > budget, "buffer downloads only above the budget");
 	Expect(ImageTrigger(budget) < Critical(budget), "trigger below the critical mark");
+}
+
+void TestPlanningBudgets() {
+	Expect(PlanningBudget(10 * GiB, true, true) == 9 * GiB,
+	       "discrete GPU retains the existing 1 GiB maximum reserve");
+	Expect(PlanningBudget(4 * GiB, false, true) == 3584 * MiB,
+	       "integrated GPU follows the driver budget instead of the physical heap size");
+	Expect(PlanningBudget(16 * GiB, false, true, 2 * GiB) == 1792 * MiB,
+	       "integrated GPU honors the user cap even with a large shared heap");
+	Expect(PlanningBudget(8 * GiB, false, false) == 6 * GiB,
+	       "shared-memory fallback reserves a proportion on smaller PCs");
+	Expect(PlanningBudget(64 * GiB, false, false) == 56 * GiB,
+	       "shared-memory fallback keeps the 8 GiB maximum reserve");
+	for (const auto bytes: {uint64_t {0}, uint64_t {1}, 512 * MiB, 2 * GiB, 8 * GiB,
+	                        32 * GiB, std::numeric_limits<uint64_t>::max()}) {
+		for (const bool discrete: {false, true}) {
+			for (const bool driver: {false, true}) {
+				const auto budget = PlanningBudget(bytes, discrete, driver);
+				Expect(budget <= bytes, "planning budget never exceeds available capacity");
+				Expect(PlanningBudget(bytes, discrete, driver, GiB) <= std::min(bytes, GiB),
+				       "cap never exceeded on any GPU or fallback path");
+			}
+		}
+	}
+}
+
+void TestRetainedImageBudgets() {
+	const auto large = RetainedImageLimit(GiB, 16 * GiB);
+	const auto small = RetainedImageLimit(GiB, 2 * GiB);
+	Expect(large == GiB && small == 256 * MiB, "pool capacity follows a shrinking GPU budget");
+	Expect(RetainedImageLimit(64 * MiB, 16 * GiB) == 64 * MiB, "pool override remains an upper bound");
+	Expect(RetainedImageLimit(GiB, 0) == 0, "zero budget retains no images");
+	Expect(RetainedImageLimit(0, 16 * GiB) == 0, "explicit zero disables retention");
+	Expect(RetainedImageFits(768 * MiB, 256 * MiB, large), "exact fit is reusable");
+	Expect(!RetainedImageFits(768 * MiB, MiB, small), "shrinking budget cannot underflow free space");
+	Expect(!RetainedImageFits(256 * MiB, MiB, small), "full pool rejects another image");
+	Expect(!RetainedImageFits(0, 512 * MiB, small), "oversized image is not retained");
+	Expect(RetainedImageFits(128 * MiB, 128 * MiB, small), "space reclaimed by trimming can be reused");
+	Expect(!RetainedImageFits(std::numeric_limits<uint64_t>::max(), 1, small),
+	       "large retained count cannot wrap the capacity check");
 }
 
 void TestPlans() {
@@ -57,6 +99,8 @@ void TestPlans() {
 } // namespace
 
 int main() {
+	TestPlanningBudgets();
+	TestRetainedImageBudgets();
 	TestMarks();
 	TestPlans();
 	if (g_failures != 0) {

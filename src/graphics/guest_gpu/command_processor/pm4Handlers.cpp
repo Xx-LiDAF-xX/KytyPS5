@@ -1527,10 +1527,12 @@ KYTY_CP_OP_PARSER(CpOpBranch) {
 	}
 
 	if (take_then) {
-		cp.ProcessIndirectBuffer({then_buffer, then_num_dw}, true);
+		// COND_INDIRECT_BUFFER calls the selected IB. It has no CHAIN bit: retain the
+		// parent's cursor so packets after the conditional (including fence writes) run.
+		cp.ProcessIndirectBuffer({then_buffer, then_num_dw}, false);
 	} else if (mode == 2 && else_num_dw != 0) {
 		EXIT_NOT_IMPLEMENTED(else_buffer == nullptr);
-		cp.ProcessIndirectBuffer({else_buffer, else_num_dw}, true);
+		cp.ProcessIndirectBuffer({else_buffer, else_num_dw}, false);
 	}
 
 	return payload_dw;

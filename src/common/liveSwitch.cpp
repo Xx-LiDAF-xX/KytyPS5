@@ -272,6 +272,7 @@ struct Registry {
 	}
 
 	static void Apply(uint64_t flip);
+	static void InitializeFromEnvironment();
 	static std::string Names();
 };
 
@@ -289,6 +290,22 @@ Switch::Switch(const char* name, Parser parse, OnChange on_change) noexcept
 	}
 	m_next        = registry.head;
 	registry.head = this;
+}
+
+void Registry::InitializeFromEnvironment() {
+	auto&           registry = Get();
+	std::lock_guard lock(registry.mutex);
+	for (Switch* s = registry.head; s != nullptr; s = s->m_next) {
+		const auto it = std::find_if(registry.applied.begin(), registry.applied.end(),
+		                             [s](const auto& pair) { return pair.first == s->m_name; });
+		if (it == registry.applied.end()) {
+			s->m_value.store(s->m_parse(EnvValue(s->m_name)), std::memory_order_relaxed);
+		}
+	}
+}
+
+void InitializeFromEnvironment() {
+	Registry::InitializeFromEnvironment();
 }
 
 std::string Registry::Names() {
