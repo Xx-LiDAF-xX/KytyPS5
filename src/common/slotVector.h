@@ -1,11 +1,11 @@
-#ifndef EMULATOR_SRC_COMMON_SLOTVECTOR_H_
-#define EMULATOR_SRC_COMMON_SLOTVECTOR_H_
+#pragma once
 
 #include "common/assert.h"
 #include "common/abi.h"
 
 #include <atomic>
 #include <compare>
+#include <concepts>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -13,6 +13,7 @@
 #include <memory>
 #include <optional>
 #include <utility>
+#include <version>
 #include <vector>
 
 namespace Common {
@@ -120,20 +121,20 @@ public:
 	[[nodiscard]] size_t size() const noexcept { return m_size; }
 	[[nodiscard]] size_t capacity() const noexcept { return m_values.size(); }
 
-	template <typename F>
+	template <std::invocable<SlotId, T&> F>
 	void ForEach(F&& fn) {
 		for (uint32_t index = 0; index < m_values.size(); ++index) {
 			if (m_values[index].value) {
-				fn(SlotId {index, m_values[index].generation}, *m_values[index].value);
+				std::invoke(fn, SlotId {index, m_values[index].generation}, *m_values[index].value);
 			}
 		}
 	}
 
-	template <typename F>
+	template <std::invocable<SlotId, const T&> F>
 	void ForEach(F&& fn) const {
 		for (uint32_t index = 0; index < m_values.size(); ++index) {
 			if (m_values[index].value) {
-				fn(SlotId {index, m_values[index].generation}, *m_values[index].value);
+				std::invoke(fn, SlotId {index, m_values[index].generation}, *m_values[index].value);
 			}
 		}
 	}
@@ -192,5 +193,3 @@ struct std::hash<Common::SlotId> {
 		return std::hash<uint64_t> {}((static_cast<uint64_t>(id.generation) << 32u) | id.index);
 	}
 };
-
-#endif // EMULATOR_SRC_COMMON_SLOTVECTOR_H_

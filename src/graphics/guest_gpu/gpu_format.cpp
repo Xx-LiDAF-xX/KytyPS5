@@ -2,8 +2,10 @@
 
 #include "graphics/guest_gpu/gpu_defs.h"
 
+#include <algorithm>
 #include <array>
 #include <bit>
+#include <ranges>
 
 namespace Libs::Graphics::Prospero {
 namespace {
@@ -156,12 +158,9 @@ constexpr RenderTargetLayoutInfo kRenderTargetLayouts[] = {
 };
 
 const RenderTargetLayoutInfo* FindRenderTargetLayout(ChannelLayout layout) {
-	for (const auto& info: kRenderTargetLayouts) {
-		if (info.layout == layout) {
-			return &info;
-		}
-	}
-	return nullptr;
+	const auto it =
+	    std::ranges::find(kRenderTargetLayouts, layout, &RenderTargetLayoutInfo::layout);
+	return it != std::ranges::end(kRenderTargetLayouts) ? &*it : nullptr;
 }
 
 constexpr auto MakeFormatInfoLookup() {

@@ -4,9 +4,13 @@
 #include "common/file.h"
 #include "common/logging/log.h"
 
+#include <algorithm>
+#include <array>
 #include <cstring>
 #include <format>
 #include <memory>
+#include <ranges>
+#include <span>
 
 namespace Loader {
 
@@ -430,29 +434,26 @@ uint64_t Elf64::GetEntry() const {
 }
 
 bool Elf64::IsSelf() const {
-	if (m_f == nullptr || m_f->IsInvalid()) {
+	if (m_f == nullptr || m_f->IsInvalid() || m_self == nullptr) {
 		return false;
 	}
 
-	if (m_self == nullptr) {
-		return false;
-	}
-
-	const bool known_magic = (m_self->ident[0] == 0x4f && m_self->ident[1] == 0x15 &&
-	                          m_self->ident[2] == 0x3d && m_self->ident[3] == 0x1d) ||
-	                         (m_self->ident[0] == 0x54 && m_self->ident[1] == 0x14 &&
-	                          m_self->ident[2] == 0xf5 && m_self->ident[3] == 0xee);
+	const std::span<const uint8_t, 12> ident {m_self->ident};
+	constexpr std::array<uint8_t, 4>   magic_v1 {0x4f, 0x15, 0x3d, 0x1d};
+	constexpr std::array<uint8_t, 4>   magic_v2 {0x54, 0x14, 0xf5, 0xee};
+	const auto                         ident_head = ident.first<4>();
+	const bool known_magic = std::ranges::equal(ident_head, magic_v1) ||
+	                         std::ranges::equal(ident_head, magic_v2);
 	if (!known_magic) {
 		return false;
 	}
 
+	constexpr std::array<uint8_t, 8> tail_v1 {0x00, 0x01, 0x01, 0x12, 0x01, 0x01, 0x00, 0x00};
+	constexpr std::array<uint8_t, 8> tail_v2 {0x10, 0x01, 0x01, 0x12, 0x01, 0x01, 0x00, 0x10};
+	const auto                       ident_tail = ident.subspan<4, 8>();
 	const bool known_ident_tail =
-	    (m_self->ident[4] == 0x00 && m_self->ident[5] == 0x01 && m_self->ident[6] == 0x01 &&
-	     m_self->ident[7] == 0x12 && m_self->ident[8] == 0x01 && m_self->ident[9] == 0x01 &&
-	     m_self->ident[10] == 0x00 && m_self->ident[11] == 0x00 && m_self->unknown == 0x22) ||
-	    (m_self->ident[4] == 0x10 && m_self->ident[5] == 0x01 && m_self->ident[6] == 0x01 &&
-	     m_self->ident[7] == 0x12 && m_self->ident[8] == 0x01 && m_self->ident[9] == 0x01 &&
-	     m_self->ident[10] == 0x00 && m_self->ident[11] == 0x10 && m_self->unknown == 0x32);
+	    (std::ranges::equal(ident_tail, tail_v1) && m_self->unknown == 0x22) ||
+	    (std::ranges::equal(ident_tail, tail_v2) && m_self->unknown == 0x32);
 
 	if (!known_ident_tail) {
 		LOGF("Unknown SELF file\n");
