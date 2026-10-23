@@ -8,6 +8,10 @@ QVariantMap Configuration::GameSettings() const {
 	KYTY_CFG_SET(user_id);
 	KYTY_CFG_SET(audio_input_device);
 	KYTY_CFG_SET(present_mode);
+	KYTY_CFG_SET(upscaler_type);
+	KYTY_CFG_SET(upscale_quality);
+	KYTY_CFG_SET(upscale_sharpness);
+	KYTY_CFG_SET(frame_generation_enabled);
 	KYTY_CFG_SET(gpu_index);
 	KYTY_CFG_SET(fullscreen_enabled);
 	KYTY_CFG_SET(hdr_enabled);
@@ -53,6 +57,20 @@ void Configuration::ReadGameSettingsValues(const Settings& s) {
 	                         : Config::DEFAULT_USER_ID;
 	audio_input_device = s.value("audio_input_device", audio_input_device).toString();
 	KYTY_CFG_GET(present_mode);
+	KYTY_CFG_GET(upscaler_type);
+	if (EnumToText(upscaler_type).isEmpty()) {
+		upscaler_type = UpscalerType::Off;
+	}
+	upscale_quality = s.contains("upscale_quality")
+	                      ? s.value("upscale_quality").template value<UpscaleQuality>()
+	                      : UpscaleQuality::Quality;
+	if (EnumToText(upscale_quality).isEmpty()) {
+		upscale_quality = UpscaleQuality::Quality;
+	}
+	bool sharpness_ok        = false;
+	int  saved_sharpness     = s.value("upscale_sharpness", 50).toInt(&sharpness_ok);
+	upscale_sharpness        = sharpness_ok ? qBound(0, saved_sharpness, 100) : 50;
+	frame_generation_enabled = s.value("frame_generation_enabled", false).toBool();
 	gpu_index = s.value("gpu_index", -1).toInt();
 	if (EnumToText(present_mode).isEmpty()) {
 		present_mode = PresentMode::Mailbox;

@@ -188,6 +188,17 @@ ConfigurationEditDialog::ConfigurationEditDialog(Configuration& info, QWidget* p
 	connect(m_ui->slider_controller_vibration, &QSlider::valueChanged, this, [this](int value) {
 		m_ui->label_controller_vibration_value->setText(tr("%1%").arg(value));
 	});
+	connect(m_ui->slider_upscale_sharpness, &QSlider::valueChanged, this, [this](int value) {
+		m_ui->label_upscale_sharpness_value->setText(tr("%1%").arg(value));
+	});
+	connect(m_ui->comboBox_upscaler, &QComboBox::currentTextChanged, this,
+	        [this](const QString& text) {
+		        const bool active =
+		            TextToEnum<Configuration::UpscalerType>(text) != Configuration::UpscalerType::Off;
+		        m_ui->comboBox_upscale_quality->setEnabled(active);
+		        m_ui->slider_upscale_sharpness->setEnabled(active);
+		        m_ui->label_upscale_sharpness_value->setEnabled(active);
+	        });
 	connect(m_ui->slider_controller_volume, &QSlider::valueChanged, this, [this](int value) {
 		m_ui->label_controller_volume_value->setText(tr("%1%").arg(value));
 	});
@@ -285,6 +296,15 @@ void ConfigurationEditDialog::Init(const Configuration& info) {
 	microphone->setCurrentIndex(microphone->findData(info.audio_input_device));
 	ListInit(m_ui->comboBox_screen_resolution, info.screen_resolution);
 	ListInit(m_ui->comboBox_present_mode, info.present_mode);
+	ListInit(m_ui->comboBox_upscaler, info.upscaler_type);
+	ListInit(m_ui->comboBox_upscale_quality, info.upscale_quality);
+	m_ui->slider_upscale_sharpness->setValue(info.upscale_sharpness);
+	m_ui->label_upscale_sharpness_value->setText(tr("%1%").arg(info.upscale_sharpness));
+	const bool upscaler_active = info.upscaler_type != Configuration::UpscalerType::Off;
+	m_ui->comboBox_upscale_quality->setEnabled(upscaler_active);
+	m_ui->slider_upscale_sharpness->setEnabled(upscaler_active);
+	m_ui->label_upscale_sharpness_value->setEnabled(upscaler_active);
+	m_ui->checkBox_frame_generation->setChecked(info.frame_generation_enabled);
 	m_ui->comboBox_gpu->clear();
 	m_ui->comboBox_gpu->addItem(tr("Auto"));
 	// Keep Auto when Qt is built without Vulkan support.
@@ -518,6 +538,12 @@ static void UpdateInfo(Configuration& info, Ui::ConfigurationEditDialog& ui, boo
 	info.present_mode =
 	    TextToEnum<Configuration::PresentMode>(ui.comboBox_present_mode->currentText());
 	info.gpu_index                 = ui.comboBox_gpu->currentIndex() - 1;
+	info.upscaler_type =
+	    TextToEnum<Configuration::UpscalerType>(ui.comboBox_upscaler->currentText());
+	info.upscale_quality =
+	    TextToEnum<Configuration::UpscaleQuality>(ui.comboBox_upscale_quality->currentText());
+	info.upscale_sharpness         = ui.slider_upscale_sharpness->value();
+	info.frame_generation_enabled  = ui.checkBox_frame_generation->isChecked();
 	info.fullscreen_enabled        = ui.checkBox_fullscreen->isChecked();
 	info.hdr_enabled               = ui.checkBox_hdr->isChecked();
 	info.hide_cursor_enabled       = ui.checkBox_hide_cursor->isChecked();

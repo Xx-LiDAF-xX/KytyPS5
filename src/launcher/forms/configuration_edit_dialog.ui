@@ -318,6 +318,57 @@
               <property name="text"><string>Accurate texture synchronization</string></property>
              </widget>
             </item>
+            <item row="10" column="0">
+             <widget class="QLabel" name="label_upscaler">
+              <property name="text"><string>Upscaler:</string></property>
+             </widget>
+            </item>
+            <item row="10" column="1">
+             <widget class="QComboBox" name="comboBox_upscaler">
+              <property name="toolTip"><string>Spatial/temporal super-resolution mode (Off, FSR, DLSS). Works on NVIDIA, AMD, and Intel GPUs. In-game hotkey: F9</string></property>
+             </widget>
+            </item>
+            <item row="11" column="0">
+             <widget class="QLabel" name="label_upscale_quality">
+              <property name="text"><string>Upscale quality:</string></property>
+             </widget>
+            </item>
+            <item row="11" column="1">
+             <widget class="QComboBox" name="comboBox_upscale_quality">
+              <property name="toolTip"><string>Internal render resolution preset when an upscaler is active</string></property>
+             </widget>
+            </item>
+            <item row="12" column="0">
+             <widget class="QLabel" name="label_upscale_sharpness">
+              <property name="text"><string>Upscale sharpness:</string></property>
+             </widget>
+            </item>
+            <item row="12" column="1">
+             <layout class="QHBoxLayout" name="upscale_sharpness_layout">
+              <item>
+               <widget class="QSlider" name="slider_upscale_sharpness">
+                <property name="toolTip"><string>Contrast-adaptive sharpening strength (RCAS, 0-100%)</string></property>
+                <property name="maximum"><number>100</number></property>
+                <property name="singleStep"><number>5</number></property>
+                <property name="pageStep"><number>10</number></property>
+                <property name="value"><number>50</number></property>
+                <property name="orientation"><enum>Qt::Horizontal</enum></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel" name="label_upscale_sharpness_value">
+                <property name="minimumSize"><size><width>40</width><height>0</height></size></property>
+                <property name="text"><string>50%</string></property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+            <item row="13" column="1">
+             <widget class="QCheckBox" name="checkBox_frame_generation">
+              <property name="toolTip"><string>Synthesize a motion-compensated intermediate frame between rendered frames for smoother 2x FPS output. In-game hotkey: F10</string></property>
+              <property name="text"><string>Enable Frame Generation (2x FPS interpolation)</string></property>
+             </widget>
+            </item>
             <item row="9" column="1">
              <widget class="QCheckBox" name="checkBox_hdr">
               <property name="toolTip"><string>Enable HDR10 output for supported games. Requires HDR enabled on the host display.</string></property>

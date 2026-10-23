@@ -128,6 +128,20 @@ void TestFrameGenSceneCutAndResizeReset() {
 	Check(transition > 0.0f && transition < 0.5f, "near-threshold smoothly attenuates blend weight");
 }
 
+void TestLauncherCliStringRoundTrip() {
+	using namespace Config;
+	Check(ParseUpscalerType("off") == UpscalerType::Off, "Launcher enum Off -> off");
+	Check(ParseUpscalerType("fsr") == UpscalerType::Fsr, "Launcher enum Fsr -> fsr");
+	Check(ParseUpscalerType("dlss") == UpscalerType::Dlss, "Launcher enum Dlss -> dlss");
+
+	Check(ParseUpscaleQuality("NativeAA") == UpscaleQuality::NativeAA, "Launcher enum NativeAA");
+	Check(ParseUpscaleQuality("Quality") == UpscaleQuality::Quality, "Launcher enum Quality");
+	Check(ParseUpscaleQuality("Balanced") == UpscaleQuality::Balanced, "Launcher enum Balanced");
+	Check(ParseUpscaleQuality("Performance") == UpscaleQuality::Performance, "Launcher enum Performance");
+	Check(ParseUpscaleQuality("UltraPerformance") == UpscaleQuality::UltraPerformance,
+	      "Launcher enum UltraPerformance");
+}
+
 } // namespace
 
 int main() {
@@ -140,6 +154,7 @@ int main() {
 	TestHotkeyCycleAndStatusTag();
 	TestEmbeddedSpirvShaders();
 	TestFrameGenSceneCutAndResizeReset();
+	TestLauncherCliStringRoundTrip();
 	Config::Shutdown();
 	std::printf("UpscalerFrameGenTests: all checks passed\n");
 	return 0;
