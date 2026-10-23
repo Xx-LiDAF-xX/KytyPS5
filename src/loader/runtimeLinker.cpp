@@ -1325,7 +1325,7 @@ uint64_t RuntimeLinker::GetEntry() {
 
 	Common::LockGuard lock(m_mutex);
 
-	for (const auto* p: m_programs) {
+	for (const auto& p: m_programs) {
 		if (p->elf != nullptr && !p->elf->IsShared()) {
 			return p->elf->GetEntry() + p->base_vaddr;
 		}
@@ -1338,7 +1338,7 @@ uint64_t RuntimeLinker::GetProcParam() {
 
 	Common::LockGuard lock(m_mutex);
 
-	for (const auto* p: m_programs) {
+	for (const auto& p: m_programs) {
 		if (p->elf != nullptr && !p->elf->IsShared()) {
 			return p->proc_param_vaddr;
 		}
@@ -1353,7 +1353,7 @@ void RuntimeLinker::DbgDump(const std::string& folder) {
 
 	Common::LockGuard lock(m_mutex);
 
-	for (const auto* p: m_programs) {
+	for (const auto& p: m_programs) {
 		auto folder_str = Common::FixDirectorySlash(folder);
 		folder_str += Common::FilenameWithoutDirectory(Common::PathToGenericString(p->file_name));
 
@@ -1401,7 +1401,7 @@ void RuntimeLinker::RelocateAll() {
 
 	Common::LockGuard lock(m_mutex);
 
-	for (auto* p: m_programs) {
+	for (const auto& p: m_programs) {
 		Relocate(p);
 	}
 }
@@ -1428,7 +1428,7 @@ void RuntimeLinker::UnloadProgram(Program* program) {
 	auto removed_program = std::move(*it);
 	m_programs.erase(it);
 
-	for (auto* importer: m_programs) {
+	for (const auto& importer: m_programs) {
 		const auto& info = *importer->dynamic_info;
 		const auto rela_count =
 		    static_cast<uint32_t>(info.rela_table_total_size / sizeof(Elf64_Rela));
@@ -1529,7 +1529,7 @@ void RuntimeLinker::SaveMainProgram(const std::filesystem::path& elf_name) {
 
 	Common::LockGuard lock(m_mutex);
 
-	for (const auto* p: m_programs) {
+	for (const auto& p: m_programs) {
 		EXIT_IF(p->elf == nullptr);
 
 		if (!p->elf->IsShared()) {
@@ -1618,9 +1618,6 @@ void RuntimeLinker::Clear() {
 	Common::LockGuard lock(m_mutex);
 	GamePatch::Clear();
 
-	for (auto* p: m_programs) {
-		(void)p;
-	}
 	m_programs.clear();
 	for (const auto page: g_unresolved_stub_thunk_pages) {
 		EXIT_IF(!Libs::LibKernel::Memory::FreeGuestMemory(page, UNRESOLVED_STUB_PAGE_SIZE));
@@ -1675,7 +1672,7 @@ void RuntimeLinker::Resolve(const std::string& name, SymbolType type, Program* p
 				}
 			}
 
-			for (auto* p: m_programs) {
+			for (const auto& p: m_programs) {
 				if (p != nullptr && p->export_symbols != nullptr) {
 					if (const auto* rec = p->export_symbols->FindByNid(nid, type); rec != nullptr) {
 						*out = *rec;
@@ -1704,7 +1701,7 @@ void RuntimeLinker::Resolve(const std::string& name, SymbolType type, Program* p
 			}
 
 			if (rec == nullptr) {
-				for (auto* p: m_programs) {
+				for (const auto& p: m_programs) {
 					const auto& libs = p->dynamic_info->export_libs;
 					const auto& modules = p->dynamic_info->export_modules;
 					if (p->export_symbols == nullptr ||
@@ -1788,7 +1785,7 @@ Program* RuntimeLinker::FindProgramById(int32_t id) {
 		return m_programs.front();
 	}
 
-	for (auto* p: m_programs) {
+	for (const auto& p: m_programs) {
 		if (p->unique_id == id) {
 			return p;
 		}
@@ -1801,7 +1798,7 @@ Program* RuntimeLinker::FindProgramByFileName(const std::filesystem::path& elf_n
 	Common::LockGuard lock(m_mutex);
 
 	auto fixed_name = Common::FixFilenameSlash(Common::PathToGenericString(elf_name));
-	for (auto* p: m_programs) {
+	for (const auto& p: m_programs) {
 		if (Common::EqualNoCase(Common::FixFilenameSlash(Common::PathToGenericString(p->file_name)),
 		                        fixed_name)) {
 			return p;
@@ -1814,7 +1811,7 @@ Program* RuntimeLinker::FindProgramByFileName(const std::filesystem::path& elf_n
 Program* RuntimeLinker::FindProgramByAddr(uint64_t vaddr) {
 	Common::LockGuard lock(m_mutex);
 
-	for (auto* p: m_programs) {
+	for (const auto& p: m_programs) {
 		const auto* ehdr = p->elf->GetEhdr();
 		const auto* phdr = p->elf->GetPhdr();
 
@@ -1858,7 +1855,7 @@ void RuntimeLinker::StackTrace(uint64_t frame_ptr, uint64_t stack_ptr) {
 void RuntimeLinker::StopAllModules() {
 	Common::LockGuard lock(m_mutex);
 
-	for (auto* p: m_programs) {
+	for (const auto& p: m_programs) {
 		if (p->elf->IsShared() && p->dynamic_info->fini_vaddr != 0) {
 			StopModule(p, 0, nullptr, nullptr);
 		}
@@ -2503,7 +2500,7 @@ void RuntimeLinker::SetupTlsHandler(Program* program) {
 void RuntimeLinker::DeleteTlss(int thread_id) {
 	Common::LockGuard lock(m_mutex);
 
-	for (auto* p: m_programs) {
+	for (const auto& p: m_programs) {
 		DeleteTls(p, thread_id);
 	}
 }

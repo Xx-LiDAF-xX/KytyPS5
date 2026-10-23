@@ -5,6 +5,7 @@
 #include "common/logging/log.h"
 
 #include <cstring>
+#include <format>
 #include <memory>
 
 namespace Loader {
@@ -121,51 +122,62 @@ static std::unique_ptr<char[]> LoadStrTable(Common::File& f, uint64_t offset, ui
 	return str_table;
 }
 
-static void DbgPrintEhdr64(Elf64_Ehdr* ehdr, Common::File& f) {
+static void DbgPrintEhdr64(const Elf64_Ehdr* ehdr, Common::File& f) {
 	f.Printf("ehdr->e_ident = ");
 	for (auto i: ehdr->e_ident) {
-		f.Printf("%02x", i);
+		f.Printf("%s", std::format("{:02x}", i).c_str());
 	}
 	f.Printf("\n");
 
-	f.Printf("ehdr->e_type = 0x%04" PRIx16 "\n", ehdr->e_type);
-	f.Printf("ehdr->e_machine = 0x%04" PRIx16 "\n", ehdr->e_machine);
-	f.Printf("ehdr->e_version = 0x%08" PRIx32 "\n", ehdr->e_version);
-
-	f.Printf("ehdr->e_entry = 0x%016" PRIx64 "\n", ehdr->e_entry);
-	f.Printf("ehdr->e_phoff = 0x%016" PRIx64 "\n", ehdr->e_phoff);
-	f.Printf("ehdr->e_shoff = 0x%016" PRIx64 "\n", ehdr->e_shoff);
-	f.Printf("ehdr->e_flags = 0x%08" PRIx32 "\n", ehdr->e_flags);
-	f.Printf("ehdr->e_ehsize = 0x%04" PRIx16 "\n", ehdr->e_ehsize);
-	f.Printf("ehdr->e_phentsize = 0x%04" PRIx16 "\n", ehdr->e_phentsize);
-	f.Printf("ehdr->e_phnum = %" PRIu16 "\n", ehdr->e_phnum);
-	f.Printf("ehdr->e_shentsize = 0x%04" PRIx16 "\n", ehdr->e_shentsize);
-	f.Printf("ehdr->e_shnum = %" PRIu16 "\n", ehdr->e_shnum);
-	f.Printf("ehdr->e_shstrndx = %" PRIu16 "\n", ehdr->e_shstrndx);
+	f.Printf("%s", std::format("ehdr->e_type = 0x{:04x}\n"
+	                           "ehdr->e_machine = 0x{:04x}\n"
+	                           "ehdr->e_version = 0x{:08x}\n"
+	                           "ehdr->e_entry = 0x{:016x}\n"
+	                           "ehdr->e_phoff = 0x{:016x}\n"
+	                           "ehdr->e_shoff = 0x{:016x}\n"
+	                           "ehdr->e_flags = 0x{:08x}\n"
+	                           "ehdr->e_ehsize = 0x{:04x}\n"
+	                           "ehdr->e_phentsize = 0x{:04x}\n"
+	                           "ehdr->e_phnum = {}\n"
+	                           "ehdr->e_shentsize = 0x{:04x}\n"
+	                           "ehdr->e_shnum = {}\n"
+	                           "ehdr->e_shstrndx = {}\n",
+	                           ehdr->e_type, ehdr->e_machine, ehdr->e_version, ehdr->e_entry,
+	                           ehdr->e_phoff, ehdr->e_shoff, ehdr->e_flags, ehdr->e_ehsize,
+	                           ehdr->e_phentsize, ehdr->e_phnum, ehdr->e_shentsize, ehdr->e_shnum,
+	                           ehdr->e_shstrndx)
+	                   .c_str());
 }
 
-static void DbgPrintPhdr64(Elf64_Phdr* phdr, Common::File& f) {
-	f.Printf("phdr->p_type = 0x%08" PRIx32 "\n", phdr->p_type);
-	f.Printf("phdr->p_flags = 0x%08" PRIx32 "\n", phdr->p_flags);
-	f.Printf("phdr->p_offset = 0x%016" PRIx64 "\n", phdr->p_offset);
-	f.Printf("phdr->p_vaddr = 0x%016" PRIx64 "\n", phdr->p_vaddr);
-	f.Printf("phdr->p_paddr = 0x%016" PRIx64 "\n", phdr->p_paddr);
-	f.Printf("phdr->p_filesz = 0x%016" PRIx64 "\n", phdr->p_filesz);
-	f.Printf("phdr->p_memsz = 0x%016" PRIx64 "\n", phdr->p_memsz);
-	f.Printf("phdr->p_align = 0x%016" PRIx64 "\n", phdr->p_align);
+static void DbgPrintPhdr64(const Elf64_Phdr* phdr, Common::File& f) {
+	f.Printf("%s", std::format("phdr->p_type = 0x{:08x}\n"
+	                           "phdr->p_flags = 0x{:08x}\n"
+	                           "phdr->p_offset = 0x{:016x}\n"
+	                           "phdr->p_vaddr = 0x{:016x}\n"
+	                           "phdr->p_paddr = 0x{:016x}\n"
+	                           "phdr->p_filesz = 0x{:016x}\n"
+	                           "phdr->p_memsz = 0x{:016x}\n"
+	                           "phdr->p_align = 0x{:016x}\n",
+	                           phdr->p_type, phdr->p_flags, phdr->p_offset, phdr->p_vaddr,
+	                           phdr->p_paddr, phdr->p_filesz, phdr->p_memsz, phdr->p_align)
+	                   .c_str());
 }
 
-static void DbgPrintShdr64(Elf64_Shdr* shdr, Common::File& f) {
-	f.Printf("shdr->sh_name = %d\n", shdr->sh_name);
-	f.Printf("shdr->sh_type = 0x%08" PRIx32 "\n", shdr->sh_type);
-	f.Printf("shdr->sh_flags = 0x%016" PRIx64 "\n", shdr->sh_flags);
-	f.Printf("shdr->sh_addr = 0x%016" PRIx64 "\n", shdr->sh_addr);
-	f.Printf("shdr->sh_offset = 0x%016" PRIx64 "\n", shdr->sh_offset);
-	f.Printf("shdr->sh_size = 0x%016" PRIx64 "\n", shdr->sh_size);
-	f.Printf("shdr->sh_link = %" PRId32 "\n", shdr->sh_link);
-	f.Printf("shdr->sh_info = 0x%08" PRIx32 "\n", shdr->sh_info);
-	f.Printf("shdr->sh_addralign = 0x%016" PRIx64 "\n", shdr->sh_addralign);
-	f.Printf("shdr->sh_entsize = 0x%016" PRIx64 "\n", shdr->sh_entsize);
+static void DbgPrintShdr64(const Elf64_Shdr* shdr, Common::File& f) {
+	f.Printf("%s", std::format("shdr->sh_name = {}\n"
+	                           "shdr->sh_type = 0x{:08x}\n"
+	                           "shdr->sh_flags = 0x{:016x}\n"
+	                           "shdr->sh_addr = 0x{:016x}\n"
+	                           "shdr->sh_offset = 0x{:016x}\n"
+	                           "shdr->sh_size = 0x{:016x}\n"
+	                           "shdr->sh_link = {}\n"
+	                           "shdr->sh_info = 0x{:08x}\n"
+	                           "shdr->sh_addralign = 0x{:016x}\n"
+	                           "shdr->sh_entsize = 0x{:016x}\n",
+	                           shdr->sh_name, shdr->sh_type, shdr->sh_flags, shdr->sh_addr,
+	                           shdr->sh_offset, shdr->sh_size, shdr->sh_link, shdr->sh_info,
+	                           shdr->sh_addralign, shdr->sh_entsize)
+	                   .c_str());
 }
 
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
@@ -356,17 +368,10 @@ void Elf64::DbgDump(const std::string& folder) {
 			continue;
 		}
 
-		char str[512];
-		int  s = snprintf(str, 512, "phdr_%03d", i);
-		EXIT_NOT_IMPLEMENTED(s >= 512);
-
 		Common::File fout;
-		fout.Create(folder_str + str);
+		fout.Create(std::format("{}phdr_{:03d}", folder_str, i));
 
 		auto buf = std::make_unique<char[]>(static_cast<uint32_t>(m_phdr[i].p_filesz));
-
-		// m_f->Seek(m_phdr[i].p_offset);
-		// m_f->Read(buf, static_cast<uint32_t>(m_phdr[i].p_filesz));
 
 		LoadSegment(reinterpret_cast<uint64_t>(buf.get()), m_phdr[i].p_offset, m_phdr[i].p_filesz);
 
@@ -380,12 +385,8 @@ void Elf64::DbgDump(const std::string& folder) {
 			continue;
 		}
 
-		char str[512];
-		int  s = snprintf(str, 512, "shdr_%03d", i);
-		EXIT_NOT_IMPLEMENTED(s >= 512);
-
 		Common::File fout;
-		fout.Create(folder_str + str);
+		fout.Create(std::format("{}shdr_{:03d}", folder_str, i));
 
 		auto buf = std::make_unique<char[]>(static_cast<uint32_t>(m_shdr[i].sh_size));
 
@@ -424,7 +425,7 @@ void Elf64::DbgDump(const std::string& folder) {
 	fout.Close();
 }
 
-uint64_t Elf64::GetEntry() {
+uint64_t Elf64::GetEntry() const {
 	return m_ehdr->e_entry;
 }
 

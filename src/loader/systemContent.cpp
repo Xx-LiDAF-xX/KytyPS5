@@ -12,9 +12,12 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <version>
 #include <vector>
 
 namespace Loader {
@@ -245,16 +248,16 @@ void Psf::DbgPrint() {
 	}
 
 	for (const auto& param: m_params) {
-		LOGF("%s, ", param.name.c_str());
-
 		switch (param.type) {
 			case ParamType::Text: {
-				auto str = Common::ReplaceChar(param.string_value, '\n', ',');
-				LOGF("string = %s\n", str.c_str());
+				const auto str = Common::ReplaceChar(param.string_value, '\n', ',');
+				LOGF("%s\n", std::format("{}, string = {}", param.name, str).c_str());
 				break;
 			}
 			case ParamType::Int:
-				LOGF("int = 0x%08" PRIx32 "\n", static_cast<uint32_t>(param.int_value));
+				LOGF("%s\n",
+				     std::format("{}, int = 0x{:08x}", param.name, static_cast<uint32_t>(param.int_value))
+				         .c_str());
 				break;
 			default: EXIT("unknown type\n");
 		}
@@ -616,24 +619,60 @@ void SystemContentLoadParamSfo(const std::filesystem::path& file_name) {
 	}
 }
 
+std::optional<int32_t> SystemContentParamSfoGetInt(const char* name) {
+	if (name == nullptr) {
+		return std::nullopt;
+	}
+
+	auto*   sc    = Common::Singleton<SystemContent>::Instance();
+	int32_t value = 0;
+	if (!sc->psf.GetParamInt(name, &value)) {
+		return std::nullopt;
+	}
+
+	return value;
+}
+
 bool SystemContentParamSfoGetInt(const char* name, int32_t* value) {
-	if (name == nullptr || value == nullptr) {
+	if (value == nullptr) {
 		return false;
 	}
 
-	auto* sc = Common::Singleton<SystemContent>::Instance();
+	const auto opt = SystemContentParamSfoGetInt(name);
+	if (!opt.has_value()) {
+		return false;
+	}
 
-	return sc->psf.GetParamInt(name, value);
+	*value = *opt;
+	return true;
+}
+
+std::optional<std::string> SystemContentParamSfoGetString(const char* name) {
+	if (name == nullptr) {
+		return std::nullopt;
+	}
+
+	auto*       sc = Common::Singleton<SystemContent>::Instance();
+	std::string value;
+	if (!sc->psf.GetParamString(name, &value)) {
+		return std::nullopt;
+	}
+
+	return value;
 }
 
 bool SystemContentParamSfoGetString(const char* name, std::string* value) {
-	if (name == nullptr || value == nullptr) {
+	if (value == nullptr) {
 		return false;
 	}
 
-	auto* sc = Common::Singleton<SystemContent>::Instance();
+	auto opt = SystemContentParamSfoGetString(name);
+	if (!opt.has_value()) {
+		return false;
+	}
 
-	return sc->psf.GetParamString(name, value);
+	*value = std::move(*opt);
+	return true;
 }
 
 bool SystemContentParamSfoGetString(const char* name, char* value, size_t value_size) {
@@ -644,6 +683,30 @@ bool SystemContentParamSfoGetString(const char* name, char* value, size_t value_
 	auto* sc = Common::Singleton<SystemContent>::Instance();
 
 	return sc->psf.GetParamString(name, value, value_size);
+}
+
+std::string SystemContentResolveTitleId() {
+	auto extract_from_content_id = []() -> std::optional<std::string> {
+		auto content_id = SystemContentParamSfoGetString("CONTENT_ID");
+		if (content_id.has_value() && content_id->size() == 36 && (*content_id)[6] == '-' &&
+		    (*content_id)[16] == '_') {
+			return content_id->substr(7, 9);
+		}
+		return std::nullopt;
+	};
+
+	auto title_id = SystemContentParamSfoGetString("TITLE_ID");
+	if (title_id.has_value() && title_id->empty()) {
+		title_id.reset();
+	}
+#if defined(__cpp_lib_optional) && __cpp_lib_optional >= 202110L
+	return title_id.or_else(extract_from_content_id).value_or(std::string {});
+#else
+	if (!title_id.has_value()) {
+		title_id = extract_from_content_id();
+	}
+	return title_id.value_or(std::string {});
+#endif
 }
 
 uint64_t SystemContentGetFlexibleMemorySize() {

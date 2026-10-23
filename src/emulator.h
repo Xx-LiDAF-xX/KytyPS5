@@ -1,5 +1,4 @@
-#ifndef EMULATOR_INCLUDE_EMULATOR_EMULATOR_H_
-#define EMULATOR_INCLUDE_EMULATOR_EMULATOR_H_
+#pragma once
 
 #include "common/emulatorConfig.h"
 #include "common/stringUtils.h"
@@ -16,9 +15,7 @@ struct RunOptions {
 	std::filesystem::path addcont_dir;
 };
 
-void Run(const RunOptions& options);
-int LoadExec(const char* path, const char* const argv[]);
+void              Run(const RunOptions& options);
+[[nodiscard]] int LoadExec(const char* path, const char* const argv[]);
 
 } // namespace Emulator
-
-#endif /* EMULATOR_INCLUDE_EMULATOR_EMULATOR_H_ */

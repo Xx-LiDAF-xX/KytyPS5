@@ -1,5 +1,4 @@
-#ifndef EMULATOR_INCLUDE_EMULATOR_LOADER_ELF_H_
-#define EMULATOR_INCLUDE_EMULATOR_LOADER_ELF_H_
+#pragma once
 
 #include "common/abi.h"
 #include "common/common.h"
@@ -257,7 +256,7 @@ public:
 
 	void DbgDump(const std::string& folder);
 
-	const char* GetSectionName(int index) const;
+	[[nodiscard]] const char* GetSectionName(int index) const;
 
 	[[nodiscard]] bool IsSelf() const;
 	[[nodiscard]] bool IsValid() const;
@@ -266,7 +265,7 @@ public:
 
 	void LoadSegment(uint64_t vaddr, uint64_t file_offset, uint64_t size);
 
-	uint64_t GetEntry();
+	[[nodiscard]] uint64_t GetEntry() const;
 
 	[[nodiscard]] const Elf64_Dyn*              GetDynValue(Elf64_Sxword tag) const;
 	[[nodiscard]] std::vector<const Elf64_Dyn*> GetDynList(Elf64_Sxword tag) const;
@@ -305,5 +304,3 @@ private:
 };
 
 } // namespace Loader
-
-#endif /* EMULATOR_INCLUDE_EMULATOR_LOADER_ELF_H_ */

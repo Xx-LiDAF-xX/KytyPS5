@@ -1,5 +1,4 @@
-#ifndef EMULATOR_INCLUDE_EMULATOR_LOADER_RUNTIMELINKER_H_
-#define EMULATOR_INCLUDE_EMULATOR_LOADER_RUNTIMELINKER_H_
+#pragma once
 
 #include "common/abi.h"
 #include "common/common.h"
@@ -31,7 +30,7 @@ using application_heap_malloc_func_t         = KYTY_SYSV_ABI void* (*)(uint64_t)
 using application_heap_posix_memalign_func_t = KYTY_SYSV_ABI int (*)(void**, uint64_t, uint64_t);
 
 struct ModuleId {
-	bool operator==(const ModuleId& other) const {
+	[[nodiscard]] bool operator==(const ModuleId& other) const noexcept {
 		return version_major == other.version_major && version_minor == other.version_minor &&
 		       name == other.name;
 	}
@@ -43,7 +42,7 @@ struct ModuleId {
 };
 
 struct LibraryId {
-	bool operator==(const LibraryId& other) const {
+	[[nodiscard]] bool operator==(const LibraryId& other) const noexcept {
 		return version == other.version && name == other.name;
 	}
 
@@ -165,27 +164,27 @@ public:
 	void RelocateAll();
 	void RelocateProgram(Program* program);
 
-	void  Execute(const std::filesystem::path& game_patch = {});
-	int   StartModule(Program* program, size_t args, const void* argp, module_func_t func);
-	int   StopModule(Program* program, size_t args, const void* argp, module_func_t func);
-	void  StopAllModules();
-	void  DeleteTlss(int thread_id);
-	void  SetApplicationHeapApi(void* const api[10]);
-	void* ApplicationHeapMalloc(uint64_t size);
-	void* ApplicationHeapMemalign(uint64_t alignment, uint64_t size);
+	void                Execute(const std::filesystem::path& game_patch = {});
+	int                 StartModule(Program* program, size_t args, const void* argp, module_func_t func);
+	int                 StopModule(Program* program, size_t args, const void* argp, module_func_t func);
+	void                StopAllModules();
+	void                DeleteTlss(int thread_id);
+	void                SetApplicationHeapApi(void* const api[10]);
+	[[nodiscard]] void* ApplicationHeapMalloc(uint64_t size);
+	[[nodiscard]] void* ApplicationHeapMemalign(uint64_t alignment, uint64_t size);
 
 	void Resolve(const std::string& name, SymbolType type, Program* program, SymbolRecord* out_info,
 	             bool* bind_self);
 
-	SymbolDatabase* Symbols() { return m_symbols.get(); }
+	[[nodiscard]] SymbolDatabase* Symbols() noexcept { return m_symbols.get(); }
 
-	static uint64_t ReadFromElf(Program* program, uint64_t vaddr);
-	Program*        FindProgramByAddr(uint64_t vaddr);
-	Program*        FindProgramById(int32_t id);
-	Program*        FindProgramByFileName(const std::filesystem::path& elf_name);
+	[[nodiscard]] static uint64_t ReadFromElf(Program* program, uint64_t vaddr);
+	[[nodiscard]] Program*        FindProgramByAddr(uint64_t vaddr);
+	[[nodiscard]] Program*        FindProgramById(int32_t id);
+	[[nodiscard]] Program*        FindProgramByFileName(const std::filesystem::path& elf_name);
 
-	static uint8_t* TlsGetAddr(Program* program);
-	static void     DeleteTls(Program* program, int thread_id);
+	[[nodiscard]] static uint8_t* TlsGetAddr(Program* program);
+	static void                   DeleteTls(Program* program, int thread_id);
 
 	void StackTrace(uint64_t frame_ptr, uint64_t stack_ptr);
 
@@ -212,7 +211,6 @@ private:
 		Program*               operator->() const noexcept { return m_ptr.get(); }
 		Program&               operator*() const noexcept { return *m_ptr; }
 		                       operator Program*() const noexcept { return m_ptr.get(); }
-		bool operator==(const Program* other) const noexcept { return m_ptr.get() == other; }
 
 	private:
 		std::unique_ptr<Program, ProgramDeleter> m_ptr;
@@ -237,5 +235,3 @@ bool TestModuleRelocationUsesWritableHostMapping();
 #endif
 
 } // namespace Loader
-
-#endif /* EMULATOR_INCLUDE_EMULATOR_LOADER_RUNTIMELINKER_H_ */
