@@ -23,6 +23,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <magic_enum.hpp>
+#include <memory>
 #include <vector>
 
 namespace Libs::Audio {
@@ -415,7 +416,7 @@ private:
 
 DeviceTrace Audio::s_device_trace[Audio::OUT_PORTS_MAX];
 
-static Audio* g_audio = nullptr;
+static std::unique_ptr<Audio> g_audio;
 
 namespace AudioInternal {
 
@@ -476,7 +477,7 @@ void Initialize() {
 	// Audio diagnostics reach the printf file too: players send _kyty.txt, not the console.
 	Diag::ConsoleLogWriter().store(+[](const std::string& text) { Log::WriteToConsoleAndLog(text); });
 
-	g_audio = new Audio;
+	g_audio = std::make_unique<Audio>();
 	if (Diag::TraceEnabled()) {
 		Diag::Trace("on: output target latency %.0f ms, queue catch-up %s",
 		            static_cast<double>(audio_out_target_latency_us()) / 1000.0,
@@ -501,8 +502,8 @@ void Initialize() {
 }
 
 void Shutdown() {
-	delete g_audio;
-	g_audio = nullptr;
+	g_audio.reset();
+
 }
 
 Audio::~Audio() {

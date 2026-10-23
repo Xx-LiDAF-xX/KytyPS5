@@ -54,6 +54,12 @@ struct LibraryId {
 
 struct ThreadLocalStorage {
 	struct Block {
+		Block() = default;
+		~Block();
+		Block(const Block&)            = delete;
+		Block& operator=(const Block&) = delete;
+		Block(Block&& other) noexcept;
+		Block& operator=(Block&& other) noexcept;
 		uint8_t*                     ptr        = nullptr;
 		application_heap_free_func_t free_func  = nullptr;
 		bool                         vm_alloc   = false;
@@ -189,12 +195,34 @@ private:
 	static void CreateSymbolDatabase(Program* program);
 	static void Relocate(Program* program);
 	static void DeleteProgram(Program* program);
+	struct ProgramDeleter {
+		void operator()(Program* p) const noexcept { RuntimeLinker::DeleteProgram(p); }
+	};
+	class OwnedProgramPtr {
+	public:
+		OwnedProgramPtr() = default;
+		explicit OwnedProgramPtr(std::unique_ptr<Program> p) noexcept: m_ptr(p.release()) {}
+		~OwnedProgramPtr()                                     = default;
+		OwnedProgramPtr(const OwnedProgramPtr&)                = delete;
+		OwnedProgramPtr& operator=(const OwnedProgramPtr&)     = delete;
+		OwnedProgramPtr(OwnedProgramPtr&&) noexcept            = default;
+		OwnedProgramPtr& operator=(OwnedProgramPtr&&) noexcept = default;
+
+		[[nodiscard]] Program* get() const noexcept { return m_ptr.get(); }
+		Program*               operator->() const noexcept { return m_ptr.get(); }
+		Program&               operator*() const noexcept { return *m_ptr; }
+		                       operator Program*() const noexcept { return m_ptr.get(); }
+		bool operator==(const Program* other) const noexcept { return m_ptr.get() == other; }
+
+	private:
+		std::unique_ptr<Program, ProgramDeleter> m_ptr;
+	};
 	static void SetupTlsHandler(Program* program);
 
 	static const ModuleId*  FindModule(const Program& program, const std::string& id);
 	static const LibraryId* FindLibrary(const Program& program, const std::string& id);
 
-	std::vector<Program*>           m_programs;
+	std::vector<OwnedProgramPtr>    m_programs;
 	std::unique_ptr<SymbolDatabase> m_symbols;
 	Common::Mutex                   m_mutex;
 

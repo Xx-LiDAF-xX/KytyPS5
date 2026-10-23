@@ -93,6 +93,27 @@ static uint64_t AlignUp(uint64_t value, uint64_t alignment) {
 	return alignment != 0 ? (value + alignment - 1) & ~(alignment - 1) : value;
 }
 
+ThreadLocalStorage::Block::~Block() {
+	FreeTlsBlock(this);
+}
+
+ThreadLocalStorage::Block::Block(Block&& other) noexcept
+    : ptr(std::exchange(other.ptr, nullptr)),
+      free_func(std::exchange(other.free_func, nullptr)),
+      vm_alloc(std::exchange(other.vm_alloc, false)),
+      alloc_size(std::exchange(other.alloc_size, 0)) {}
+
+ThreadLocalStorage::Block& ThreadLocalStorage::Block::operator=(Block&& other) noexcept {
+	if (this != &other) {
+		FreeTlsBlock(this);
+		ptr        = std::exchange(other.ptr, nullptr);
+		free_func  = std::exchange(other.free_func, nullptr);
+		vm_alloc   = std::exchange(other.vm_alloc, false);
+		alloc_size = std::exchange(other.alloc_size, 0);
+	}
+	return *this;
+}
+
 ThreadLocalStorage::~ThreadLocalStorage() {
 	for (auto& [_, block]: tlss) {
 		FreeTlsBlock(&block);
@@ -133,7 +154,15 @@ struct StubbedImportRecord {
 // Each thunk passes its record's address: records never move, so a stub call reads its record
 // without touching the vector (which grows while modules load).
 static std::vector<std::unique_ptr<StubbedImportRecord>> g_stubbed_imports;
-static std::vector<uint64_t>            g_unresolved_stub_thunk_pages;
+struct ScopedThunkPageList: std::vector<uint64_t> {
+	static constexpr uint64_t PAGE_SIZE = 4096;
+	~ScopedThunkPageList() {
+		for (const auto page: *this) {
+			(void)Libs::LibKernel::Memory::FreeGuestMemory(page, PAGE_SIZE);
+		}
+	}
+};
+static ScopedThunkPageList              g_unresolved_stub_thunk_pages;
 static uint64_t                         g_unresolved_stub_thunk_offset = 0;
 static constexpr uint64_t               UNRESOLVED_STUB_PAGE_SIZE      = 4096;
 
@@ -186,7 +215,7 @@ static uint64_t AllocateUnresolvedImportThunk(uint64_t record_address) {
 // guest return address and stack exactly as the direct call would. Counters live in ordinary
 // host memory, away from the executable page.
 static std::mutex            g_count_thunk_mutex;
-static std::vector<uint64_t> g_count_thunk_pages;
+static ScopedThunkPageList   g_count_thunk_pages;
 static uint64_t              g_count_thunk_offset = 0;
 
 static uint64_t GetCountingImportThunk(uint64_t target, const RelocationInfo& ri,
@@ -1396,6 +1425,7 @@ void RuntimeLinker::UnloadProgram(Program* program) {
 
 	auto it = std::find(m_programs.begin(), m_programs.end(), program);
 	EXIT_IF(it == m_programs.end());
+	auto removed_program = std::move(*it);
 	m_programs.erase(it);
 
 	for (auto* importer: m_programs) {
@@ -1439,7 +1469,7 @@ void RuntimeLinker::UnloadProgram(Program* program) {
 			}
 		});
 	}
-	DeleteProgram(program);
+	// removed_program's RAII destructor calls DeleteProgram(program) on scope exit.
 }
 
 RuntimeLinker::RuntimeLinker(): m_symbols(std::make_unique<SymbolDatabase>()) {
@@ -1479,7 +1509,7 @@ Program* RuntimeLinker::LoadProgram(const std::filesystem::path& elf_name) {
 		EXIT("elf is not valid: %s\n", Common::PathToString(elf_name).c_str());
 	}
 
-	m_programs.push_back(program_owner.release());
+	m_programs.emplace_back(std::move(program_owner));
 
 	if (!program->elf->IsShared()) {
 		program->fail_if_global_not_resolved = false;
@@ -1548,8 +1578,9 @@ void RuntimeLinker::Execute(const std::filesystem::path& game_patch) {
 	RelocateAll();
 
 	if (!game_patch.empty()) {
+		const std::vector<Program*> program_views(m_programs.begin(), m_programs.end());
 		if (!GamePatch::Apply(game_patch, m_programs.empty() ? nullptr : m_programs.front(),
-		                      m_programs)) {
+		                      program_views)) {
 			EXIT("Failed to apply game cheat\n");
 		}
 	}
@@ -1588,7 +1619,7 @@ void RuntimeLinker::Clear() {
 	GamePatch::Clear();
 
 	for (auto* p: m_programs) {
-		DeleteProgram(p);
+		(void)p;
 	}
 	m_programs.clear();
 	for (const auto page: g_unresolved_stub_thunk_pages) {
@@ -1597,6 +1628,14 @@ void RuntimeLinker::Clear() {
 	g_unresolved_stub_thunk_pages.clear();
 	g_unresolved_stub_thunk_offset = 0;
 	g_stubbed_imports.clear();
+	{
+		std::scoped_lock count_lock(g_count_thunk_mutex);
+		for (const auto page: g_count_thunk_pages) {
+			EXIT_IF(!Libs::LibKernel::Memory::FreeGuestMemory(page, UNRESOLVED_STUB_PAGE_SIZE));
+		}
+		g_count_thunk_pages.clear();
+		g_count_thunk_offset = 0;
+	}
 	if (g_invalid_memory != 0) {
 		EXIT_IF(!Libs::LibKernel::Memory::FreeGuestMemory(g_invalid_memory, 4096));
 		g_invalid_memory = 0;
@@ -2161,6 +2200,9 @@ void RuntimeLinker::LoadProgramToMemory(Program* program) {
 }
 
 void RuntimeLinker::DeleteProgram(Program* p) {
+	if (p == nullptr) {
+		return;
+	}
 	auto program = std::unique_ptr<Program>(p);
 	if (g_tls_main_program == program.get()) {
 		g_tls_main_program = nullptr;

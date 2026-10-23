@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <memory>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -152,7 +153,7 @@ public:
 	bool HttpSetAutoRedirect(Id id, int enable);
 	bool HttpSetAuthEnabled(Id id, int enable);
 	bool HttpMarkRequestSent(Id req_id, int result);
-	bool HttpGetRequestResponse(Id req_id, int* send_result, int* status_code, const char** headers,
+	bool HttpGetRequestResponse(Id req_id, int* send_result, int* status_code, std::string* headers,
 	                            size_t* headers_size, uint64_t* content_length);
 
 private:
@@ -245,17 +246,17 @@ private:
 	std::vector<HttpRequest>    m_requests;
 };
 
-static Network* g_net = nullptr;
+static std::unique_ptr<Network> g_net;
 
 void Initialize() {
 	EXIT_IF(g_net != nullptr);
 
-	g_net = new Network;
+	g_net = std::make_unique<Network>();
 }
 
 void Shutdown() {
-	delete g_net;
-	g_net = nullptr;
+	g_net.reset();
+
 }
 
 int Network::PoolCreate(const char* name, int size) {
@@ -624,7 +625,7 @@ bool Network::HttpMarkRequestSent(Id req_id, int result) {
 }
 
 bool Network::HttpGetRequestResponse(Id req_id, int* send_result, int* status_code,
-                                     const char** headers, size_t* headers_size,
+                                     std::string* headers, size_t* headers_size,
                                      uint64_t* content_length) {
 	Common::LockGuard lock(m_mutex);
 
@@ -643,7 +644,7 @@ bool Network::HttpGetRequestResponse(Id req_id, int* send_result, int* status_co
 		*status_code = request.status_code;
 	}
 	if (headers != nullptr) {
-		*headers = request.response_headers.c_str();
+		*headers = request.response_headers;
 	}
 	if (headers_size != nullptr) {
 		*headers_size = request.response_headers.size();
@@ -3188,14 +3189,14 @@ int KYTY_SYSV_ABI HttpGetAllResponseHeaders(int request_id, char** header, size_
 	EXIT_IF(g_net == nullptr);
 
 	int         send_result  = HTTP_ERROR_BEFORE_SEND;
-	const char* headers      = nullptr;
+	thread_local std::string headers;
 	size_t      headers_size = 0;
 	if (!g_net->HttpGetRequestResponse(Network::Id(request_id), &send_result, nullptr, &headers,
 	                                   &headers_size, nullptr)) {
 		return HTTP_ERROR_INVALID_ID;
 	}
 
-	*header      = const_cast<char*>(headers);
+	*header      = headers.data();
 	*header_size = headers_size;
 
 	return send_result;

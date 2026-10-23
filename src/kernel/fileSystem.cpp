@@ -22,6 +22,8 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <memory>
+#include <utility>
 #include <optional>
 #include <random>
 #include <system_error>
@@ -93,12 +95,13 @@ public:
 	void  CloseAll();
 
 private:
-	std::vector<File*> m_files;
+	std::vector<std::unique_ptr<File>> m_files;
 	Common::Mutex      m_mutex;
 };
 
-static MountPoints*     g_mount_points = nullptr;
-static FileDescriptors* g_files        = nullptr;
+static std::unique_ptr<MountPoints>     g_mount_points;
+static std::unique_ptr<FileDescriptors> g_files;
+
 
 static bool IsRandomDevice(const std::string& path) {
 	return path == "/dev/random" || path == "/dev/urandom";
@@ -178,7 +181,7 @@ static int PosixToKernel(int posix_errno) {
 int FileDescriptors::CreateDescriptor() {
 	Common::LockGuard lock(m_mutex);
 
-	auto* file        = new File {};
+	auto file         = std::make_unique<File>();
 	file->opened      = false;
 	file->directory   = false;
 	file->readable    = false;
@@ -190,12 +193,12 @@ int FileDescriptors::CreateDescriptor() {
 	int files_num = static_cast<int>(m_files.size());
 	for (int index = 0; index < files_num; index++) {
 		if (m_files[index] == nullptr) {
-			m_files[index] = file;
+			m_files[index] = std::move(file);
 			return index + DESCRIPTOR_MIN;
 		}
 	}
 
-	m_files.push_back(file);
+	m_files.push_back(std::move(file));
 	return static_cast<int>(m_files.size()) + DESCRIPTOR_MIN - 1;
 }
 
@@ -213,8 +216,8 @@ void FileDescriptors::DeleteDescriptor(int d) {
 	m_files[index]->f.Close();
 #endif
 
-	delete m_files[index];
-	m_files[index] = nullptr;
+	m_files[index].reset();
+
 }
 
 File* FileDescriptors::GetFile(int d) {
@@ -226,15 +229,15 @@ File* FileDescriptors::GetFile(int d) {
 		return nullptr;
 	}
 
-	return m_files[index];
+	return m_files[index].get();
 }
 
 File* FileDescriptors::GetFile(const std::filesystem::path& real_name) {
 	Common::LockGuard lock(m_mutex);
 
-	for (auto* f: m_files) {
+	for (const auto& f: m_files) {
 		if (f != nullptr && f->real_name == real_name) {
-			return f;
+		return f.get();
 		}
 	}
 
@@ -249,8 +252,8 @@ void FileDescriptors::CloseAll() {
 			if (f->opened) {
 				f->f.Close();
 			}
-			delete f;
-			f = nullptr;
+			f.reset();
+
 		}
 	}
 }
@@ -371,8 +374,8 @@ std::filesystem::path MountPoints::ResolvePath(const std::string& mounted_name) 
 }
 
 void Initialize() {
-	g_mount_points = new MountPoints;
-	g_files        = new FileDescriptors;
+	g_mount_points = std::make_unique<MountPoints>();
+	g_files        = std::make_unique<FileDescriptors>();
 }
 
 void EmergencyShutdown() {
@@ -383,10 +386,10 @@ void EmergencyShutdown() {
 
 void Shutdown() {
 	EmergencyShutdown();
-	delete g_files;
-	delete g_mount_points;
-	g_files        = nullptr;
-	g_mount_points = nullptr;
+	g_files.reset();
+	g_mount_points.reset();
+
+
 }
 
 void Mount(const std::filesystem::path& folder, const std::string& point) {

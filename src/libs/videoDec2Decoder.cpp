@@ -8,6 +8,7 @@
 #include <cstring>
 #include <deque>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -388,16 +389,16 @@ Instance* Create(const Config& config) {
 	if (!IsCodecSupported(config.codec_type) || config.max_pending_frames < 2u) {
 		return nullptr;
 	}
-	auto* instance = new Instance(config);
+	auto instance = std::make_unique<Instance>(config);
 	if (!instance->Initialize()) {
-		delete instance;
+		return nullptr;
 		return nullptr;
 	}
-	return instance;
+	return instance.release();
 }
 
 void Destroy(Instance* instance) {
-	delete instance;
+	std::unique_ptr<Instance> owner(instance);
 }
 
 uint32_t GetCodecType(const Instance* instance) {

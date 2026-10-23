@@ -11,7 +11,9 @@
 #include <chrono>             // IWYU pragma: keep
 #include <condition_variable> // IWYU pragma: keep
 #include <cstdlib>
+#include <memory>
 #include <mutex>
+#include <type_traits>
 
 // macOS has no clock_nanosleep.
 #if KYTY_PLATFORM != KYTY_PLATFORM_WINDOWS && !defined(__APPLE__)
@@ -56,6 +58,17 @@ static DWORD CsSpinCount() {
 #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
 #endif
 
+struct WaitableTimerHandleDeleter {
+	void operator()(HANDLE h) const noexcept {
+		if (h != nullptr && h != INVALID_HANDLE_VALUE) {
+			CloseHandle(h);
+		}
+	}
+};
+
+using UniqueWaitableTimerHandle =
+    std::unique_ptr<std::remove_pointer_t<HANDLE>, WaitableTimerHandleDeleter>;
+
 static void SleepHighResolution100ns(uint64_t units_100ns) {
 	if (units_100ns == 0) {
 		return;
@@ -85,12 +98,15 @@ static void SleepHighResolution100ns(uint64_t units_100ns) {
 		}
 	}
 
-	thread_local HANDLE timer = CreateWaitableTimerExW(
-	    nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
-	if (timer == nullptr) {
-		thread_local HANDLE fallback_timer = CreateWaitableTimerW(nullptr, TRUE, nullptr);
-		timer                              = fallback_timer;
-	}
+	thread_local const UniqueWaitableTimerHandle timer_owner([]() noexcept {
+		HANDLE h = CreateWaitableTimerExW(
+		    nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+		if (h == nullptr) {
+			h = CreateWaitableTimerW(nullptr, TRUE, nullptr);
+		}
+		return h;
+	}());
+	const HANDLE timer = timer_owner.get();
 
 	if (timer != nullptr) {
 		LARGE_INTEGER due_time {};

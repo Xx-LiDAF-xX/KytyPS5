@@ -37,7 +37,9 @@
 #include <mutex>
 #include <new>
 #include <optional>
+#include <stop_token>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -654,24 +656,26 @@ static void SleepNanoWithSignalPoll(uint64_t nanoseconds) {
 struct PthreadStaticObject {
 	enum class Type { Mutex, Cond, Rwlock };
 
-	Type             type;
-	uint64_t         vaddr;
-	Loader::Program* program;
+	Type                                   type    = Type::Mutex;
+	uint64_t                               vaddr   = 0;
+	Loader::Program*                       program = nullptr;
+	std::unique_ptr<void, void (*)(void*)> host_owner {nullptr, +[](void*) {}};
 };
 
 class PthreadStaticObjects {
 public:
 	PthreadStaticObjects() { EXIT_NOT_IMPLEMENTED(!Common::Thread::IsMainThread()); }
-	virtual ~PthreadStaticObjects() { KYTY_NOT_IMPLEMENTED; }
+	virtual ~PthreadStaticObjects() = default;
 
 	KYTY_CLASS_NO_COPY(PthreadStaticObjects);
 
 	void* CreateObject(void* addr, PthreadStaticObject::Type type);
 	void  DeleteObjects(Loader::Program* program);
+	void  ReleaseTrackedObject(uint64_t vaddr);
 
 private:
-	std::vector<PthreadStaticObject*> m_objects;
-	Common::Mutex                     m_mutex;
+	std::unordered_map<uint64_t, PthreadStaticObject> m_objects;
+	Common::Mutex                                     m_mutex;
 };
 
 struct PthreadSpecificValue {
@@ -692,7 +696,13 @@ static thread_local std::unique_ptr<PthreadSpecificValue[]> g_pthread_specific;
 class PthreadPool {
 public:
 	PthreadPool() { EXIT_NOT_IMPLEMENTED(!Common::Thread::IsMainThread()); }
-	virtual ~PthreadPool() { KYTY_NOT_IMPLEMENTED; }
+	virtual ~PthreadPool() {
+		for (auto& p: m_threads) {
+			if (p != nullptr && p->attr != nullptr) {
+				PthreadAttrDestroy(&p->attr);
+			}
+		}
+	}
 
 	KYTY_CLASS_NO_COPY(PthreadPool);
 
@@ -701,14 +711,32 @@ public:
 	void FreeDetachedThreads();
 
 private:
-	std::vector<Pthread> m_threads;
-	Common::Mutex        m_mutex;
+	std::vector<std::unique_ptr<PthreadPrivate>> m_threads;
+	Common::Mutex                                m_mutex;
 };
 
 class PThreadContext {
 public:
 	PThreadContext() { EXIT_NOT_IMPLEMENTED(!Common::Thread::IsMainThread()); }
-	virtual ~PThreadContext() { KYTY_NOT_IMPLEMENTED; }
+	virtual ~PThreadContext() {
+		if (m_reaper_thread.joinable()) {
+			m_reaper_thread.request_stop();
+			m_reaper_cv.notify_all();
+			m_reaper_thread.join();
+		}
+		if (m_default_attr != nullptr) {
+			PthreadAttrDestroy(&m_default_attr);
+		}
+		if (m_default_condattr != nullptr) {
+			PthreadCondattrDestroy(&m_default_condattr);
+		}
+		if (m_default_mutexattr != nullptr) {
+			PthreadMutexattrDestroy(&m_default_mutexattr);
+		}
+		if (m_default_rwlockattr != nullptr) {
+			PthreadRwlockattrDestroy(&m_default_rwlockattr);
+		}
+	}
 
 	KYTY_CLASS_NO_COPY(PThreadContext);
 
@@ -720,29 +748,50 @@ public:
 	void               SetDefaultMutexattr(PthreadMutexattr attr) { m_default_mutexattr = attr; }
 	PthreadRwlockattr* GetDefaultRwlockattr() { return &m_default_rwlockattr; }
 	void               SetDefaultRwlockattr(PthreadRwlockattr attr) { m_default_rwlockattr = attr; }
-	PthreadPool*       GetPthreadPool() { return m_pthread_pool; }
-	void               SetPthreadPool(PthreadPool* pool) { m_pthread_pool = pool; }
-	PthreadStaticObjects* GetPthreadStaticObjects() { return m_pthread_static_objects; }
-	void SetPthreadStaticObjects(PthreadStaticObjects* objs) { m_pthread_static_objects = objs; }
+	PthreadPool*       GetPthreadPool() { return m_pthread_pool.get(); }
+	void               SetPthreadPool(std::unique_ptr<PthreadPool> pool) {
+		m_pthread_pool = std::move(pool);
+	}
+	PthreadStaticObjects* GetPthreadStaticObjects() { return m_pthread_static_objects.get(); }
+	void SetPthreadStaticObjects(std::unique_ptr<PthreadStaticObjects> objs) {
+		m_pthread_static_objects = std::move(objs);
+	}
 
 	[[nodiscard]] thread_dtors_func_t GetThreadDtors() const { return m_thread_dtors; }
 	void SetThreadDtors(thread_dtors_func_t dtors) { m_thread_dtors = dtors; }
 
+	void StartReaperThread();
+
 private:
 	// Common::Mutex           m_mutex;
-	PthreadMutexattr      m_default_mutexattr      = nullptr;
-	PthreadRwlockattr     m_default_rwlockattr     = nullptr;
-	PthreadCondattr       m_default_condattr       = nullptr;
-	PthreadAttr           m_default_attr           = nullptr;
-	PthreadPool*          m_pthread_pool           = nullptr;
-	PthreadStaticObjects* m_pthread_static_objects = nullptr;
+	PthreadMutexattr                      m_default_mutexattr  = nullptr;
+	PthreadRwlockattr                     m_default_rwlockattr = nullptr;
+	PthreadCondattr                       m_default_condattr   = nullptr;
+	PthreadAttr                           m_default_attr       = nullptr;
+	std::unique_ptr<PthreadPool>          m_pthread_pool;
+	std::unique_ptr<PthreadStaticObjects> m_pthread_static_objects;
 
 	std::atomic<thread_dtors_func_t> m_thread_dtors = nullptr;
+	std::mutex                       m_reaper_mutex;
+	std::condition_variable_any      m_reaper_cv;
+	std::jthread                     m_reaper_thread;
 };
 
-thread_local Pthread        g_pthread_self           = nullptr;
-static Pthread              g_pthread_main           = nullptr;
-PThreadContext*             g_pthread_context        = nullptr;
+struct MainThreadPrivateDeleter {
+	void operator()(PthreadPrivate* p) const noexcept {
+		if (p != nullptr) {
+			if (p->attr != nullptr) {
+				PthreadAttrDestroy(&p->attr);
+			}
+			delete p;
+		}
+	}
+};
+
+thread_local Pthread                                        g_pthread_self = nullptr;
+static std::unique_ptr<PthreadPrivate, MainThreadPrivateDeleter> g_pthread_main_owner;
+static Pthread                                              g_pthread_main           = nullptr;
+static std::unique_ptr<PThreadContext>                      g_pthread_context;
 thread_local uintptr_t      g_guest_entry_return_rsp = 0;
 static std::atomic<int32_t> g_pthread_thread_id      = 0;
 
@@ -1151,15 +1200,23 @@ static void UpdateCurrentThreadStackAttr(PthreadAttr* attr) {
 #endif
 }
 
-static void FreeDetachedThreads(void* /*arg*/) {
-	PRINT_NAME_ENABLE(false);
-
-	auto* pthread_pool = g_pthread_context->GetPthreadPool();
-
-	while (true) {
-		std::this_thread::sleep_for(std::chrono::milliseconds(10000));
-		pthread_pool->FreeDetachedThreads();
-	}
+void PThreadContext::StartReaperThread() {
+	auto* pool      = m_pthread_pool.get();
+	m_reaper_thread = std::jthread([this, pool](std::stop_token stoken) {
+		PRINT_NAME_ENABLE(false);
+		std::unique_lock lock(m_reaper_mutex);
+		while (!stoken.stop_requested()) {
+			if (m_reaper_cv.wait_for(lock, stoken, std::chrono::milliseconds(10000),
+			                         [&stoken] { return stoken.stop_requested(); })) {
+				break;
+			}
+			lock.unlock();
+			if (pool != nullptr) {
+				pool->FreeDetachedThreads();
+			}
+			lock.lock();
+		}
+	});
 }
 
 void PthreadDeleteStaticObjects(Loader::Program* program) {
@@ -1178,7 +1235,8 @@ void PthreadInitSelfForMainThread() {
 	}
 #endif
 
-	g_pthread_self = new PthreadPrivate {};
+	g_pthread_main_owner.reset(new PthreadPrivate {});
+	g_pthread_self = g_pthread_main_owner.get();
 	PthreadAttrInit(&g_pthread_self->attr);
 	UpdateCurrentThreadStackAttr(&g_pthread_self->attr);
 	g_pthread_self->p               = pthread_self();
@@ -1247,10 +1305,10 @@ void Initialize() {
 
 	EXIT_IF(g_pthread_context != nullptr);
 
-	g_pthread_context = new PThreadContext;
+	g_pthread_context = std::make_unique<PThreadContext>();
 
-	g_pthread_context->SetPthreadStaticObjects(new PthreadStaticObjects);
-	g_pthread_context->SetPthreadPool(new PthreadPool);
+	g_pthread_context->SetPthreadStaticObjects(std::make_unique<PthreadStaticObjects>());
+	g_pthread_context->SetPthreadPool(std::make_unique<PthreadPool>());
 	Common::CondVar::SetWaitPollCallback(KernelDispatchPendingSignalForCurrentThread);
 
 	PthreadMutexattr  default_mutexattr  = nullptr;
@@ -1270,8 +1328,7 @@ void Initialize() {
 
 	PRINT_NAME_ENABLE(true);
 
-	Common::Thread thread(FreeDetachedThreads, nullptr);
-	thread.Detach();
+	g_pthread_context->StartReaperThread();
 }
 
 static int PthreadAttrCopy(PthreadAttr* dst, const PthreadAttr* src) {
@@ -1628,23 +1685,33 @@ void* PthreadStaticObjects::CreateObject(void* addr, PthreadStaticObject::Type t
 
 	EXIT_NOT_IMPLEMENTED(result != OK);
 
-	// Heap-backed lazy pthread objects are valid. Initialize them without requiring
-	// an owning ELF segment; only segment-backed objects need module-unload cleanup bookkeeping.
-	if (program == nullptr) {
-		return addr;
+	PthreadStaticObject obj;
+	obj.program = program;
+	obj.type    = type;
+	obj.vaddr   = vaddr;
+	switch (type) {
+		case PthreadStaticObject::Type::Mutex:
+			obj.host_owner = {
+			    *static_cast<PthreadMutex*>(addr),
+			    +[](void* p) { delete static_cast<PthreadMutexPrivate*>(p); },
+			};
+			break;
+		case PthreadStaticObject::Type::Cond:
+			obj.host_owner = {
+			    *static_cast<PthreadCond*>(addr),
+			    +[](void* p) { delete static_cast<PthreadCondPrivate*>(p); },
+			};
+			break;
+		case PthreadStaticObject::Type::Rwlock:
+			obj.host_owner = {
+			    *static_cast<PthreadRwlock*>(addr),
+			    +[](void* p) { delete static_cast<PthreadRwlockPrivate*>(p); },
+			};
+			break;
+		default: EXIT("unknown type: %d\n", static_cast<int>(type));
 	}
 
-	auto* obj    = new PthreadStaticObject;
-	obj->program = program;
-	obj->type    = type;
-	obj->vaddr   = vaddr;
-
-	const auto it = std::find(m_objects.begin(), m_objects.end(), nullptr);
-	if (it != m_objects.end()) {
-		*it = obj;
-	} else {
-		m_objects.push_back(obj);
-	}
+	m_objects[vaddr] = std::move(obj);
 
 	return addr;
 }
@@ -1652,58 +1719,55 @@ void* PthreadStaticObjects::CreateObject(void* addr, PthreadStaticObject::Type t
 void PthreadStaticObjects::DeleteObjects(Loader::Program* program) {
 	Common::LockGuard lock(m_mutex);
 
-	for (auto& obj: m_objects) {
-		if (obj != nullptr && obj->program == program) {
-			int result = OK;
-			switch (obj->type) {
-				case PthreadStaticObject::Type::Mutex:
-					result = PthreadMutexDestroy(reinterpret_cast<PthreadMutex*>(obj->vaddr));
-					break;
-				case PthreadStaticObject::Type::Cond:
-					result = PthreadCondDestroy(reinterpret_cast<PthreadCond*>(obj->vaddr));
-					break;
-				case PthreadStaticObject::Type::Rwlock:
-					result = PthreadRwlockDestroy(reinterpret_cast<PthreadRwlock*>(obj->vaddr));
-					break;
-				default: EXIT("unknown type: %d\n", static_cast<int>(obj->type));
+	for (auto it = m_objects.begin(); it != m_objects.end();) {
+		if (it->second.program == program) {
+			if (program != nullptr && it->second.vaddr != 0) {
+				*reinterpret_cast<void**>(it->second.vaddr) = nullptr;
 			}
-
-			EXIT_NOT_IMPLEMENTED(result != OK);
-
-			delete obj;
-			obj = nullptr;
+			it = m_objects.erase(it);
+		} else {
+			++it;
 		}
+	}
+}
+
+void PthreadStaticObjects::ReleaseTrackedObject(uint64_t vaddr) {
+	Common::LockGuard lock(m_mutex);
+
+	if (const auto it = m_objects.find(vaddr); it != m_objects.end()) {
+		(void)it->second.host_owner.release();
+		m_objects.erase(it);
 	}
 }
 
 Pthread PthreadPool::Create() {
 	Common::LockGuard lock(m_mutex);
 
-	for (auto* p: m_threads) {
+	for (auto& p: m_threads) {
 		if (p->free) {
 			p->free = false;
-			return p;
+			return p.get();
 		}
 	}
 
-	auto* ret = new PthreadPrivate {};
-
+	auto  ret        = std::make_unique<PthreadPrivate>();
+	auto* ret_ptr    = ret.get();
 	ret->free        = false;
 	ret->detached    = false;
 	ret->almost_done = false;
 	ret->attr        = nullptr;
 
-	m_threads.push_back(ret);
+	m_threads.push_back(std::move(ret));
 
-	return ret;
+	return ret_ptr;
 }
 
 void PthreadPool::FreeDetachedThreads() {
 	Common::LockGuard lock(m_mutex);
 
-	for (auto* p: m_threads) {
+	for (auto& p: m_threads) {
 		if (p->detached && p->almost_done && !p->free) {
-			PthreadJoin(p, nullptr);
+			PthreadJoin(p.get(), nullptr);
 		}
 	}
 }
@@ -1901,6 +1965,10 @@ int KYTY_SYSV_ABI PthreadMutexDestroy(PthreadMutex* mutex) {
 		}
 	}
 
+	if (g_pthread_context != nullptr && g_pthread_context->GetPthreadStaticObjects() != nullptr) {
+		g_pthread_context->GetPthreadStaticObjects()->ReleaseTrackedObject(
+		    reinterpret_cast<uint64_t>(mutex));
+	}
 	delete *mutex;
 	*mutex = nullptr;
 
@@ -2445,6 +2513,10 @@ int KYTY_SYSV_ABI PthreadRwlockDestroy(PthreadRwlock* rwlock) {
 
 	LOGF("\trwlock destroy: %s, 0\n", (*rwlock)->name.c_str());
 
+	if (g_pthread_context != nullptr && g_pthread_context->GetPthreadStaticObjects() != nullptr) {
+		g_pthread_context->GetPthreadStaticObjects()->ReleaseTrackedObject(
+		    reinterpret_cast<uint64_t>(rwlock));
+	}
 	delete *rwlock;
 	*rwlock = nullptr;
 
@@ -2927,6 +2999,10 @@ int KYTY_SYSV_ABI PthreadCondDestroy(PthreadCond* cond) {
 
 	LOGF("\tcond destroy: %s, %d\n", (*cond)->name.c_str(), result);
 
+	if (g_pthread_context != nullptr && g_pthread_context->GetPthreadStaticObjects() != nullptr) {
+		g_pthread_context->GetPthreadStaticObjects()->ReleaseTrackedObject(
+		    reinterpret_cast<uint64_t>(cond));
+	}
 	delete *cond;
 	*cond = nullptr;
 
@@ -3464,14 +3540,17 @@ int KYTY_SYSV_ABI PthreadCreate(Pthread* thread, const PthreadAttr* attr,
 		}
 	}
 
-	if (result != 0) {
-		created_thread->free = true;
-	}
-
 	LOGF("\tthread create: %s, id = %d, %d\n", created_thread->name.c_str(),
 	     created_thread->unique_id, result);
 
 	PthreadAttrDbgPrint(&created_thread->attr);
+
+	if (result != 0) {
+		if (created_thread->attr != nullptr) {
+			PthreadAttrDestroy(&created_thread->attr);
+		}
+		created_thread->free = true;
+	}
 
 	PRINT_NAME_ENABLE(true);
 
@@ -3520,6 +3599,9 @@ int KYTY_SYSV_ABI PthreadJoin(Pthread thread, void** value) {
 
 	if (result == 0) {
 		FreeGuestStack(thread->attr);
+		if (thread->attr != nullptr) {
+			PthreadAttrDestroy(&thread->attr);
+		}
 
 		thread->almost_done = false;
 		thread->free        = true;
