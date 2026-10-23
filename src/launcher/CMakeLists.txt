@@ -60,6 +60,12 @@ if(KYTY_CLANG_CL)
 	)
 endif()
 
+add_custom_command(TARGET launcher POST_BUILD
+	COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/tools/u59-preset.json" "$<TARGET_FILE_DIR:launcher>/u59-preset.json"
+	COMMENT "Staging tools/u59-preset.json beside launcher executable"
+	VERBATIM
+)
+
 if(WIN32)
     find_program(QT_WINDEPLOYQT NAMES windeployqt PATHS "${Qt6_DIR}/../../../bin")
     if(NOT QT_WINDEPLOYQT)
@@ -101,6 +107,7 @@ endif()
 install(TARGETS launcher
 	BUNDLE DESTINATION .
 	RUNTIME DESTINATION .)
+install(FILES "${CMAKE_SOURCE_DIR}/tools/u59-preset.json" DESTINATION .)
 
 if(NOT APPLE AND KYTY_BUILD_ORIGIN STREQUAL "Official")
 	# Older releases require the previous executable name when validating updates. Only Official

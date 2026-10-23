@@ -21,7 +21,15 @@ static QString ApplyBundledPreset() {
 	std::vector<std::filesystem::path> dirs {std::filesystem::path(app_dir.absolutePath().toStdU16String())};
 	if (QDir parent = app_dir; parent.cdUp()) {
 		dirs.emplace_back(parent.absolutePath().toStdU16String());
+		dirs.emplace_back((parent.absolutePath() + QStringLiteral("/tools")).toStdU16String());
+		if (QDir grand_parent = parent; grand_parent.cdUp()) {
+			dirs.emplace_back(grand_parent.absolutePath().toStdU16String());
+			dirs.emplace_back((grand_parent.absolutePath() + QStringLiteral("/tools")).toStdU16String());
+		}
 	}
+	const QDir current(QDir::currentPath());
+	dirs.emplace_back(current.absolutePath().toStdU16String());
+	dirs.emplace_back((current.absolutePath() + QStringLiteral("/tools")).toStdU16String());
 
 	const auto result = Common::U59Preset::Load(dirs);
 	if (result.status != Common::U59Preset::Status::Loaded) {
