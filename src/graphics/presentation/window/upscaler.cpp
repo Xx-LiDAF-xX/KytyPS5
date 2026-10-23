@@ -352,6 +352,10 @@ void UpscalerPass::EnsureTargets(vk::Extent2D src_extent, vk::Format src_format,
 	                         m_dst_extent.width != dst_extent.width ||
 	                         m_dst_extent.height != dst_extent.height || m_dst_format != dst_format;
 	if (dst_changed) {
+		if (m_intermediate_view != nullptr || m_history_view != nullptr) {
+			Common::LockGuard lock(m_graphics.queue_mutex);
+			(void)m_graphics.queue.waitIdle();
+		}
 		if (m_intermediate_view != nullptr) {
 			device.destroyImageView(m_intermediate_view, nullptr);
 			m_intermediate_view = nullptr;
@@ -406,6 +410,10 @@ void UpscalerPass::EnsureTargets(vk::Extent2D src_extent, vk::Format src_format,
 	                         m_src_extent.width != src_extent.width ||
 	                         m_src_extent.height != src_extent.height || m_src_format != src_format;
 	if (src_changed) {
+		if (m_prev_input_view != nullptr) {
+			Common::LockGuard lock(m_graphics.queue_mutex);
+			(void)m_graphics.queue.waitIdle();
+		}
 		if (m_prev_input_view != nullptr) {
 			device.destroyImageView(m_prev_input_view, nullptr);
 			m_prev_input_view = nullptr;

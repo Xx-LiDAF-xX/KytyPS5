@@ -193,6 +193,11 @@ void FrameGenPass::EnsureResources(vk::Extent2D extent, vk::Format format) {
 		return;
 	}
 
+	if (m_prev_view != nullptr || m_interp_view != nullptr) {
+		Common::LockGuard lock(m_graphics.queue_mutex);
+		(void)m_graphics.queue.waitIdle();
+	}
+
 	if (m_prev_view != nullptr) {
 		device.destroyImageView(m_prev_view, nullptr);
 		m_prev_view = nullptr;
