@@ -1,5 +1,4 @@
-#ifndef EMULATOR_SRC_COMMON_BITARRAY_H_
-#define EMULATOR_SRC_COMMON_BITARRAY_H_
+#pragma once
 
 #include <array>
 #include <bit>
@@ -7,6 +6,10 @@
 #include <cstdint>
 #include <iterator>
 #include <utility>
+#include <version>
+#if __has_include(<simd>) && defined(__cpp_lib_simd)
+#include <simd>
+#endif
 
 namespace Common {
 
@@ -146,6 +149,25 @@ public:
 	constexpr void Fill() { m_data.fill(~uint64_t {0}); }
 
 	[[nodiscard]] constexpr bool None() const {
+#if __has_include(<simd>) && defined(__cpp_lib_simd)
+		if (!std::is_constant_evaluated()) {
+			using SimdWord                    = std::simd<uint64_t>;
+			constexpr size_t lanes            = SimdWord::size();
+			SimdWord         combined_lanes   = 0;
+			size_t           word_idx         = 0;
+			for (; word_idx + lanes <= WORD_COUNT; word_idx += lanes) {
+				combined_lanes |= SimdWord(&m_data[word_idx], std::element_aligned);
+			}
+			uint64_t combined = 0;
+			for (size_t i = 0; i < lanes; ++i) {
+				combined |= combined_lanes[i];
+			}
+			for (; word_idx < WORD_COUNT; ++word_idx) {
+				combined |= m_data[word_idx];
+			}
+			return combined == 0;
+		}
+#endif
 		uint64_t combined = 0;
 		for (const auto word: m_data) {
 			combined |= word;
@@ -326,5 +348,3 @@ private:
 };
 
 } // namespace Common
-
-#endif // EMULATOR_SRC_COMMON_BITARRAY_H_

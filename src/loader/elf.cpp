@@ -11,6 +11,7 @@
 #include <memory>
 #include <ranges>
 #include <span>
+#include <string_view>
 
 namespace Loader {
 
@@ -184,71 +185,73 @@ static void DbgPrintShdr64(const Elf64_Shdr* shdr, Common::File& f) {
 	                   .c_str());
 }
 
-// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
-#define DBG_NAME(tag)                                                                              \
-	case tag: name = #tag; break;
-
 static void DbgPrintDynamic64(const Elf64_Dyn* dyn, Common::File& f) {
-	const char* name = "Unknown";
-	switch (dyn->d_tag) {
-		DBG_NAME(DT_OS_HASH)
-		DBG_NAME(DT_HASH)
-		DBG_NAME(DT_OS_STRTAB)
-		DBG_NAME(DT_OS_STRSZ)
-		DBG_NAME(DT_STRTAB)
-		DBG_NAME(DT_STRSZ)
-		DBG_NAME(DT_OS_SYMTAB)
-		DBG_NAME(DT_SYMTAB)
-		DBG_NAME(DT_OS_HASHSZ)
-		DBG_NAME(DT_OS_SYMTABSZ)
-		DBG_NAME(DT_INIT)
-		DBG_NAME(DT_FINI)
-		DBG_NAME(DT_OS_PLTGOT)
-		DBG_NAME(DT_PLTGOT)
-		DBG_NAME(DT_OS_JMPREL)
-		DBG_NAME(DT_JMPREL)
-		DBG_NAME(DT_OS_PLTRELSZ)
-		DBG_NAME(DT_PLTRELSZ)
-		DBG_NAME(DT_OS_PLTREL)
-		DBG_NAME(DT_PLTREL)
-		DBG_NAME(DT_OS_RELA)
-		DBG_NAME(DT_RELA)
-		DBG_NAME(DT_OS_RELASZ)
-		DBG_NAME(DT_RELASZ)
-		DBG_NAME(DT_OS_RELAENT)
-		DBG_NAME(DT_RELAENT)
-		DBG_NAME(DT_INIT_ARRAY)
-		DBG_NAME(DT_INIT_ARRAYSZ)
-		DBG_NAME(DT_FINI_ARRAY)
-		DBG_NAME(DT_FINI_ARRAYSZ)
-		DBG_NAME(DT_PREINIT_ARRAY)
-		DBG_NAME(DT_PREINIT_ARRAYSZ)
-		DBG_NAME(DT_OS_SYMENT)
-		DBG_NAME(DT_SYMENT)
-		DBG_NAME(DT_DEBUG)
-		DBG_NAME(DT_TEXTREL)
-		DBG_NAME(DT_FLAGS)
-		DBG_NAME(DT_NEEDED)
-		DBG_NAME(DT_OS_NEEDED_MODULE)
-		DBG_NAME(DT_OS_NEEDED_MODULE_1)
-		DBG_NAME(DT_OS_IMPORT_LIB)
-		DBG_NAME(DT_OS_IMPORT_LIB_1)
-		DBG_NAME(DT_OS_IMPORT_LIB_ATTR)
-		DBG_NAME(DT_OS_FINGERPRINT)
-		DBG_NAME(DT_OS_ORIGINAL_FILENAME)
-		DBG_NAME(DT_OS_ORIGINAL_FILENAME_1)
-		DBG_NAME(DT_OS_MODULE_INFO)
-		DBG_NAME(DT_OS_MODULE_INFO_1)
-		DBG_NAME(DT_OS_MODULE_ATTR)
-		DBG_NAME(DT_SONAME)
-		DBG_NAME(DT_OS_EXPORT_LIB)
-		DBG_NAME(DT_OS_EXPORT_LIB_1)
-		DBG_NAME(DT_OS_EXPORT_LIB_ATTR)
-		DBG_NAME(DT_RELACOUNT)
-		DBG_NAME(DT_NULL)
-	}
-	f.Printf("d_tag = 0x%016" PRIx64 ", d_val = 0x%016" PRIx64 ", name = %s\n", dyn->d_tag,
-	         dyn->d_un.d_val, name);
+	struct DynTagEntry {
+		Elf64_Sxword     tag;
+		std::string_view name;
+	};
+	static constexpr std::array<DynTagEntry, 55> kDynTags {{
+	    {DT_OS_HASH, "DT_OS_HASH"},
+	    {DT_HASH, "DT_HASH"},
+	    {DT_OS_STRTAB, "DT_OS_STRTAB"},
+	    {DT_OS_STRSZ, "DT_OS_STRSZ"},
+	    {DT_STRTAB, "DT_STRTAB"},
+	    {DT_STRSZ, "DT_STRSZ"},
+	    {DT_OS_SYMTAB, "DT_OS_SYMTAB"},
+	    {DT_SYMTAB, "DT_SYMTAB"},
+	    {DT_OS_HASHSZ, "DT_OS_HASHSZ"},
+	    {DT_OS_SYMTABSZ, "DT_OS_SYMTABSZ"},
+	    {DT_INIT, "DT_INIT"},
+	    {DT_FINI, "DT_FINI"},
+	    {DT_OS_PLTGOT, "DT_OS_PLTGOT"},
+	    {DT_PLTGOT, "DT_PLTGOT"},
+	    {DT_OS_JMPREL, "DT_OS_JMPREL"},
+	    {DT_JMPREL, "DT_JMPREL"},
+	    {DT_OS_PLTRELSZ, "DT_OS_PLTRELSZ"},
+	    {DT_PLTRELSZ, "DT_PLTRELSZ"},
+	    {DT_OS_PLTREL, "DT_OS_PLTREL"},
+	    {DT_PLTREL, "DT_PLTREL"},
+	    {DT_OS_RELA, "DT_OS_RELA"},
+	    {DT_RELA, "DT_RELA"},
+	    {DT_OS_RELASZ, "DT_OS_RELASZ"},
+	    {DT_RELASZ, "DT_RELASZ"},
+	    {DT_OS_RELAENT, "DT_OS_RELAENT"},
+	    {DT_RELAENT, "DT_RELAENT"},
+	    {DT_INIT_ARRAY, "DT_INIT_ARRAY"},
+	    {DT_INIT_ARRAYSZ, "DT_INIT_ARRAYSZ"},
+	    {DT_FINI_ARRAY, "DT_FINI_ARRAY"},
+	    {DT_FINI_ARRAYSZ, "DT_FINI_ARRAYSZ"},
+	    {DT_PREINIT_ARRAY, "DT_PREINIT_ARRAY"},
+	    {DT_PREINIT_ARRAYSZ, "DT_PREINIT_ARRAYSZ"},
+	    {DT_OS_SYMENT, "DT_OS_SYMENT"},
+	    {DT_SYMENT, "DT_SYMENT"},
+	    {DT_DEBUG, "DT_DEBUG"},
+	    {DT_TEXTREL, "DT_TEXTREL"},
+	    {DT_FLAGS, "DT_FLAGS"},
+	    {DT_NEEDED, "DT_NEEDED"},
+	    {DT_OS_NEEDED_MODULE, "DT_OS_NEEDED_MODULE"},
+	    {DT_OS_NEEDED_MODULE_1, "DT_OS_NEEDED_MODULE_1"},
+	    {DT_OS_IMPORT_LIB, "DT_OS_IMPORT_LIB"},
+	    {DT_OS_IMPORT_LIB_1, "DT_OS_IMPORT_LIB_1"},
+	    {DT_OS_IMPORT_LIB_ATTR, "DT_OS_IMPORT_LIB_ATTR"},
+	    {DT_OS_FINGERPRINT, "DT_OS_FINGERPRINT"},
+	    {DT_OS_ORIGINAL_FILENAME, "DT_OS_ORIGINAL_FILENAME"},
+	    {DT_OS_ORIGINAL_FILENAME_1, "DT_OS_ORIGINAL_FILENAME_1"},
+	    {DT_OS_MODULE_INFO, "DT_OS_MODULE_INFO"},
+	    {DT_OS_MODULE_INFO_1, "DT_OS_MODULE_INFO_1"},
+	    {DT_OS_MODULE_ATTR, "DT_OS_MODULE_ATTR"},
+	    {DT_SONAME, "DT_SONAME"},
+	    {DT_OS_EXPORT_LIB, "DT_OS_EXPORT_LIB"},
+	    {DT_OS_EXPORT_LIB_1, "DT_OS_EXPORT_LIB_1"},
+	    {DT_OS_EXPORT_LIB_ATTR, "DT_OS_EXPORT_LIB_ATTR"},
+	    {DT_RELACOUNT, "DT_RELACOUNT"},
+	    {DT_NULL, "DT_NULL"},
+	}};
+	const auto       it   = std::ranges::find(kDynTags, dyn->d_tag, &DynTagEntry::tag);
+	const auto       name = it != kDynTags.end() ? it->name : std::string_view {"Unknown"};
+	f.Printf("%s", std::format("d_tag = 0x{:016x}, d_val = 0x{:016x}, name = {}\n",
+	                           static_cast<uint64_t>(dyn->d_tag), dyn->d_un.d_val, name)
+	                   .c_str());
 }
 
 Elf64::~Elf64() {

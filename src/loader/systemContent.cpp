@@ -22,6 +22,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <version>
 #include <vector>
 
@@ -48,17 +49,9 @@ public:
 	void DbgPrint();
 
 private:
-	enum class ParamType {
-		Text,
-		Int,
-	};
-
 	struct Param {
-		std::string name;
-		ParamType   type = ParamType::Text;
-		std::string string_value;
-		std::string string_utf8;
-		int32_t     int_value = 0;
+		std::string                      name;
+		std::variant<std::string, int32_t> value;
 	};
 
 	void   OpenJson(const std::filesystem::path& file_name);
@@ -256,19 +249,18 @@ void Psf::DbgPrint() {
 	}
 
 	for (const auto& param: m_params) {
-		switch (param.type) {
-			case ParamType::Text: {
-				const auto str = Common::ReplaceChar(param.string_value, '\n', ',');
-				LOGF("%s\n", std::format("{}, string = {}", param.name, str).c_str());
-				break;
-			}
-			case ParamType::Int:
-				LOGF("%s\n",
-				     std::format("{}, int = 0x{:08x}", param.name, static_cast<uint32_t>(param.int_value))
-				         .c_str());
-				break;
-			default: EXIT("unknown type\n");
+		if (const auto* text = std::get_if<std::string>(&param.value)) {
+			const auto str = Common::ReplaceChar(*text, '\n', ',');
+			LOGF("%s\n", std::format("{}, string = {}", param.name, str).c_str());
+			continue;
 		}
+		if (const auto* number = std::get_if<int32_t>(&param.value)) {
+			LOGF("%s\n",
+			     std::format("{}, int = 0x{:08x}", param.name, static_cast<uint32_t>(*number))
+			         .c_str());
+			continue;
+		}
+		EXIT("unknown type\n");
 	}
 }
 
@@ -278,28 +270,19 @@ Psf::Param* Psf::FindParam(const char* name) {
 }
 
 void Psf::AddParamString(const std::string& name, const std::string& value) {
-	auto* param = FindParam(name.c_str());
-	if (param == nullptr) {
-		m_params.push_back({});
-		param       = &m_params.back();
-		param->name = name;
+	if (auto* param = FindParam(name.c_str()); param != nullptr) {
+		param->value = value;
+		return;
 	}
-
-	param->type         = ParamType::Text;
-	param->string_utf8  = value;
-	param->string_value = value;
+	m_params.push_back({name, value});
 }
 
 void Psf::AddParamInt(const std::string& name, int32_t value) {
-	auto* param = FindParam(name.c_str());
-	if (param == nullptr) {
-		m_params.push_back({});
-		param       = &m_params.back();
-		param->name = name;
+	if (auto* param = FindParam(name.c_str()); param != nullptr) {
+		param->value = value;
+		return;
 	}
-
-	param->type      = ParamType::Int;
-	param->int_value = value;
+	m_params.push_back({name, value});
 }
 
 bool Psf::GetParamInt(const char* name, int32_t* value) {
@@ -308,12 +291,16 @@ bool Psf::GetParamInt(const char* name, int32_t* value) {
 	if (!m_opened) {
 		return false;
 	}
-	if (auto* param = FindParam(name); param != nullptr && param->type == ParamType::Int) {
-		*value = param->int_value;
-		return true;
+	const auto* param = FindParam(name);
+	if (param == nullptr) {
+		return false;
 	}
-
-	return false;
+	const auto* number = std::get_if<int32_t>(&param->value);
+	if (number == nullptr) {
+		return false;
+	}
+	*value = *number;
+	return true;
 }
 
 bool Psf::GetParamString(const char* name, std::string* value) {
@@ -322,12 +309,16 @@ bool Psf::GetParamString(const char* name, std::string* value) {
 	if (!m_opened) {
 		return false;
 	}
-	if (auto* param = FindParam(name); param != nullptr && param->type == ParamType::Text) {
-		*value = param->string_value;
-		return true;
+	const auto* param = FindParam(name);
+	if (param == nullptr) {
+		return false;
 	}
-
-	return false;
+	const auto* text = std::get_if<std::string>(&param->value);
+	if (text == nullptr) {
+		return false;
+	}
+	*value = *text;
+	return true;
 }
 
 bool Psf::GetParamString(const char* name, char* value, size_t value_size) {
@@ -336,13 +327,16 @@ bool Psf::GetParamString(const char* name, char* value, size_t value_size) {
 	if (!m_opened) {
 		return false;
 	}
-	if (auto* param = FindParam(name); param != nullptr && param->type == ParamType::Text &&
-	                                   param->string_utf8.size() + 1 <= value_size) {
-		std::memcpy(value, param->string_utf8.c_str(), param->string_utf8.size() + 1);
-		return true;
+	const auto* param = FindParam(name);
+	if (param == nullptr) {
+		return false;
 	}
-
-	return false;
+	const auto* text = std::get_if<std::string>(&param->value);
+	if (text == nullptr || text->size() + 1 > value_size) {
+		return false;
+	}
+	std::memcpy(value, text->c_str(), text->size() + 1);
+	return true;
 }
 
 uint64_t Psf::GetFlexibleMemorySize() {

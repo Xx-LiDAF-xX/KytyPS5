@@ -40,7 +40,7 @@ struct SlotId {
 // a separate cache line of every slot. The records are always maintained; only the lookups
 // switch, so turning it on at any time is exact. Records live in fixed chunks that never move, so
 // a lookup is exactly as safe as the deque one wherever that one is (no reallocation to race).
-inline std::atomic<bool> g_slot_vector_dense {false};
+alignas(64) inline std::atomic<bool> g_slot_vector_dense {false};
 
 // Stable-address slot storage for cache resources that are intentionally non-movable.
 template <typename T>
