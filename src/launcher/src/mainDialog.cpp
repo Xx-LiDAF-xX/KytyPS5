@@ -286,6 +286,10 @@ static QStringList CreateEmulatorArgs(const Configuration& info) {
 		args << "--gpu-occlusion" << "on";
 	}
 	args << "--present-mode" << EnumToText(info.present_mode);
+	args << "--upscaler" << EnumToText(info.upscaler_type).toLower();
+	args << "--upscale-quality" << EnumToText(info.upscale_quality);
+	args << "--upscale-sharpness" << QString::number(info.upscale_sharpness);
+	args << "--frame-gen" << BoolArg(info.frame_generation_enabled);
 	if (info.gpu_index >= 0) {
 		args << "--gpu" << QString::number(info.gpu_index);
 	}

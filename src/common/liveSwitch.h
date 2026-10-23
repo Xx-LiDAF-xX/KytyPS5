@@ -86,6 +86,12 @@ int64_t ParseDefaultOn(const char* value);
 // 1 for anything but "0"; unset: 0 (flags that default off).
 int64_t ParseDefaultOff(const char* value);
 
+// Re-read startup settings after presets and engine profiles populate the environment, before
+// renderer/guest workers or any consumers cache switch values. Static switches register before
+// main, so their constructors cannot see these settings. No on-change hooks run: this establishes
+// initial state, before the resources those hooks operate on exist. Applied live overrides win.
+void InitializeFromEnvironment();
+
 // Starts the live-control thread when KYTY_LIVE_FILE is set (once; later calls do nothing). The
 // command processor's thread calls it when it starts.
 void Start();

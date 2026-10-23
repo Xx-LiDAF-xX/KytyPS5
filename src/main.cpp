@@ -152,7 +152,11 @@ static void PrintUsage() {
 	         "                                      the game sound. Default: 100.\n");
 	::printf("  --audio-objects <on|off>            Play 3D audio objects (off: dropped). Default: on.\n");
 	::printf(
-	    "  --present-mode <value>               Fifo, Mailbox, or Immediate. Default: Mailbox.\n");
+	    "  --present-mode <value>               Fifo, Mailbox, or Immediate. Default: Mailbox.\n"
+	    "  --upscaler <off|fsr|dlss>            Spatial/temporal super-resolution upscaler. Default: off.\n"
+	    "  --upscale-quality <value>            native, quality, balanced, performance, ultra_performance. Default: quality.\n"
+	    "  --upscale-sharpness <0-100>          Upscaler RCAS sharpening strength. Default: 50.\n"
+	    "  --frame-gen <on|off>                 Motion-compensated frame generation. Default: off.\n");
 	::printf(
 	    "  --gpu <index>                        Vulkan physical device index. Default: auto.\n");
 	::printf("  --fullscreen                         Run in borderless desktop fullscreen.\n");
@@ -523,6 +527,22 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 			}
 		} else if (arg == "--audio-objects") {
 			if (!ParseBool(value, options.config.audio_objects_enabled)) {
+				::printf("invalid boolean for %s: %s\n", arg.c_str(), value.c_str());
+				return false;
+			}
+		} else if (arg == "--upscaler") {
+			options.config.upscaler_type = Config::ParseUpscalerType(value);
+		} else if (arg == "--upscale-quality") {
+			options.config.upscale_quality = Config::ParseUpscaleQuality(value);
+		} else if (arg == "--upscale-sharpness") {
+			uint32_t sharpness = 50;
+			if (!ParseUint32(value, sharpness)) {
+				::printf("invalid upscale sharpness: %s\n", value.c_str());
+				return false;
+			}
+			options.config.upscale_sharpness = std::min(sharpness, 100u);
+		} else if (arg == "--frame-gen") {
+			if (!ParseBool(value, options.config.frame_generation_enabled)) {
 				::printf("invalid boolean for %s: %s\n", arg.c_str(), value.c_str());
 				return false;
 			}

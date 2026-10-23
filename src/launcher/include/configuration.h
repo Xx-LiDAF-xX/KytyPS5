@@ -123,6 +123,12 @@ public:
 	enum class PresentMode { Fifo, Mailbox, Immediate };
 	Q_ENUM(PresentMode)
 
+	enum class UpscalerType { Off, Fsr, Dlss };
+	Q_ENUM(UpscalerType)
+
+	enum class UpscaleQuality { NativeAA, Quality, Balanced, Performance, UltraPerformance };
+	Q_ENUM(UpscaleQuality)
+
 	enum class LogDirection { Silent, Console, File };
 	Q_ENUM(LogDirection)
 
@@ -169,6 +175,10 @@ public:
 	int                    user_id                     = Config::DEFAULT_USER_ID;
 	QString                audio_input_device;
 	PresentMode            present_mode                = PresentMode::Mailbox;
+	UpscalerType           upscaler_type               = UpscalerType::Off;
+	UpscaleQuality         upscale_quality             = UpscaleQuality::Quality;
+	int                    upscale_sharpness           = 50;
+	bool                   frame_generation_enabled    = false;
 	int                    gpu_index                   = -1;
 	bool                   fullscreen_enabled          = false;
 	bool                   hdr_enabled                 = false;
@@ -207,6 +217,10 @@ public:
 		user_id                     = other.user_id;
 		audio_input_device          = other.audio_input_device;
 		present_mode                = other.present_mode;
+		upscaler_type               = other.upscaler_type;
+		upscale_quality             = other.upscale_quality;
+		upscale_sharpness           = other.upscale_sharpness;
+		frame_generation_enabled    = other.frame_generation_enabled;
 		gpu_index                   = other.gpu_index;
 		fullscreen_enabled          = other.fullscreen_enabled;
 		hdr_enabled                 = other.hdr_enabled;

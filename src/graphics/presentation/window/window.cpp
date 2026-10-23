@@ -1,4 +1,4 @@
-﻿#include "graphics/presentation/window.h"
+#include "graphics/presentation/window.h"
 
 #include <SDL3/SDL.h>
 
@@ -186,6 +186,24 @@ static void GameEventKeyboard(const EventKeyboard& key) {
 			case SDLK_F1:
 				if (!key.repeat) {
 					RenderDocRequestCapture();
+				}
+				break;
+			case SDLK_F9:
+				if (!key.repeat) {
+					const auto next = Config::CycleUpscalerType();
+					LOGF("Hotkey F9: Upscaler set to %.*s (%.*s, sharpness %u%%)\n",
+					     static_cast<int>(Config::UpscalerTypeToString(next).size()),
+					     Config::UpscalerTypeToString(next).data(),
+					     static_cast<int>(
+					         Config::UpscaleQualityToString(Config::GetUpscaleQuality()).size()),
+					     Config::UpscaleQualityToString(Config::GetUpscaleQuality()).data(),
+					     Config::GetUpscaleSharpness());
+				}
+				break;
+			case SDLK_F10:
+				if (!key.repeat) {
+					const bool fg = Config::ToggleFrameGeneration();
+					LOGF("Hotkey F10: Frame Generation %s\n", fg ? "ENABLED" : "DISABLED");
 				}
 				break;
 			case SDLK_F11:
@@ -1003,6 +1021,11 @@ void WindowContext::UpdateTitle(uint64_t frame_num, double current_fps) {
 	    (has_title_id ? ", " : ""), (has_app_ver ? app_ver : ""), (has_app_ver ? " " : ""),
 	    device_name, processor_name, frame_num, current_fps);
 
+	const std::string upscale_tag = Config::FormatUpscalerStatusTag();
+	if (!upscale_tag.empty()) {
+		text += " ";
+		text += upscale_tag;
+	}
 	SDL_SetWindowTitle(window, text.c_str());
 }
 

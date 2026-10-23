@@ -2121,7 +2121,7 @@ bool CommandProcessor::ProcessPacket(Pm4Execution& execution) {
 		BufferFlush();
 	}
 	if (!execution.m_next_buffer.empty()) {
-		// Chains and taken branches reuse the fetcher; only calls retain a return cursor.
+		// Only explicit chains replace the cursor; ordinary and conditional IB calls return.
 		if (execution.m_chain) {
 			cursor = {execution.m_next_buffer};
 		} else {

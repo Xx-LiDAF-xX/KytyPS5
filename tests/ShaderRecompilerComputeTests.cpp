@@ -57293,7 +57293,8 @@ void CheckPm4IndirectControlFlow(RenderContext &renderer) {
           "a disabled packet still executed or hid the packet after it");
   const auto then_commands = write(&selected, 11);
   const auto else_commands = write(&selected, 33);
-  const auto branch_suffix = write(&selected, 44);
+  uint32_t continued = 0;
+  const auto branch_suffix = write(&continued, 44);
   const auto caller_suffix = write(&returned, 22);
   alignas(8) uint64_t condition = 0;
   std::array<uint32_t, 19> branch{
@@ -57316,18 +57317,18 @@ void CheckPm4IndirectControlFlow(RenderContext &renderer) {
     branch[1] = mode | (3u << 8u);
     for (uint64_t value : {0ull, 1ull}) {
       condition = value;
-      selected = returned = 0;
-      uint32_t expected = 44;
+      selected = returned = continued = 0;
+      uint32_t expected = 0;
       if (value == 1) {
         expected = 11;
       } else if (mode == 2) {
         expected = 33;
       }
       Pm4Execution execution;
-      Require(name, "conditional fetcher replacement",
+      Require(name, "conditional indirect buffer return",
               processor.Process(execution, caller) == Pm4ProcessResult::Complete &&
-                  selected == expected && returned == 22,
-              "taken branch resumed its discarded suffix or lost the caller's return");
+                  selected == expected && continued == 44 && returned == 22,
+              "conditional indirect buffer skipped its parent's completion write or lost the caller's return");
     }
   }
 

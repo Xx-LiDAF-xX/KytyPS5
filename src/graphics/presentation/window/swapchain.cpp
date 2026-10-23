@@ -15,6 +15,8 @@
 #include "graphics/presentation/presenter.h"
 #include "graphics/presentation/systemOverlay.h"
 #include "graphics/presentation/videoOut.h"
+#include "graphics/presentation/window/frameGen.h"
+#include "graphics/presentation/window/upscaler.h"
 #include "graphics/presentation/window/windowInternal.h"
 
 #include <algorithm>
@@ -279,6 +281,13 @@ public:
 	[[nodiscard]] bool   PrepareSystemOverlay();
 	void     RecordPresentCommands(CommandBuffer& command, Presenter::Frame* source,
 	                               const Presenter::Layer& overlay, bool draw_system_overlay);
+	void     RecordPresentCommandsWithUpscaler(CommandBuffer& command, Presenter::Frame* source,
+	                                           const Presenter::Layer& overlay,
+	                                           bool draw_system_overlay,
+	                                           bool is_interpolated_midpoint,
+	                                           bool update_frame_gen_history);
+	[[nodiscard]] bool CanSynthesizeMidpoint(const Presenter::Frame* source) const noexcept;
+	void               ResetFrameGenHistory() noexcept;
 	uint64_t Submit(CommandScheduler& scheduler);
 	[[nodiscard]] Status Present();
 
@@ -326,6 +335,8 @@ private:
 	vk::Pipeline                   m_overlay_pipeline    = nullptr;
 	vk::Sampler                    m_overlay_sampler     = nullptr;
 	PresentFilter                  m_filter; // KYTY_PRESENT_BOX_DOWNSCALE
+	std::unique_ptr<UpscalerPass>  m_upscaler;
+	std::unique_ptr<FrameGenPass>  m_frame_gen;
 	uint32_t                       m_image_index         = static_cast<uint32_t>(-1);
 	uint32_t                       m_frame_index         = 0;
 };
@@ -371,6 +382,8 @@ struct Presenter::Impl {
 		return image;
 	}
 	void Present();
+	void PresentWithFrameGen();
+	bool has_new_main_flip = false;
 
 	RenderContext&        renderer;
 	WindowContext&        window;
@@ -602,6 +615,12 @@ void Swapchain::Destroy() {
 	m_overlay_descriptors = nullptr;
 	m_overlay_sampler     = nullptr;
 	m_filter.Release(graphics.device);
+	if (m_upscaler != nullptr) {
+		m_upscaler->Release();
+	}
+	if (m_frame_gen != nullptr) {
+		m_frame_gen->Release();
+	}
 
 	for (const auto semaphore: m_image_acquired) {
 		if (semaphore != nullptr) {
@@ -1031,6 +1050,214 @@ void Swapchain::DrawOverlay(vk::CommandBuffer command, const Presenter::Layer& l
 	command.endRendering();
 }
 
+bool Swapchain::CanSynthesizeMidpoint(const Presenter::Frame* source) const noexcept {
+	if (source == nullptr || source->blank || m_frame_gen == nullptr) {
+		return false;
+	}
+	const vk::Extent2D ext {source->image.extent.width, source->image.extent.height};
+	return m_frame_gen->HasValidHistory(ext, source->image.format);
+}
+
+void Swapchain::ResetFrameGenHistory() noexcept {
+	if (m_frame_gen != nullptr) {
+		m_frame_gen->Reset();
+	}
+}
+
+void Swapchain::RecordPresentCommandsWithUpscaler(CommandBuffer& command, Presenter::Frame* source,
+                                                  const Presenter::Layer& overlay,
+                                                  bool draw_system_overlay,
+                                                  bool is_interpolated_midpoint,
+                                                  bool update_frame_gen_history) {
+	EXIT_IF(m_image_index >= m_images.size());
+	auto       vk_command      = command.Handle();
+	const bool draw_overlay    = overlay.frame != nullptr;
+	const bool draw_attachment = draw_overlay || draw_system_overlay;
+	const vk::Extent2D source_extent =
+	    source != nullptr ? vk::Extent2D {source->image.extent.width, source->image.extent.height}
+	                      : vk::Extent2D {};
+	const Config::UpscalerType upscaler_mode = Config::GetUpscalerType();
+	const bool upscale_active =
+	    source != nullptr && !source->blank && upscaler_mode != Config::UpscalerType::Off;
+	const bool filtered = source != nullptr && !upscale_active && PresentBoxDownscaleEnabled() &&
+	                      PresentNeedsFilter(source_extent, m_extent);
+	const bool needs_source_view =
+	    source != nullptr && (upscale_active || filtered || is_interpolated_midpoint);
+
+	if (needs_source_view && source->view == nullptr) {
+		vk::ImageViewCreateInfo view {};
+		view.image            = source->image.image;
+		view.viewType         = vk::ImageViewType::e2D;
+		view.format           = source->image.format;
+		view.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+		RequireVulkanSuccess(
+		    m_window.graphic_ctx.device.createImageView(&view, nullptr, &source->view),
+		    "create presentation source view");
+	}
+
+	vk::Image     active_src_image = source != nullptr ? source->image.image : vk::Image {};
+	vk::ImageView active_src_view  = source != nullptr ? source->view : vk::ImageView {};
+
+	if (is_interpolated_midpoint && source != nullptr && m_frame_gen != nullptr &&
+	    m_frame_gen->HasValidHistory(source_extent, source->image.format)) {
+		source->Transit(vk_command, vk::ImageLayout::eShaderReadOnlyOptimal,
+		                vk::AccessFlagBits2::eShaderRead);
+		m_frame_gen->SynthesizeMidpoint(vk_command, source->view, source_extent,
+		                                source->image.format);
+		auto& interp_img = m_frame_gen->GetInterpolatedImage();
+		vk::ImageMemoryBarrier2 barrier {};
+		barrier.srcStageMask  = interp_img.state.pl_stage;
+		barrier.srcAccessMask = interp_img.state.access_mask;
+		barrier.dstStageMask  = (upscale_active || filtered)
+		                            ? vk::PipelineStageFlagBits2::eFragmentShader
+		                            : vk::PipelineStageFlagBits2::eTransfer;
+		barrier.dstAccessMask = (upscale_active || filtered) ? vk::AccessFlagBits2::eShaderRead
+		                                                     : vk::AccessFlagBits2::eTransferRead;
+		barrier.oldLayout     = interp_img.state.layout;
+		barrier.newLayout     = (upscale_active || filtered)
+		                            ? vk::ImageLayout::eShaderReadOnlyOptimal
+		                            : vk::ImageLayout::eTransferSrcOptimal;
+		barrier.srcQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image                       = interp_img.image;
+		barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.layerCount = 1;
+		vk::DependencyInfo dep {};
+		dep.imageMemoryBarrierCount = 1;
+		dep.pImageMemoryBarriers    = &barrier;
+		vk_command.pipelineBarrier2(dep);
+		interp_img.state = {barrier.dstStageMask, barrier.dstAccessMask, barrier.newLayout};
+		active_src_image = interp_img.image;
+		active_src_view  = m_frame_gen->GetInterpolatedView();
+	} else if (upscale_active || filtered) {
+		source->Transit(vk_command, vk::ImageLayout::eShaderReadOnlyOptimal,
+		                vk::AccessFlagBits2::eShaderRead);
+	} else if (source != nullptr) {
+		source->Transit(vk_command, vk::ImageLayout::eTransferSrcOptimal,
+		                vk::AccessFlagBits2::eTransferRead);
+	}
+
+	if (draw_overlay) {
+		overlay.frame->Transit(vk_command, vk::ImageLayout::eShaderReadOnlyOptimal,
+		                       vk::AccessFlagBits2::eShaderRead);
+	}
+
+	const bool render_pass_target = upscale_active || filtered;
+	vk::ImageMemoryBarrier to_transfer {};
+	to_transfer.sType = vk::StructureType::eImageMemoryBarrier;
+	to_transfer.dstAccessMask = render_pass_target ? vk::AccessFlagBits::eColorAttachmentWrite
+	                                               : vk::AccessFlagBits::eTransferWrite;
+	to_transfer.oldLayout     = vk::ImageLayout::eUndefined;
+	to_transfer.newLayout     = render_pass_target ? vk::ImageLayout::eColorAttachmentOptimal
+	                                               : vk::ImageLayout::eTransferDstOptimal;
+	to_transfer.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+	to_transfer.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+	to_transfer.image                           = m_images[m_image_index];
+	to_transfer.subresourceRange.aspectMask     = vk::ImageAspectFlagBits::eColor;
+	to_transfer.subresourceRange.baseMipLevel   = 0;
+	to_transfer.subresourceRange.levelCount     = 1;
+	to_transfer.subresourceRange.baseArrayLayer = 0;
+	to_transfer.subresourceRange.layerCount     = 1;
+	const auto write_stage = render_pass_target ? vk::PipelineStageFlagBits::eColorAttachmentOutput
+	                                            : vk::PipelineStageFlagBits::eTransfer;
+	vk_command.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, write_stage,
+	                           vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &to_transfer);
+
+	if (upscale_active) {
+		if (m_upscaler == nullptr) {
+			m_upscaler = std::make_unique<UpscalerPass>(m_window.graphic_ctx);
+		}
+		m_upscaler->Record(vk_command, active_src_image, active_src_view, source_extent,
+		                   source->image.format, m_image_views[m_image_index], m_extent, m_format,
+		                   upscaler_mode, Config::GetUpscaleSharpness());
+	} else if (filtered) {
+		m_filter.Record(m_window.graphic_ctx.device, vk_command, active_src_view, 0, source_extent,
+		                m_image_views[m_image_index], m_format, m_extent);
+	} else if (source != nullptr) {
+		vk::ImageBlit region {};
+		region.srcSubresource.aspectMask     = vk::ImageAspectFlagBits::eColor;
+		region.srcSubresource.mipLevel       = 0;
+		region.srcSubresource.baseArrayLayer = 0;
+		region.srcSubresource.layerCount     = 1;
+		region.srcOffsets[1].x               = static_cast<int>(source->image.extent.width);
+		region.srcOffsets[1].y               = static_cast<int>(source->image.extent.height);
+		region.srcOffsets[1].z               = 1;
+		region.dstSubresource.aspectMask     = vk::ImageAspectFlagBits::eColor;
+		region.dstSubresource.mipLevel       = 0;
+		region.dstSubresource.baseArrayLayer = 0;
+		region.dstSubresource.layerCount     = 1;
+		region.dstOffsets[1].x               = static_cast<int>(m_extent.width);
+		region.dstOffsets[1].y               = static_cast<int>(m_extent.height);
+		region.dstOffsets[1].z               = 1;
+		vk_command.blitImage(active_src_image, vk::ImageLayout::eTransferSrcOptimal,
+		                     m_images[m_image_index], vk::ImageLayout::eTransferDstOptimal, 1,
+		                     &region, vk::Filter::eLinear);
+	} else {
+		const vk::ClearColorValue black {};
+		vk_command.clearColorImage(m_images[m_image_index], vk::ImageLayout::eTransferDstOptimal,
+		                           &black, 1, &to_transfer.subresourceRange);
+	}
+
+	if (update_frame_gen_history && source != nullptr && !source->blank) {
+		if (m_frame_gen == nullptr) {
+			m_frame_gen = std::make_unique<FrameGenPass>(m_window.graphic_ctx);
+		}
+		source->Transit(vk_command, vk::ImageLayout::eTransferSrcOptimal,
+		                vk::AccessFlagBits2::eTransferRead);
+		m_frame_gen->UpdateHistory(vk_command, source->image.image, source_extent,
+		                           source->image.format);
+	}
+
+	vk::ImageMemoryBarrier to_present {};
+	to_present.sType         = vk::StructureType::eImageMemoryBarrier;
+	to_present.srcAccessMask = render_pass_target ? vk::AccessFlagBits::eColorAttachmentWrite
+	                                              : vk::AccessFlagBits::eTransferWrite;
+	to_present.dstAccessMask = draw_attachment ? vk::AccessFlagBits::eColorAttachmentRead |
+	                                                 vk::AccessFlagBits::eColorAttachmentWrite
+	                                           : vk::AccessFlagBits::eMemoryRead;
+	to_present.oldLayout           = to_transfer.newLayout;
+	to_present.newLayout           = draw_attachment ? vk::ImageLayout::eColorAttachmentOptimal
+	                                                 : vk::ImageLayout::ePresentSrcKHR;
+	to_present.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	to_present.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	to_present.image               = m_images[m_image_index];
+	to_present.subresourceRange.aspectMask     = vk::ImageAspectFlagBits::eColor;
+	to_present.subresourceRange.baseMipLevel   = 0;
+	to_present.subresourceRange.levelCount     = 1;
+	to_present.subresourceRange.baseArrayLayer = 0;
+	to_present.subresourceRange.layerCount     = 1;
+	vk_command.pipelineBarrier(write_stage,
+	                           draw_attachment ? vk::PipelineStageFlagBits::eColorAttachmentOutput
+	                                           : vk::PipelineStageFlagBits::eAllCommands,
+	                           vk::DependencyFlagBits::eByRegion, 0, nullptr, 0, nullptr, 1,
+	                           &to_present);
+	if (draw_attachment) {
+		if (draw_overlay) {
+			DrawOverlay(vk_command, overlay);
+			if (draw_system_overlay) {
+				to_present.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+				to_present.oldLayout     = vk::ImageLayout::eColorAttachmentOptimal;
+				vk_command.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput,
+				                           vk::PipelineStageFlagBits::eColorAttachmentOutput,
+				                           vk::DependencyFlagBits::eByRegion, 0, nullptr, 0,
+				                           nullptr, 1, &to_present);
+			}
+		}
+		if (draw_system_overlay) {
+			m_system_overlay->Record(vk_command, m_image_views[m_image_index]);
+		}
+		to_present.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+		to_present.dstAccessMask = vk::AccessFlagBits::eMemoryRead;
+		to_present.oldLayout     = vk::ImageLayout::eColorAttachmentOptimal;
+		to_present.newLayout     = vk::ImageLayout::ePresentSrcKHR;
+		vk_command.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput,
+		                           vk::PipelineStageFlagBits::eAllCommands,
+		                           vk::DependencyFlagBits::eByRegion, 0, nullptr, 0, nullptr, 1,
+		                           &to_present);
+	}
+}
+
 void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* source,
                                       const Presenter::Layer& overlay, bool draw_system_overlay) {
 	EXIT_IF(m_image_index >= m_images.size());
@@ -1328,6 +1555,9 @@ void Presenter::Present(std::span<const Layer> layers) {
 			m_impl->frames.Release(previous.frame);
 		}
 		previous = layer;
+		if (layer.bus == 0) {
+			m_impl->has_new_main_flip = true;
+		}
 	}
 	m_impl->Present();
 }
@@ -1344,7 +1574,89 @@ void Presenter::ClearLayer(int bus) {
 	}
 }
 
+void Presenter::Impl::PresentWithFrameGen() {
+	KYTY_PROFILER_FUNCTION();
+
+	const auto overlay_visual = GetSystemOverlayVisualState();
+	const auto* main_frame    = layers[0].frame;
+	const bool  hdr_changed   = main_frame != nullptr && !main_frame->blank &&
+	                            swapchain.SetHdr(main_frame->hdr);
+	if (hdr_changed || swapchain.NeedsResize()) {
+		RecoverSwapchain(Swapchain::Status::Recreate);
+	}
+	if (swapchain.IsMinimized()) {
+		has_new_main_flip = false;
+		return;
+	}
+
+	const bool fg_enabled  = Config::FrameGenerationEnabled();
+	const bool is_new_flip = has_new_main_flip;
+	has_new_main_flip      = false;
+
+	if (!fg_enabled) {
+		swapchain.ResetFrameGenHistory();
+	}
+
+	auto present_single_pass = [&](bool is_midpoint, bool update_history) -> bool {
+		for (uint32_t attempt = 0; attempt < 2; attempt++) {
+			auto status = swapchain.AcquireNextImage(present_scheduler);
+			if (status == Swapchain::Status::Minimized) {
+				return false;
+			}
+			if (status != Swapchain::Status::Success) {
+				RecoverSwapchain(status);
+				if (swapchain.IsMinimized()) {
+					return false;
+				}
+				continue;
+			}
+			{
+				std::optional<RenderLockGuard> render_lock;
+				if (!PresentUnlocked()) {
+					render_lock.emplace(renderer.GetMutex());
+				}
+				auto&      command = present_scheduler.BeginCommand();
+				const bool draw_system_overlay =
+				    overlay_visual.active && swapchain.PrepareSystemOverlay();
+				swapchain.RecordPresentCommandsWithUpscaler(command, layers[0].frame, layers[1],
+				                                            draw_system_overlay, is_midpoint,
+				                                            update_history);
+				const auto tick = swapchain.Submit(present_scheduler);
+				for (const auto& layer: layers) {
+					if (layer.frame != nullptr) {
+						layer.frame->present_tick = tick;
+					}
+				}
+			}
+			status = swapchain.Present();
+			if (status == Swapchain::Status::Minimized) {
+				return false;
+			}
+			if (status != Swapchain::Status::Success) {
+				RecoverSwapchain(status);
+				if (swapchain.IsMinimized()) {
+					return false;
+				}
+				continue;
+			}
+
+			presented_overlay_revision.store(overlay_visual.revision, std::memory_order_release);
+			window.loop.presented_frames.fetch_add(1, std::memory_order_relaxed);
+			return true;
+		}
+		LOGF("Vulkan presentation retry exhausted; dropping frame\n");
+		return false;
+	};
+
+	if (fg_enabled && is_new_flip && swapchain.CanSynthesizeMidpoint(main_frame)) {
+		(void)present_single_pass(true, false);
+	}
+	(void)present_single_pass(false, fg_enabled && is_new_flip);
+}
+
 void Presenter::Impl::Present() {
+	PresentWithFrameGen();
+	return;
 	KYTY_PROFILER_FUNCTION();
 
 	const auto overlay_visual = GetSystemOverlayVisualState();
