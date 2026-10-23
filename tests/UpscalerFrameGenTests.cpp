@@ -1,4 +1,8 @@
 #include "common/emulatorConfig.h"
+#include "gpu_blit_shaders/gpu_frame_gen_interpolate_spv.h"
+#include "gpu_blit_shaders/gpu_upscale_dlss_tsr_spv.h"
+#include "gpu_blit_shaders/gpu_upscale_fsr_easu_spv.h"
+#include "gpu_blit_shaders/gpu_upscale_fsr_rcas_spv.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -107,6 +111,14 @@ void TestHotkeyCycleAndStatusTag() {
 	SetFrameGenerationEnabled(false);
 }
 
+void TestEmbeddedSpirvShaders() {
+	constexpr uint32_t kSpirvMagic = 0x07230203u;
+	Check(sizeof(GPU_UPSCALE_FSR_EASU_SPV) > 64 && GPU_UPSCALE_FSR_EASU_SPV[0] == kSpirvMagic, "FSR EASU SPIR-V valid");
+	Check(sizeof(GPU_UPSCALE_FSR_RCAS_SPV) > 64 && GPU_UPSCALE_FSR_RCAS_SPV[0] == kSpirvMagic, "FSR RCAS SPIR-V valid");
+	Check(sizeof(GPU_UPSCALE_DLSS_TSR_SPV) > 64 && GPU_UPSCALE_DLSS_TSR_SPV[0] == kSpirvMagic, "DLSS TSR SPIR-V valid");
+	Check(sizeof(GPU_FRAME_GEN_INTERPOLATE_SPV) > 64 && GPU_FRAME_GEN_INTERPOLATE_SPV[0] == kSpirvMagic, "FrameGen SPIR-V valid");
+}
+
 } // namespace
 
 int main() {
@@ -117,6 +129,7 @@ int main() {
 	TestNon16By9UltrawideAnd16By10ResolutionScaling();
 	TestZeroAndSmallResolutionEdgeCases();
 	TestHotkeyCycleAndStatusTag();
+	TestEmbeddedSpirvShaders();
 	Config::Shutdown();
 	std::printf("UpscalerFrameGenTests: all checks passed\n");
 	return 0;

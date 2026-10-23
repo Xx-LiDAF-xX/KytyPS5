@@ -463,6 +463,10 @@ add_gpu_blit_shader(gpu_blit_color32_to_depth gpu_blit_color32_to_depth.frag)
 add_gpu_blit_shader(gpu_video_out_overlay gpu_video_out_overlay.frag)
 add_gpu_blit_shader(gpu_video_out_downscale gpu_video_out_downscale.frag)
 add_gpu_blit_shader(gpu_imgui_hdr gpu_video_out_overlay.frag -DIMGUI_HDR=1)
+add_gpu_blit_shader(gpu_upscale_fsr_easu gpu_upscale_fsr_easu.frag)
+add_gpu_blit_shader(gpu_upscale_fsr_rcas gpu_upscale_fsr_rcas.frag)
+add_gpu_blit_shader(gpu_upscale_dlss_tsr gpu_upscale_dlss_tsr.frag)
+add_gpu_blit_shader(gpu_frame_gen_interpolate gpu_frame_gen_interpolate.frag)
 list(APPEND kyty_emulator_src ${gpu_blit_shader_headers})
 
 set(gpu_dcc_generated_dir "${PROJECT_BINARY_DIR}/gpu_dcc_shaders")
@@ -792,9 +796,10 @@ target_include_directories(lru_cache_tests PRIVATE ${inc_headers})
 
 add_executable(upscaler_frame_gen_tests EXCLUDE_FROM_ALL
 	"${KYTY_TESTS_DIR}/UpscalerFrameGenTests.cpp"
+	${gpu_blit_shader_headers}
 )
 target_link_libraries(upscaler_frame_gen_tests common)
-target_include_directories(upscaler_frame_gen_tests PRIVATE ${inc_headers})
+target_include_directories(upscaler_frame_gen_tests PRIVATE ${inc_headers} "${PROJECT_BINARY_DIR}")
 if(LINUX)
 	target_link_libraries(upscaler_frame_gen_tests Threads::Threads)
 endif()
