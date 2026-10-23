@@ -1170,7 +1170,7 @@ void Swapchain::RecordPresentCommandsWithUpscaler(CommandBuffer& command, Presen
 		}
 		m_upscaler->Record(vk_command, active_src_image, active_src_view, source_extent,
 		                   source->image.format, m_image_views[m_image_index], m_extent, m_format,
-		                   upscaler_mode, Config::GetUpscaleSharpness());
+		                   upscaler_mode, Config::GetUpscaleSharpness(), is_interpolated_midpoint);
 	} else if (filtered) {
 		m_filter.Record(m_window.graphic_ctx.device, vk_command, active_src_view, 0, source_extent,
 		                m_image_views[m_image_index], m_format, m_extent);

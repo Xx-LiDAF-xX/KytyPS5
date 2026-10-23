@@ -25,7 +25,7 @@ public:
 	void Record(vk::CommandBuffer command, vk::Image src_image, vk::ImageView src_view,
 	            vk::Extent2D src_extent, vk::Format src_format, vk::ImageView dst_view,
 	            vk::Extent2D dst_extent, vk::Format dst_format, Config::UpscalerType mode,
-	            uint32_t sharpness_percent);
+	            uint32_t sharpness_percent, bool is_midpoint = false);
 
 private:
 	void ProbeNativeNgxRuntime();

@@ -1305,7 +1305,7 @@ bool FlipQueue::IsPending(VideoOutConfig& cfg, int index) {
 }
 
 // KYTY_PRESENT_UNLOCKED (live switch, default off): see FlipQueue::Flip.
-static Live::Switch g_present_unlocked("KYTY_PRESENT_UNLOCKED", Live::ParseDefaultOff);
+static Live::Switch g_present_unlocked("KYTY_PRESENT_UNLOCKED", Live::ParseDefaultOn);
 
 bool FlipQueue::Flip(uint32_t micros) {
 	KYTY_PROFILER_BLOCK("FlipQueue::Flip");
@@ -1959,8 +1959,10 @@ KYTY_SYSV_ABI int VideoOutGetOutputStatus(int handle, VideoOutOutputStatus* stat
 	ctx->mutex.Lock();
 	// Primary output reports 4K unless param.json Video-out Info enables resolution detection.
 	status->resolution =
-	    ((Config::GetUpscalerType() != Config::UpscalerType::Off && ctx->width <= 1920 &&
-	      ctx->height <= 1080) ||
+	    ((Config::GetUpscalerType() != Config::UpscalerType::Off &&
+	      (Config::GetUpscaleQuality() != Config::UpscaleQuality::NativeAA ||
+	       (ctx->width <= 1920 && ctx->height <= 1080))) ||
+	      // Upscaler active: report 1080p so guest games lower their internal render target.
 	             ((attribute3 & 4) != 0 && ctx->width < 3840 && ctx->height < 2160)
 	         ? 1u
 	         : 2u);

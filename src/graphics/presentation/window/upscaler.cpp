@@ -455,7 +455,8 @@ void UpscalerPass::EnsureTargets(vk::Extent2D src_extent, vk::Format src_format,
 void UpscalerPass::Record(vk::CommandBuffer command, vk::Image src_image, vk::ImageView src_view,
                           vk::Extent2D src_extent, vk::Format src_format, vk::ImageView dst_view,
                           vk::Extent2D dst_extent, vk::Format dst_format,
-                          Config::UpscalerType mode, uint32_t sharpness_percent) {
+                          Config::UpscalerType mode, uint32_t sharpness_percent,
+                          bool is_midpoint) {
 	EnsurePipelines(dst_format);
 	EnsureTargets(src_extent, src_format, dst_extent, dst_format);
 
@@ -473,7 +474,7 @@ void UpscalerPass::Record(vk::CommandBuffer command, vk::Image src_image, vk::Im
 	                     vk::PipelineStageFlagBits2::eColorAttachmentOutput,
 	                     vk::AccessFlagBits2::eColorAttachmentWrite);
 
-	if (mode == Config::UpscalerType::Dlss) {
+	if (mode == Config::UpscalerType::Dlss && !is_midpoint) {
 		if (!m_history_valid) {
 			TransitUpscalerImage(command, m_history_image,
 			                     vk::ImageLayout::eShaderReadOnlyOptimal,

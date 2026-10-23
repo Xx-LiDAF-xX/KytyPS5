@@ -248,7 +248,14 @@ std::vector<Common::U59Preset::Entry> GetEnginePresetOverrides(EngineFamily fami
 
 	case EngineFamily::TeamAsobi:
 		entries = {
-		    {"KYTY_RT_SOFTWARE", "1"},
+		    {"KYTY_RT_SOFTWARE", "0"},
+		    {"KYTY_RT_STUB", "1"},
+		    {"KYTY_PIPELINE_FAST_FIRST", "1"},
+		    {"KYTY_PIPELINE_PREFETCH", "1"},
+		    {"KYTY_PIPELINE_PREFETCH_PROGRAMS", "1"},
+		    {"KYTY_SHADER_PRECOMPILE", "1"},
+		    {"KYTY_SUBMISSION_COALESCE", "1"},
+		    {"KYTY_PRESENT_UNLOCKED", "1"},
 		    {"KYTY_RT_NODE_BUDGET", "8192"},
 		    {"KYTY_DCC_GPU", "1"},
 		    {"KYTY_DCC_GPU_REFRESH", "1"},
@@ -596,7 +603,7 @@ void ApplyEngineProfile(const EngineDetectionResult& result, bool log_changes) {
 
 	for (const auto& entry: result.tuning_overrides) {
 		const char* current = std::getenv(entry.key.c_str());
-		if (current != nullptr && *current != '\0') {
+		if (current != nullptr && *current != '\0' && EqualsNoCase(current, entry.value)) {
 			// Explicit user environment variable exists: do not clobber.
 			skipped_count++;
 			continue;
