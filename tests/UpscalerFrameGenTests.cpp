@@ -3,6 +3,7 @@
 #include "gpu_blit_shaders/gpu_upscale_dlss_tsr_spv.h"
 #include "gpu_blit_shaders/gpu_upscale_fsr_easu_spv.h"
 #include "gpu_blit_shaders/gpu_upscale_fsr_rcas_spv.h"
+#include "graphics/presentation/window/frameGen.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -119,6 +120,14 @@ void TestEmbeddedSpirvShaders() {
 	Check(sizeof(GPU_FRAME_GEN_INTERPOLATE_SPV) > 64 && GPU_FRAME_GEN_INTERPOLATE_SPV[0] == kSpirvMagic, "FrameGen SPIR-V valid");
 }
 
+void TestFrameGenSceneCutAndResizeReset() {
+	Check(Window::ComputeFrameGenBlendWeight(0.02f, 0.35f, false) == 0.0f, "invalid history -> 0.0 blend");
+	Check(Window::ComputeFrameGenBlendWeight(0.01f, 0.35f, true) == 0.5f, "low luma diff -> 0.5 midpoint blend");
+	Check(Window::ComputeFrameGenBlendWeight(0.50f, 0.35f, true) == 0.0f, "scene cut above threshold -> 0.0 fallback");
+	float transition = Window::ComputeFrameGenBlendWeight(0.28f, 0.35f, true);
+	Check(transition > 0.0f && transition < 0.5f, "near-threshold smoothly attenuates blend weight");
+}
+
 } // namespace
 
 int main() {
@@ -130,6 +139,7 @@ int main() {
 	TestZeroAndSmallResolutionEdgeCases();
 	TestHotkeyCycleAndStatusTag();
 	TestEmbeddedSpirvShaders();
+	TestFrameGenSceneCutAndResizeReset();
 	Config::Shutdown();
 	std::printf("UpscalerFrameGenTests: all checks passed\n");
 	return 0;

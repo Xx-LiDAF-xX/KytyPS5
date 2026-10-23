@@ -798,7 +798,7 @@ add_executable(upscaler_frame_gen_tests EXCLUDE_FROM_ALL
 	"${KYTY_TESTS_DIR}/UpscalerFrameGenTests.cpp"
 	${gpu_blit_shader_headers}
 )
-target_link_libraries(upscaler_frame_gen_tests common)
+target_link_libraries(upscaler_frame_gen_tests common Vulkan::Headers)
 target_include_directories(upscaler_frame_gen_tests PRIVATE ${inc_headers} "${PROJECT_BINARY_DIR}")
 if(LINUX)
 	target_link_libraries(upscaler_frame_gen_tests Threads::Threads)
