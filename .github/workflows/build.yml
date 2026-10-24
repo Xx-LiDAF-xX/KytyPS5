@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag to publish or attach to (e.g. v1.1.0)'
+        description: 'Release tag to publish or attach to (e.g. v1.1.1)'
         required: false
-        default: 'v1.1.0'
+        default: 'v1.1.1'
   push:
     tags:
       - 'v*'
@@ -37,7 +37,7 @@ jobs:
           elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             echo "value=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           else
-            echo "value=v1.1.0" >> "$GITHUB_OUTPUT"
+            echo "value=v1.1.1" >> "$GITHUB_OUTPUT"
           fi
 
   windows:

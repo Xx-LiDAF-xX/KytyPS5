@@ -4,6 +4,15 @@ This release builds on the optimized Vulkan renderer.
 
 ## New in this update
 
+Release v1.1.1 (`v1.1.1`):
+
+- Host directory path sanitization in all diagnostics, crash reports, and watchdog traces (`src/...` relative paths).
+- Build-time compile option `-fmacro-prefix-map` stripping local developer checkout paths from binary string tables.
+- Relaxed tessellation recompiler branch handling in `Tessellation.cpp`, eliminating premature assertion halts on internal branches for games like *Death Stranding Director's Cut* (PPSA01317).
+- Runtime font candidate resolution cleanly decoupled from compile-time macros (`exe_dir / rel`, system fonts, working directory).
+- Polyphony Digital preset optimizations (`polyphony.json`) and pipeline cache sizing limit configuration.
+- Fork release artifact workflow support with custom tag triggers in GitHub Actions.
+
 Release v1.1.0 (`v1.1.0`):
 
 - Vulkan 1.3 DLSS and AMD FSR upscaling integrated into the swapchain presentation pipeline (`KYTY_UPSCALER=fsr|dlss|off`), with configurable sharpness (`KYTY_SHARPNESS=0.0-1.0`).
