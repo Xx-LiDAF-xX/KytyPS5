@@ -6,6 +6,7 @@ name: U59 Linux build
 on:
   push:
     tags:
+      - 'v*'
       - 'u59-windows-*'
     # Test builds without a release: push a branch named ci/linux*. A Linux archive for an existing
     # release whose tag predates this workflow: push that release's commit plus this workflow to
@@ -133,7 +134,7 @@ jobs:
           if-no-files-found: error
 
       - name: Attach to the release
-        if: startsWith(github.ref, 'refs/tags/u59-windows-') || startsWith(github.ref, 'refs/heads/ci/linux-release/')
+        if: startsWith(github.ref, 'refs/tags/u59-windows-') || startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/ci/linux-release/')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

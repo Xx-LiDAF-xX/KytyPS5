@@ -3,6 +3,7 @@ name: U59 Windows release
 on:
   push:
     tags:
+      - 'v*'
       - 'u59-windows-*'
 
 permissions:

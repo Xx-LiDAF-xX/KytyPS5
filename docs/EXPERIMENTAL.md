@@ -4,7 +4,7 @@ This release builds on the U59 renderer of the previous U59 releases.
 
 ## New in this update
 
-Release int21 (`u59-windows-20261024-int21`):
+Release v1.1.0 (`v1.1.0`):
 
 - Vulkan 1.3 DLSS and AMD FSR upscaling integrated into the swapchain presentation pipeline (`KYTY_UPSCALER=fsr|dlss|off`), with configurable sharpness (`KYTY_SHARPNESS=0.0-1.0`).
 - Motion-interpolated Frame Generation filter (`KYTY_FRAME_GEN=1`) doubling presentation fluidity.

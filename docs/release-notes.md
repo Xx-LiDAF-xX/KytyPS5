@@ -1,6 +1,6 @@
-# KytyPS5 U59 int21
+# KytyPS5 v1.1.0 — DLSS, FSR, Frame Generation & Engine Optimization
 
-int21 brings DLSS & AMD FSR upscaling, Vulkan frame generation, an engine-aware optimization subsystem covering 17 engine families, major Unreal Engine 5 stability improvements, host VRAM budgeting, extensive memory and handle leak fixes, and modern C++20 architectural refactoring; older notes are in docs/release-notes-history.md. The first launch rebuilds the shader and program caches once, so the first minutes can stutter.
+KytyPS5 v1.1.0 (Xx-LiDAF-xX) brings DLSS & AMD FSR upscaling, Vulkan frame generation, an engine-aware optimization subsystem covering 17 engine families, major Unreal Engine 5 stability improvements, host VRAM budgeting, extensive memory and handle leak fixes, and modern C++20 architectural refactoring; older notes are in docs/release-notes-history.md. The first launch rebuilds the shader and program caches once, so the first minutes can stutter.
 
 - **New (DLSS & FSR Upscaling):** integrated Vulkan 1.3 AMD FSR (EASU & RCAS) spatial upscaler and DLSS TSR temporal reconstruction into the swapchain presentation pipeline (`KYTY_UPSCALER=fsr|dlss|off`). Features an adjustable sharpness slider (`KYTY_SHARPNESS=0.0-1.0`) with contrast-adaptive sharpening to preserve edge clarity at lower native render resolutions.
 - **New (Vulkan Frame Generation):** motion-interpolated frame generation filter (`KYTY_FRAME_GEN=1`) doubling visual presentation fluidity and frame pacing on high-refresh displays. Includes optimized sampler barriers and bandwidth management to eliminate stalls in heavy geometry scenes.
