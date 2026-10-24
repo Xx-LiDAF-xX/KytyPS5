@@ -5916,6 +5916,8 @@ void PipelineCache::InitializeProgramDiskCache() {
 	settings.path           = path;
 	settings.identity       = ShaderRecompiler::CodegenFingerprint();
 	settings.periodic_saves = EnvU64("KYTY_PROGRAM_CACHE_SAVE", 1) != 0;
+	const auto max_mb       = EnvU64("KYTY_PROGRAM_CACHE_MAX_MB", 2048);
+	settings.max_file_bytes = max_mb << 20u;
 	const auto& properties  = m_graphics.GetPhysicalDeviceProperties();
 	const auto  device      = fmt::format("device {:08x}:{:08x}:{:08x}", properties.vendorID,
 	                                      properties.deviceID, properties.driverVersion);

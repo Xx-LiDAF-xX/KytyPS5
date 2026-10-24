@@ -86,6 +86,11 @@ if(KYTY_CLANG_CL)
 	    add_compile_options(/WX)
 	endif()
 
+	string(REPLACE "\\" "/" CMAKE_SOURCE_DIR_FORWARD "${CMAKE_SOURCE_DIR}")
+	string(REPLACE "/" "\\" CMAKE_SOURCE_DIR_BACKWARD "${CMAKE_SOURCE_DIR}")
+	add_compile_options("/clang:-fmacro-prefix-map=${CMAKE_SOURCE_DIR_FORWARD}/=")
+	add_compile_options("/clang:-fmacro-prefix-map=${CMAKE_SOURCE_DIR_BACKWARD}\\=")
+
 	add_compile_options("$<$<CONFIG:Release>:/O2>")
 	add_compile_options("$<$<CONFIG:Release>:/DNDEBUG>")
 	add_compile_options("$<$<CONFIG:RelWithDebInfo>:/O2>")
@@ -94,6 +99,13 @@ if(KYTY_CLANG_CL)
 	set(KYTY_C_FLAGS "${KYTY_CPP_FLAGS}")
 	
 elseif(CLANG OR GCC)
+
+	string(REPLACE "\\" "/" CMAKE_SOURCE_DIR_FORWARD "${CMAKE_SOURCE_DIR}")
+	string(REPLACE "/" "\\" CMAKE_SOURCE_DIR_BACKWARD "${CMAKE_SOURCE_DIR}")
+	add_compile_options("-fmacro-prefix-map=${CMAKE_SOURCE_DIR_FORWARD}/=")
+	if (WIN32)
+		add_compile_options("-fmacro-prefix-map=${CMAKE_SOURCE_DIR_BACKWARD}\\=")
+	endif()
 
 	if (CLANG)
 	    set(KYTY_CPP_FLAGS "${KYTY_CPP_FLAGS} -fno-rtti -fno-exceptions -fcolor-diagnostics -finput-charset=UTF-8 -fexec-charset=UTF-8 -g -fno-strict-aliasing -fno-omit-frame-pointer -Wall -fmessage-length=0")

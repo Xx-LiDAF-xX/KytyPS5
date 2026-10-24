@@ -22,14 +22,29 @@
 
 namespace Common {
 
+static std::string_view SanitizeFilePath(const char* file) {
+	if (file == nullptr) return "";
+	std::string_view view(file);
+	for (std::string_view token:
+	     {"/src/", "\\src\\", "/tests/", "\\tests\\", "/3rdparty/", "\\3rdparty\\"}) {
+		if (auto pos = view.rfind(token); pos != std::string_view::npos) {
+			return view.substr(pos + 1);
+		}
+	}
+	if (auto pos = view.find_last_of("/\\"); pos != std::string_view::npos) {
+		return view.substr(pos + 1);
+	}
+	return view;
+}
+
 static std::string BuildFatalReport(const char* title, std::string_view text, const char* file,
                                     int line) {
-	return fmt::format("--- Build ---\n{}\n{}\n{} in {}:{}\n", KYTY_BUILD_LABEL, title, text, file,
-	                   line);
+	return fmt::format("--- Build ---\n{}\n{}\n{} in {}:{}\n", KYTY_BUILD_LABEL, title, text,
+	                   SanitizeFilePath(file), line);
 }
 
 static int DbgReport(const char* title, std::string_view text, const char* file, int line) {
-	HangWatchdog::NoteFatal(text, file, line);
+	HangWatchdog::NoteFatal(text, SanitizeFilePath(file), line);
 	Log::WriteFatal(BuildFatalReport(title, text, file, line));
 	Subsystems::EmergencyShutdownActive();
 	return 1;
@@ -45,13 +60,13 @@ int DbgNotImplementedHandler(const char* expr, const char* file, int line) {
 }
 
 int DbgExitHandler(const char* file, int line, std::string_view text) {
-	HangWatchdog::NoteFatal(text, file, line);
+	HangWatchdog::NoteFatal(text, SanitizeFilePath(file), line);
 	Log::WriteFatal(BuildFatalReport("--- Error ---", text, file, line));
 	return 1;
 }
 
 int DbgExitHandler(const char* file, int line, fmt::text_style style, std::string_view text) {
-	HangWatchdog::NoteFatal(text, file, line);
+	HangWatchdog::NoteFatal(text, SanitizeFilePath(file), line);
 	Log::WriteFatal(style, BuildFatalReport("--- Error ---", text, file, line));
 	return 1;
 }

@@ -239,7 +239,9 @@ std::vector<Common::U59Preset::Entry> GetEnginePresetOverrides(EngineFamily fami
 
 	case EngineFamily::PolyphonyDigital:
 		entries = {
-		    {"KYTY_RT_SOFTWARE", "auto"},
+		    {"KYTY_RT_SOFTWARE", "0"},
+		    {"KYTY_RT_STUB", "1"},
+		    {"KYTY_LDS_DEVICE_BUFFER", "0"},
 		    {"KYTY_CB_SHADER_MASK_EXPORTS", "1"},
 		    {"KYTY_TEXTURE_CLEAN_PROOFS", "1"},
 		    {"KYTY_EOP_TIMESTAMPS", "gpu"},

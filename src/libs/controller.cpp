@@ -1123,7 +1123,8 @@ int GameController::OpenPort(int user_id, int type, int index) {
 			return PAD_ERROR_NOT_INITIALIZED;
 		}
 		if (!PadOpenArgsAreValid(user_id, type, index)) {
-			return PAD_ERROR_INVALID_ARG;
+			return (type != 0 || index != 0 || user_id == 255) ? PAD_ERROR_NO_HANDLE
+			                                                   : PAD_ERROR_INVALID_ARG;
 		}
 		if (m_port_state == PortState::Open) {
 			return PAD_ERROR_ALREADY_OPENED;

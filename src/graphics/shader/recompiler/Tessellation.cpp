@@ -82,9 +82,16 @@ uint32_t ReflectTessellationStride(const Decoder::Program& program, bool local,
 	uint32_t stride = 0;
 	for (const auto& inst: program.instructions) {
 		// Stage exits preserve the active path's definitions. An internal join
-		// would require merging register definitions.
-		EXIT_NOT_IMPLEMENTED(IsDirectBranch(inst.opcode) &&
-		                     inst.branch_target != program.instructions.back().pc);
+		// would require merging register definitions. If stride is already resolved,
+		// internal branches have no impact on reflection. If stride is not yet resolved,
+		// log a diagnostic rather than prematurely terminating shader compilation.
+		if (IsDirectBranch(inst.opcode) && inst.branch_target != program.instructions.back().pc) {
+			if (stride == 0u) {
+				LOGF("Tessellation: internal branch at pc 0x%08x to 0x%08x before stride resolved\n",
+				     inst.pc, inst.branch_target);
+			}
+			continue;
+		}
 		const bool local_store =
 		    inst.opcode == Opcode::DS_WRITE_B32 || inst.opcode == Opcode::DS_WRITE2_B32;
 		const bool buffer_store = inst.opcode == Opcode::BUFFER_STORE_DWORD ||

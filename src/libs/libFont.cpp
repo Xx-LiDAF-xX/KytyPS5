@@ -20,6 +20,16 @@
 #include <unordered_set>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #if defined(_MSC_VER)
 #pragma warning(push)
 #pragma warning(disable : 4244 4267 4701)
@@ -703,13 +713,24 @@ static std::vector<std::filesystem::path> fallback_font_candidates(const char* f
 	    std::filesystem::path("3rdparty") / "tracy" / "profiler" / "src" / "font" / file_name;
 	std::vector<std::filesystem::path> paths;
 
-	auto source_root = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path();
-	paths.push_back(source_root / rel);
+#if defined(_WIN32)
+	wchar_t exe_buf[MAX_PATH] {};
+	if (GetModuleFileNameW(nullptr, exe_buf, MAX_PATH) != 0) {
+		const auto exe_dir = std::filesystem::path(exe_buf).parent_path();
+		paths.push_back(exe_dir / rel);
+		paths.push_back(exe_dir / "fonts" / file_name);
+		paths.push_back(exe_dir / "assets" / "fonts" / file_name);
+		paths.push_back(exe_dir / ".." / rel);
+		paths.push_back(exe_dir / ".." / ".." / rel);
+	}
+#endif
 
 	std::error_code ec;
 	auto            cwd = std::filesystem::current_path(ec);
 	if (!ec) {
 		paths.push_back(cwd / rel);
+		paths.push_back(cwd / "fonts" / file_name);
+		paths.push_back(cwd / "assets" / "fonts" / file_name);
 		paths.push_back(cwd / ".." / rel);
 		paths.push_back(cwd / ".." / ".." / rel);
 	}
