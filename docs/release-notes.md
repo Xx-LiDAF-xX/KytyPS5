@@ -1,4 +1,4 @@
-# KytyPS5 v1.1.0 — DLSS, FSR, Frame Generation & Engine Optimization
+# KytyPS5 v1.1.0 - DLSS, FSR, Frame Generation & Engine Optimization
 
 KytyPS5 v1.1.0 (Xx-LiDAF-xX) brings DLSS & AMD FSR upscaling, Vulkan frame generation, an engine-aware optimization subsystem covering 17 engine families, major Unreal Engine 5 stability improvements, host VRAM budgeting, extensive memory and handle leak fixes, and modern C++20 architectural refactoring; older notes are in docs/release-notes-history.md. The first launch rebuilds the shader and program caches once, so the first minutes can stutter.
 
