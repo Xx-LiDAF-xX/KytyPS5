@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   linux:
-    if: github.repository == 'Jetsku/KytyPS5-experimental' || github.repository == 'Jetsku/KytyPS5'
+    if: github.repository == 'Jetsku/KytyPS5-experimental' || github.repository == 'Jetsku/KytyPS5' || github.repository == 'Xx-LiDAF-xX/KytyPS5'
     runs-on: ubuntu-24.04
     steps:
       - name: Check out experimental source

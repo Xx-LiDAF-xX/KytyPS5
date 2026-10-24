@@ -1,5 +1,20 @@
 # KytyPS5 U59 release notes, older versions
 
+## int20
+
+int20 is int19.4 plus a fix for Astro Bot's "too many objects" crash, smoother frame pacing, a new profile-guided optimisation profile and fixes contributed through pull requests; the older notes are in docs/release-notes-history.md. The first launch rebuilds the shader and program caches once, so the first minutes can stutter.
+
+- **Fixed (Astro Bot "too many objects/batches in this scene"):** the game no longer stops with its own `command_buffer_writer.ppr.cpp:31` error while loading or playing. Kyty showed the game's CPU threads that GPU work had finished as soon as it was recorded; the game now sees end-of-pipe labels only when the GPU work has really finished, while the command processor keeps its own waits at record time, so the fix costs no measurable fps (`KYTY_LABEL_MODE=split`, the new preset default; `record` restores the old behaviour). In testing: 0 crashes in 11 Sky Garden boots, against 3 in 7 with int19.4's settings.
+- **Smoother:** while a new pipeline is still being built Kyty skips that draw instead of stalling (`KYTY_PIPELINE_SKIP`), and the command processor journals its self-label waits (`KYTY_CP_WAIT_JOURNAL`), both on in the preset. Partially resident textures are on in automatic mode: on cards below 16 GB of VRAM they lower VRAM use in large scenes (16 GB and larger cards keep them off; `KYTY_TEXTURE_SPARSE_RESIDENCY=1` forces them on).
+- **Faster:** a new profile-guided optimisation profile recorded over six levels in the new label mode, and faster range-set bookkeeping.
+- **Fixed:** a crash on NVIDIA 580 drivers in Astro's Playroom (late boolean phi values in SPIR-V), and a rare shader-compiler crash from references to instructions that specialization removed.
+- **Fixed:** Chinese text is no longer drawn as "?" (Kyty falls back to a CJK font from Windows).
+- **New, opt-in:** `KYTY_CUDA_EARLY_INIT=1` initialises CUDA before the guest address space so NVIDIA Smooth Motion can start, and `KYTY_PRESENT_ABS_VBLANK=1` paces presents on an absolute vblank timeline (a fix for spiky frame times on some systems).
+- **Thanks to contributors:** pernahlebihtampan (#49, the NVIDIA 580 crash in Astro's Playroom), Majed-allababedi (#63, fewer RangeSet reallocations), ccxp (#45, the CJK font fallback), luizhtss (#58, early CUDA init for Smooth Motion), sniperspy69 (#65, the present timer for spiky frame times) and ali-commits (#50 and #51, test and Qt packaging fixes).
+- **Known issues:** if you get a GPU device loss, reproduce it once with `KYTY_DEVICE_FAULT_DIAGNOSTICS=1` and Printf output set to File, then attach `_kyty.txt` and the `_kyty` folder to an issue; workaround: `KYTY_DEFER_PROTECTS=0` in `u59-preset.json`. If a level shows wrong graphics or freezes with the new label mode, try `KYTY_LABEL_MODE=record` and report it.
+- **Upgrading:** extract into a new folder, or replace `u59-preset.json` too; an old preset keeps the old label mode and the crash.
+- **AMD, Intel and Linux users:** their fixes are in the int19 notes.
+
 ## int19.4
 
 int19.4 is int19.1 plus the unreleased int19.2 and int19.3 work, more performance work and the latest upstream KytyPS5 changes; the older notes are in docs/release-notes-history.md. The first launch rebuilds the shader and program caches once, so the first minutes can stutter.

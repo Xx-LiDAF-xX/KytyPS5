@@ -4,6 +4,17 @@ This release builds on the U59 renderer of the previous U59 releases.
 
 ## New in this update
 
+Release int21 (`u59-windows-20261024-int21`):
+
+- Vulkan 1.3 DLSS and AMD FSR upscaling integrated into the swapchain presentation pipeline (`KYTY_UPSCALER=fsr|dlss|off`), with configurable sharpness (`KYTY_SHARPNESS=0.0-1.0`).
+- Motion-interpolated Frame Generation filter (`KYTY_FRAME_GEN=1`) doubling presentation fluidity.
+- EngineProfile subsystem with fingerprinting for 17 engine families and custom presets in `tools/engine-presets/`.
+- Unreal Engine 5 stability improvements: resolved RenderThread fence deadlocks and frame stalls, RT stubbing, SEH exception handling, and compute stability.
+- Host GPU memory budgeting subsystem (`vramBudget.h`) preventing VRAM exhaustion.
+- Resolved memory, handle, and runtime page leaks across pthread, runtime linker, filesystem, video decoder, and audio.
+- Launcher GUI controls for upscaler, sharpness, and frame generation, plus automatic staging and fallback search for `tools/u59-preset.json`.
+- Modern C++20 refactoring: cache-aligned `SlotVector` lookups, centralized runtime flags, and `std::variant` dispatch.
+
 Pre-release int16.1: int16 plus one fix.
 
 - Reverted the upstream libFont commits "font: fix glyph metrics and raster sizes" (32e9fa30) and "font: add scaled
