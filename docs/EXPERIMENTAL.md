@@ -1,6 +1,6 @@
-# U59 integration release (Windows x64)
+# KytyPS5 (Xx-LiDAF-xX) Experimental Releases
 
-This release builds on the U59 renderer of the previous U59 releases.
+This release builds on the optimized Vulkan renderer.
 
 ## New in this update
 
