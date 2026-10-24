@@ -2,6 +2,14 @@ name: Build and Release KytyPS5
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag to publish or attach to (e.g. v1.1.0)'
+        required: false
+        default: 'v1.1.0'
+  push:
+    tags:
+      - 'v*'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -24,7 +32,13 @@ jobs:
         id: release_tag
         shell: bash
         run: |
-          echo "value=KytyPS5-$(date -u +'%Y-%m-%d')-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          if [ -n "${{ github.event.inputs.release_tag }}" ]; then
+            echo "value=${{ github.event.inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "value=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=v1.1.0" >> "$GITHUB_OUTPUT"
+          fi
 
   windows:
     name: Build KytyPS5 (Windows)
@@ -434,8 +448,6 @@ jobs:
     name: Release KytyPS5
     if: >-
       always() &&
-      github.event_name == 'push' &&
-      github.repository == 'KytyPS5/KytyPS5' &&
       (needs.windows.result == 'success' ||
        needs.macos.result == 'success' ||
        needs.linux.result == 'success')
