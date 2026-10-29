@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cinttypes>
 #include <cstdint>
 #include <fmt/format.h>
 #include <xxhash.h>
@@ -729,9 +730,13 @@ Image::Image(GraphicContext& graphics, CommandScheduler& scheduler, const ImageI
 	}
 
 	if (!graphics.CreateImage(create, backing)) {
-		EXIT("failed to create image: extent=%ux%ux%u format=%d layers=%u levels=%u\n",
+		EXIT("failed to create image: extent=%ux%ux%u format=%d layers=%u levels=%u usage=0x%x "
+		     "flags=0x%x guest=0x%016" PRIx64 " size=0x%" PRIx64 "\n",
 		     create.extent.width, create.extent.height, create.extent.depth,
-		     static_cast<int>(create.format), create.arrayLayers, create.mipLevels);
+		     static_cast<int>(create.format), create.arrayLayers, create.mipLevels,
+		     static_cast<vk::ImageUsageFlags::MaskType>(create.usage),
+		     static_cast<vk::ImageCreateFlags::MaskType>(create.flags), info.data.address,
+		     info.data.size);
 	}
 	SetVulkanObjectNameF(
 	    graphics.device, backing.image,

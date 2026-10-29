@@ -26,6 +26,7 @@ namespace Libs::Graphics {
 namespace {
 
 constexpr uint64_t MiB           = 1024 * 1024;
+constexpr int64_t  GiB           = 1024ll * 1024 * 1024;
 constexpr uint64_t GdsBufferSize = 64 * 1024;
 // GPU-modified ranges come as many small scattered islands, so a readback widens to a window.
 constexpr uint64_t DownloadWindowSize = 512 * 1024;
@@ -260,7 +261,6 @@ BufferCache::BufferCache(GraphicContext& graphics, CommandScheduler& scheduler,
 	if (!m_graphics.CanReportMemoryUsage()) {
 		return;
 	}
-	constexpr int64_t GiB              = 1024ll * 1024 * 1024;
 	constexpr int64_t target_threshold = 8 * GiB;
 	const auto        budget =
 	    static_cast<int64_t>(std::min<uint64_t>(m_graphics.GetTotalMemoryBudget(), INT64_MAX));
@@ -657,14 +657,24 @@ void BufferCache::RunGarbageCollector() {
 		return;
 	}
 
-	const bool     aggressive = m_total_used_memory >= m_critical_gc_memory;
-	const uint64_t age        = std::min<uint64_t>(aggressive ? 80 : 160, tick);
-	const size_t   limit      = aggressive ? 64 : 32;
+	const bool aggressive = m_total_used_memory >= m_critical_gc_memory;
+	// Retention waits are pointless under pressure: the buffers still warm are what has to go.
+	// The slice is bounded per tick because the absolute limit the heap can reach depends on
+	// allocations this cache cannot free, so a fixed target could never be satisfied.
+	const uint64_t age         = std::min<uint64_t>(aggressive ? 0 : 160, tick);
+	const uint64_t reclaim_cap = aggressive ? 2 * GiB : 0;
+	const size_t   limit       = aggressive ? 512 : 32;
 
 	std::vector<BufferId> dirty_buffers;
 	size_t                retire_count = 0;
+	uint64_t              reclaimed    = 0;
 	m_lru_cache.ForEachItemBelow(tick - age, [&](BufferId id) {
-		auto& buffer = m_slot_buffers[id];
+		if (reclaim_cap != 0 && reclaimed >= reclaim_cap) {
+			return true;
+		}
+		auto&          buffer = m_slot_buffers[id];
+		const uint64_t size   = buffer.Size();
+		EXIT_IF(buffer.is_deleted);
 		m_memory_tracker.ValidateGpuDirtyOwnership(m_gpu_modified_ranges, buffer.CpuAddress(),
 		                                           buffer.Size(), "garbage collection");
 		const bool dirty = m_memory_tracker.IsRegionGpuModified(buffer.CpuAddress(), buffer.Size());
@@ -679,6 +689,7 @@ void BufferCache::RunGarbageCollector() {
 			DeleteBuffer(id);
 			Common::DebugCounters::Add(Common::DebugCounters::Counter::BufferEvictions);
 		}
+		reclaimed += size;
 		return ++retire_count == limit;
 	});
 	if (dirty_buffers.empty()) {

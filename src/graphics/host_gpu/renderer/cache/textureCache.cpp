@@ -34,8 +34,14 @@ namespace Libs::Graphics {
 namespace {
 
 constexpr uint64_t NumFramesBeforeRemoval = 32;
+constexpr int64_t  GiB                    = 1024ll * 1024 * 1024;
 // Largest GPU-written tiled image (in texels) that is written back to guest memory on submit.
 constexpr uint64_t SmallTiledReadbackTexels = 64 * 64;
+// Largest GPU-written linear image (in texels) that is always written back. Linear surfaces hold
+// GPU results the guest polls directly: PPSA01411 spins on the tail word of its 384x216
+// reprojection target and never observes the copy otherwise. Full-size frame buffers are far
+// larger than this and stay opt-in through --readback-linear-images.
+constexpr uint64_t SmallLinearReadbackTexels = 512 * 512;
 
 [[nodiscard]] bool DecodeColorClear(const TextureCache::ImageDesc& desc, uint8_t code,
                                   vk::ClearColorValue& clear) {
@@ -127,14 +133,16 @@ TextureCache::TextureCache(GraphicContext& graphics, CommandScheduler& scheduler
       m_readback_linear_images(Config::ReadbackLinearImagesEnabled()),
       m_readback_tiled_images(Config::ReadbackTiledImagesEnabled()) {
 	if (m_graphics.CanReportMemoryUsage()) {
-		constexpr int64_t GiB = 1024ll * 1024 * 1024;
-		const auto        budget =
+		const auto budget =
 		    static_cast<int64_t>(std::min<uint64_t>(m_graphics.GetTotalMemoryBudget(), INT64_MAX));
 		const auto threshold = std::min<int64_t>(budget, 8 * GiB);
-		m_pressure_gc_memory = static_cast<uint64_t>(
-		    std::max<int64_t>(std::min(budget - 6 * threshold / 10, budget - GiB), GiB + GiB / 2));
 		m_critical_gc_memory = static_cast<uint64_t>(
 		    std::max<int64_t>(std::min(budget - 2 * threshold / 10, budget - GiB / 2), 3 * GiB));
+		// The middle tier buys room in the last stretch before the hard limit. An earlier trigger
+		// would evict textures the title is still using, and much of the budget belongs to
+		// allocations this cache cannot free, so the heap would never fall back below it.
+		m_pressure_gc_memory = static_cast<uint64_t>(std::max<int64_t>(
+		    static_cast<int64_t>(m_critical_gc_memory) - 2 * GiB, 3 * GiB));
 		m_trigger_gc_memory = static_cast<uint64_t>(std::max<int64_t>((budget - threshold) / 2, 0));
 	}
 }
@@ -392,8 +400,13 @@ void TextureCache::TrackImageDownload(ImageId id, Image& image) {
 	const auto& info   = image.info;
 	const auto  texels = static_cast<uint64_t>(info.extent.width) * info.extent.height *
 	                     info.extent.depth * info.resources.layers;
-	if (info.IsTiled() ? m_readback_tiled_images && texels <= SmallTiledReadbackTexels
-	                   : m_readback_linear_images) {
+	const bool small_linear = !info.IsTiled() && texels <= SmallLinearReadbackTexels;
+	const bool enroll = info.IsTiled() ? m_readback_tiled_images && texels <= SmallTiledReadbackTexels
+	                                   : (m_readback_linear_images || small_linear);
+	if (enroll) {
+		if (!image.IsGpuModified()) {
+			EXIT("TextureCache: cannot enroll a non-GPU-owned image for download\n");
+		}
 		m_download_images.insert(id);
 	}
 }
@@ -1930,31 +1943,29 @@ void TextureCache::RunGarbageCollector() {
 		return;
 	}
 	const auto collect = [&](bool allow_aggressive) {
-		bool     pressured  = m_total_used_memory >= m_pressure_gc_memory;
-		bool     aggressive = allow_aggressive && m_total_used_memory >= m_critical_gc_memory;
-		uint64_t age        = 16;
-		size_t   deletions  = 10;
-		if (aggressive) {
-			age       = 160;
-			deletions = 40;
-		} else if (pressured) {
-			age       = 80;
-			deletions = 20;
-		}
-		age = std::min(age, tick);
+		const bool pressured  = m_total_used_memory >= m_pressure_gc_memory;
+		const bool aggressive = allow_aggressive && m_total_used_memory >= m_critical_gc_memory;
+		// Under pressure the recently used images are the only ones left to reclaim: an age quota
+		// that grows with pressure frees nothing while the heap fills.
+		const uint64_t age = std::min<uint64_t>(aggressive ? 0 : pressured ? 2 : 16, tick);
+		// Reclaim a bounded slice per tick instead of chasing an absolute target. A large part of
+		// the budget belongs to allocations this cache cannot free, so a target below that level
+		// would drain every texture and make the title re-upload all of them on the next frames.
+		const uint64_t reclaim_cap = aggressive ? 2 * GiB : pressured ? GiB / 2 : 0;
+		const size_t   limit       = aggressive ? 512 : pressured ? 128 : 10;
 		std::vector<ImageId> candidates;
-		candidates.reserve(deletions);
+		candidates.reserve(limit);
 		// Deleting depth recursively deletes its stencil association, so finish LRU traversal
 		// first.
 		m_lru_cache.ForEachItemBelow(tick - age, [&](ImageId id) {
 			candidates.push_back(id);
-			return candidates.size() == deletions;
+			return candidates.size() == limit;
 		});
+		uint64_t reclaimed = 0;
 		for (const auto id: candidates) {
-			if (deletions == 0) {
+			if (reclaim_cap != 0 && reclaimed >= reclaim_cap) {
 				break;
 			}
-			--deletions;
 			auto owner = m_slot_images.try_get(id);
 			if (owner == nullptr || !owner->registered || owner->depth_id) {
 				continue;
@@ -1976,16 +1987,9 @@ void TextureCache::RunGarbageCollector() {
 					continue;
 				}
 			}
+			reclaimed += owner->AccountedSize();
 			FreeImage(id);
 			Common::DebugCounters::Add(Common::DebugCounters::Counter::TextureEvictions);
-			if (m_total_used_memory < m_critical_gc_memory && aggressive) {
-				deletions >>= 2;
-				aggressive = false;
-			}
-			if (m_total_used_memory < m_pressure_gc_memory && pressured) {
-				deletions >>= 1;
-				pressured = false;
-			}
 		}
 	};
 	collect(false);
@@ -1994,17 +1998,16 @@ void TextureCache::RunGarbageCollector() {
 	}
 }
 
-void TextureCache::ProcessDownloadImages() {
-	if (!m_readback_linear_images && !m_readback_tiled_images) {
-		return;
-	}
+uint32_t TextureCache::ProcessDownloadImages() {
+	uint32_t         issued = 0;
 	std::scoped_lock lock {m_lock};
 	for (const auto id: m_download_images) {
-		if (m_slot_images[id].IsGpuModified()) {
-			(void)DownloadImageMemory(id);
+		if (m_slot_images[id].IsGpuModified() && DownloadImageMemory(id)) {
+			issued++;
 		}
 	}
 	m_download_images.clear();
+	return issued;
 }
 
 } // namespace Libs::Graphics
