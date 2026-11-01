@@ -16524,6 +16524,47 @@ public:
           "valid PS5 texture-compatibility policy changed logical depth image "
           "identity or discovery side effects");
 
+      // A single-level target has no mip tail; its selected mip, however small, is drawn at its
+      // address with that mip's extent.
+      HW::DepthRenderTarget mip_target{};
+      mip_target.z_info.format = Prospero::DepthFormat::kZ16;
+      mip_target.z_info.htile_acceleration = true;
+      mip_target.z_read_base_addr = base + 0xf00000;
+      mip_target.z_write_base_addr = base + 0xf00000;
+      mip_target.htile_data_base_addr = base + 0xf80000;
+      mip_target.size.valid = true;
+      mip_target.size.x_max = 255;
+      mip_target.size.y_max = 255;
+      mip_target.depth_view.current_mip_level = 2;
+      registers.SetDepthRenderTarget(mip_target);
+      RenderDepthInfo mip_depth{};
+      RenderExecutorTestAccess::ResolveRenderDepthTarget(
+          executor, scheduler.Current(), mip_depth);
+      Require(name, "single-level depth mip",
+              mip_depth.image_id &&
+                  mip_depth.desc.info.extent == vk::Extent3D{64, 64, 1},
+              "a selected mip of a single-level depth target was not drawn at its extent");
+
+      // Without HTile, the Hi-Stencil enable has no effect and the stencil plane is uncompressed.
+      constexpr uint64_t uncompressed_depth_address = base + 0x200000;
+      constexpr uint64_t uncompressed_stencil_address = base + 0x210000;
+      auto uncompressed_stencil_target = phased_depth_target;
+      uncompressed_stencil_target.z_info.htile_acceleration = false;
+      uncompressed_stencil_target.z_read_base_addr = uncompressed_depth_address;
+      uncompressed_stencil_target.z_write_base_addr = uncompressed_depth_address;
+      uncompressed_stencil_target.stencil_read_base_addr = uncompressed_stencil_address;
+      uncompressed_stencil_target.stencil_write_base_addr = uncompressed_stencil_address;
+      registers.SetDepthRenderTarget(uncompressed_stencil_target);
+      RenderDepthInfo uncompressed_stencil_depth{};
+      RenderExecutorTestAccess::ResolveRenderDepthTarget(
+          executor, scheduler.Current(), uncompressed_stencil_depth);
+      Require(name, "stencil plane without HTile",
+              uncompressed_stencil_depth.image_id &&
+                  uncompressed_stencil_depth.desc.info.stencil.address ==
+                      uncompressed_stencil_address &&
+                  uncompressed_stencil_depth.desc.info.metadata.kind == ImageMetadataKind::None,
+              "a stencil plane without HTile was rejected or kept HTile metadata");
+
       auto read_only_depth_target = phased_depth_target;
       read_only_depth_target.z_write_base_addr = 0;
       read_only_depth_target.stencil_write_base_addr = 0;
@@ -50977,22 +51018,6 @@ void CheckNativeMsaaState() {
   std::printf("[host]    %-32s ok\n", "NativeMsaaState");
 }
 
-void CheckDepthHtileStencilCompatibility() {
-  Require("DepthHtileStencilCompatibility", "inactive stencil plane",
-          depth_htile_stencil_acceleration_compatible(false, true, false),
-          "inactive Hi-Stencil state was treated as an attachment");
-  Require("DepthHtileStencilCompatibility", "disabled acceleration",
-          depth_htile_stencil_acceleration_compatible(true, false, true),
-          "disabled Hi-Stencil state was rejected");
-  Require("DepthHtileStencilCompatibility", "PS5 stencil plus HTile",
-          depth_htile_stencil_acceleration_compatible(true, true, false),
-          "valid PS5 Hi-Stencil attachment was rejected");
-  Require("DepthHtileStencilCompatibility", "missing HTile metadata",
-          !depth_htile_stencil_acceleration_compatible(true, false, false),
-          "active Hi-Stencil without HTile metadata was admitted");
-  std::printf("[host]    %-32s ok\n", "DepthHtileStencilCompatibility");
-}
-
 void CheckPs5DepthRegisterDecoding() {
   constexpr uint32_t captured_z = 0x22900803u;
   constexpr uint32_t captured_stencil = 0x00100801u;
@@ -52846,6 +52871,13 @@ void CheckPm4ContextStateOperations(RenderContext &renderer) {
                        !slot.viewport_scissor_window_offset_enable;
               }),
           "CLEAR_STATE did not restore scissor and guard-band defaults");
+  // Rule 0x8000 intersects all four clip rects, which reset to (0,0)-(16384,16384).
+  processor.GetCtx().SetClipRectRule(0x8000);
+  const auto clipped = calc_final_scissor(viewport, {}, {20000, 20000}, 0);
+  Require("Pm4ContextState", "clip-rect defaults",
+          clipped.left == 0 && clipped.top == 0 && clipped.right == 16384 &&
+              clipped.bottom == 16384,
+          "unwritten clip rects emptied the scissor");
   const std::array scissor_registers{
       std::pair{Pm4::PA_SC_SCREEN_SCISSOR_TL, Pm4::PA_SC_SCREEN_SCISSOR_BR},
       std::pair{Pm4::PA_SC_WINDOW_SCISSOR_TL, Pm4::PA_SC_WINDOW_SCISSOR_BR},
@@ -54715,7 +54747,6 @@ int main(int argc, char **argv) {
   CheckStorageTextureGpuOwnedRebindState();
   CheckNativeMsaaState();
   CheckPs5DepthRegisterDecoding();
-  CheckDepthHtileStencilCompatibility();
   CheckDepthAttachmentWrites();
   CheckDepthFeedbackAspects();
   CheckDynamicRenderingState();
