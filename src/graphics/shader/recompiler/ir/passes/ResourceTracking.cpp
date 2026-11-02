@@ -1623,6 +1623,13 @@ private:
 			else return nullptr;
 			read = ActiveValue(value, active).TryInstruction();
 		}
+		if (read != nullptr && read->GetOpcode() == ValueOpcode::SMax32) {
+			if (read->Arg(1).Resolve() == Value(0u)) value = read->Arg(0);
+			else if (read->Arg(0).Resolve() == Value(0u)) value = read->Arg(1);
+			else return nullptr;
+			selector.non_negative = true;
+			read = ActiveValue(value, active).TryInstruction();
+		}
 		if (read != nullptr && read->GetOpcode() == ValueOpcode::BitFieldUExtract) {
 			uint32_t width;
 			if (!ImmediateU32(read->Arg(1), selector.bit_offset) ||
@@ -1660,7 +1667,7 @@ private:
 
 	bool MatchUniformizedMaterialKey(Value key, const Inst& image,
 	                                DescriptorSource::IndirectDescriptor& indirect,
-	                                DescriptorSource& material_source, bool indexed) {
+	                                DescriptorSource& material_source, bool indexed, bool heap = false) {
 		const auto* selected = UniformizedMaterialValue(key, image);
 		if (selected == nullptr) return false;
 		const auto active = selected->Arg(0).Resolve();
@@ -1668,17 +1675,25 @@ private:
 		const auto* read = SelectorReadValue(selected->Arg(1), active, selector);
 		if (indexed) {
 			read = IndexedMaterialRead(read, active, selector);
-			// Bounded heaps fall back when the material aliases a written buffer; pointer
-			// tables rely on the renderer's specialization-read alias check. Other stages
-			// and unbounded/image writes keep the original domain.
+			// Bounded heaps keep their full domain when the material may alias a write: written
+			// buffers are checked at dispatch, storage images and address writes here. Pointer
+			// tables have no such domain, so a key that a same-dispatch write changes selects
+			// the root descriptor. Other stages keep the original domain.
 			if (read == nullptr || m_program.stage != ShaderType::Compute ||
-			    std::ranges::any_of(m_program.blocks, [](const Block* block) {
+			    (heap && std::ranges::any_of(m_program.blocks, [](const Block* block) {
 				    return std::ranges::any_of(*block, [](const Inst& inst) {
 					    const auto op = inst.GetOpcode();
 					    return ImageOpcodeInfoOf(op).resource_class == ImageResourceClass::Storage ||
 					           AddressOpcodeInfoOf(op).access == AddressAccess::Write;
 				    });
-			    }) || !MakeRuntimeTableSource(*read, material_source)) return false;
+			    })) || !MakeRuntimeTableSource(*read, material_source)) return false;
+			// The record index is assumed not to wrap U32; an affine one then reaches only
+			// records offset + k * stride.
+			AffineOffset row;
+			if (MatchAffineOffset(read->Arg(1), active, row) && row.stride != 0u) {
+				selector.first_record = static_cast<uint32_t>(row.offset);
+				selector.record_step = static_cast<uint32_t>(row.stride);
+			}
 			selector.source = InternSource(material_source);
 			indirect.selector = std::move(selector);
 			return true;
@@ -2140,9 +2155,10 @@ private:
 			if (candidate.IsEmpty()) candidate = UnsignedBoundOnEntry(key, access.Parent(), false, active);
 			if (candidate.IsEmpty()) {
 				// A waterfall key inherits the local value's bound only where this same
-				// EXEC predicate proves both their equality and the local range.
+				// EXEC predicate proves both their equality and the local range. Otherwise
+				// the key itself is bounded, with this predicate witnessing its own !(A & Q).
 				const auto local = EqualLocalKey(active, key);
-				if (!local.IsEmpty()) candidate = UnsignedBound(active, local, true, false, active);
+				candidate = UnsignedBound(active, local.IsEmpty() ? key : local, true, false, active);
 			}
 			if (candidate.IsEmpty() ||
 			    !ValidateRuntimeValue(m_program, candidate, RuntimeValueType::Integer)) return {};
@@ -3236,7 +3252,7 @@ private:
 			// the GPU key using the same plan as other indirect image reads.
 			plan.retain_reads |= table_source.dword_count == 4u;
 		} else if (!sampler && !plan.table_indexed && table_source.dword_count == 4u &&
-		           MatchUniformizedMaterialKey(key, handle, indirect, material_source, true)) {
+		           MatchUniformizedMaterialKey(key, handle, indirect, material_source, true, true)) {
 			// Preserve the heap's byte-offset key so runtime geometry can choose the
 			// tighter selector domain without changing the GPU's descriptor reads.
 			indirect.table_scalar = true;
@@ -3756,6 +3772,11 @@ private:
 			}
 			case ValueOpcode::IAdd32: {
 				const auto result = uint64_t {maximum(0)} + maximum(1);
+				if (result <= UINT32_MAX) return static_cast<uint32_t>(result);
+				break;
+			}
+			case ValueOpcode::IMul32: {
+				const auto result = uint64_t {maximum(0)} * maximum(1);
 				if (result <= UINT32_MAX) return static_cast<uint32_t>(result);
 				break;
 			}

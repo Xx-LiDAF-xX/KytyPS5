@@ -10740,6 +10740,8 @@ public:
         TargetCase{128, 128, 1, 128, 0x2be00, Prospero::TileMode::kLinear, 7, true},
         // PPSA03541: the single texel still occupies a padded 128x64 block.
         TargetCase{1, 1, 1, 128, 0x10000, Prospero::TileMode::kRenderTarget, 1, true},
+        // Mips of a single stored level keep mip 0's one-tile pitch and alias it.
+        TargetCase{128, 128, 1, 128, 0x20000, Prospero::TileMode::kRenderTarget, 1, true},
     };
     constexpr uint64_t allocation_size = 0x410000;
 
@@ -10935,6 +10937,17 @@ public:
             RenderExecutorTestAccess::ResetBindings(executor);
           }
         }
+      }
+
+      if (width == 128 && target.levels == 1) {
+        registers.SetColorView(0, {.current_mip_level = 7});
+        RenderColorInfo aliased{};
+        RenderExecutorTestAccess::ResolveRenderColorTarget(
+            executor, scheduler.Current(), aliased, 0);
+        Require(name, "single-level mip alias",
+                aliased.image_id == color.image_id && aliased.guest_mip_level == 0 &&
+                    aliased.desc.view_info.base_level == 0,
+                "a mip beyond a single stored level did not alias mip 0");
       }
 
       RenderExecutorTestAccess::ResetBindings(executor);
@@ -27042,6 +27055,67 @@ TestCase Vop2SdwaMinI32CapturedByte0(u32 wave_size) {
                   O::V_MIN_I32, O::BUFFER_STORE_DWORD, O::S_ENDPGM};
   test.decoded_counts = {{"V_MIN_I32 v2, v5, v2.sdwa(sel=0,sext=0)", cases.size()}};
   test.required_spirv = {"OpBitFieldUExtract"};
+  test.compute_info.wave_size = wave_size;
+  test.has_compute_info = true;
+  return test;
+}
+
+TestCase Vop2SdwaIntegerPartialDestinations(u32 wave_size) {
+  using O = ShaderOpcode;
+  constexpr u32 sentinel = 0xa1b2c3d4u;
+  struct OpCase { u32 opcode, result; };
+  // v4 = 0xffff8001, v5 = 0x9280; V_ADDC_U32 adds the VCC carry-in 1 and wraps.
+  constexpr std::array<OpCase, 5> ops{{{0x11, 0xffff8001u},
+                                       {0x12, 0x00009280u},
+                                       {0x14, 0xffff8001u},
+                                       {0x27, 0x0001127fu},
+                                       {0x28, 0x00001282u}}};
+  TestCase test;
+  test.name = wave_size == 64 ? "Vop2SdwaIntegerPartialDestinationsWave64"
+                             : "Vop2SdwaIntegerPartialDestinationsWave32";
+  test.initial = {0xffff8001u, 0x00009280u, 0xfffe1234u, 0x00012345u};
+  test.expected = test.initial;
+  auto &code = test.code;
+  const auto store = [&](u32 reg, u32 expected) {
+    AppendStoreVgpr(&code, reg, static_cast<u32>(test.expected.size()));
+    test.expected.push_back(expected);
+  };
+  for (u32 index = 0; index < 2u; ++index) {
+    AppendVMovU32(&code, 30, index * 4u);
+    AppendBufferLoadDword(&code, 4u + index, 30);
+  }
+  for (const auto &op : ops) {
+    for (u32 selector = 0; selector < 6u; ++selector) {
+      const u32 width = selector < 4u ? 8u : 16u;
+      const u32 offset = (selector % 4u) * width;
+      const u32 mask = (1u << width) - 1u;
+      const u32 field = op.result & mask;
+      for (u32 unused = 0; unused < 3u; ++unused) {
+        AppendVMovLiteral(&code, 10, sentinel);
+        code.push_back(EncodeSMovB32(106, InlineU32(1)));
+        code.push_back(EncodeVop2(op.opcode, 10, 249, 5));
+        code.push_back(EncodeVop2Sdwa(4, selector, unused));
+        const u32 fill = unused == 1u && (field >> (width - 1u)) != 0u ? ~mask : 0u;
+        store(10, ((field | fill) << offset) |
+                      (unused == 2u ? sentinel & ~(mask << offset) : 0u));
+      }
+    }
+  }
+  for (u32 index = 2; index < 4u; ++index) {
+    AppendVMovU32(&code, 30, index * 4u);
+    AppendBufferLoadDword(&code, 16, 30);
+    AppendVMovLiteral(&code, 11, sentinel);
+    // Captured: v_max_i32 v11.word0, 0, v16; preserve.
+    code.insert(code.end(), {0x241620f9u, 0x06861480u});
+    store(11, index == 2u ? 0xa1b20000u : 0xa1b22345u);
+  }
+  AppendEnd(&code);
+  test.initial.resize(test.expected.size());
+  test.opcodes = {O::BUFFER_LOAD_DWORD, O::V_MOV_B32, O::S_MOV_B32,
+                  O::V_MIN_I32, O::V_MAX_I32, O::V_MAX_U32,
+                  O::V_SUBREV_NC_U32, O::V_ADDC_U32, O::BUFFER_STORE_DWORD,
+                  O::S_ENDPGM};
+  test.required_spirv = {"OpBitFieldInsert", "OpBitFieldSExtract"};
   test.compute_info.wave_size = wave_size;
   test.has_compute_info = true;
   return test;
@@ -47179,6 +47253,8 @@ std::vector<TestCase> MakeCases() {
   cases.push_back(Vop2SdwaMaxI32CapturedHighWord(64));
   cases.push_back(Vop2SdwaMinI32CapturedByte0(32));
   cases.push_back(Vop2SdwaMinI32CapturedByte0(64));
+  cases.push_back(Vop2SdwaIntegerPartialDestinations(32));
+  cases.push_back(Vop2SdwaIntegerPartialDestinations(64));
   cases.push_back(VectorMulHi24(32));
   cases.push_back(VectorMulHi24(64));
   cases.push_back(Vop2SdwaMulI24Destinations(32));
@@ -54552,6 +54628,8 @@ int main(int argc, char **argv) {
     VulkanHarness vulkan;
     RunCase(&vulkan, Vop2SdwaMaxI32CapturedHighWord(32));
     RunCase(&vulkan, Vop2SdwaMaxI32CapturedHighWord(64));
+    RunCase(&vulkan, Vop2SdwaIntegerPartialDestinations(32));
+    RunCase(&vulkan, Vop2SdwaIntegerPartialDestinations(64));
     RunCase(&vulkan, VectorIntegerOps());
     return 0;
   }
