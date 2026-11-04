@@ -5,6 +5,7 @@
 #include "common/archive.h"
 #include "common/file.h"
 #include "ArchiveTestFixture.h"
+#include "FileTimeTestUtil.h"
 #include "common/logging/log.h"
 #include "common/singleton.h"
 #include "common/subsystems.h"
@@ -33,6 +34,7 @@
 #include <future>
 #include <limits>
 #include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -684,6 +686,30 @@ void TestSaveOpenVisibility() {
   Check(FileSystem::KernelStat(Path, &stat) == OK && stat.st_size == 0,
         "save truncation is visible before close");
   Check(FileSystem::KernelClose(truncated) == OK, "close truncated save file");
+  Check(FileSystem::KernelUnlink("/savedata0") == Libs::LibKernel::KERNEL_ERROR_EPERM,
+        "unlink refuses a directory");
+  Check(FileSystem::KernelMkdir(Path, 0777) == Libs::LibKernel::KERNEL_ERROR_EEXIST &&
+            FileSystem::KernelMkdir("/savedata0", 0777) == Libs::LibKernel::KERNEL_ERROR_EEXIST,
+        "mkdir reports an existing file or directory");
+}
+
+bool HasTestWriteTime(const FileSystem::FileStat &stat) {
+  return stat.st_mtim.tv_sec == 1700000000 && stat.st_mtim.tv_nsec == 123456700 &&
+         stat.st_birthtim.tv_sec == 1700000000 && stat.st_birthtim.tv_nsec == 123456700 &&
+         stat.st_atim.tv_sec > 1700000000;
+}
+
+void TestStatTimes() {
+  constexpr char Path[] = "/savedata0/stat-times.dat";
+  const int fd = FileSystem::KernelOpen(Path, 0x602, 0777);
+  Check(fd >= 3, "create stat time fixture");
+  SetUnixWriteTime(FileSystem::GetRealFilename(Path), 1700000000123456700);
+  FileSystem::FileStat by_path {};
+  FileSystem::FileStat by_fd {};
+  Check(FileSystem::KernelStat(Path, &by_path) == OK && FileSystem::KernelFstat(fd, &by_fd) == OK &&
+            HasTestWriteTime(by_path) && HasTestWriteTime(by_fd),
+        "stat and fstat report exact host file times");
+  Check(FileSystem::KernelClose(fd) == OK, "close stat time fixture");
 }
 
 void TestFsync() {
@@ -1324,8 +1350,8 @@ void CheckUnicodeLogPath(const std::filesystem::path &root) {
   Config::Load(options);
   Log::Initialize();
   constexpr std::string_view Payload = "Unicode log path\n";
-  Log::Write(Payload);
-  Log::Shutdown();
+  Log::Write({}, Payload);
+  Log::Flush();
 
   Common::File result(options.printf_output_file, Common::File::Mode::Read);
   Check(!result.IsInvalid(), "open Unicode log file");
@@ -1372,6 +1398,8 @@ void CheckDirectoryStream(const std::filesystem::path &root) {
 
   std::array<char, 512> block{};
   int64_t base = -1;
+  std::set<uint32_t> filenos;
+  size_t entries = 0;
   for (int64_t offset = 0; offset < end; offset += block.size()) {
     Check(FileSystem::KernelGetdirentries(fd, block.data(), block.size(),
                                           &base) == block.size() &&
@@ -1387,9 +1415,15 @@ void CheckDirectoryStream(const std::filesystem::path &root) {
       Check(length >= 9 + name_length && length <= block.size() - pos &&
                 block[pos + 8 + name_length] == '\0',
             "directory entries remain complete within every block");
+      uint32_t fileno = 0;
+      std::memcpy(&fileno, block.data() + pos, sizeof(fileno));
+      filenos.insert(fileno);
+      entries++;
       pos += length;
     }
   }
+  Check(entries > 2 && filenos.size() == entries,
+        "directory entries carry distinct file numbers");
   Check(FileSystem::KernelGetdirentries(fd, block.data(), block.size(),
                                         &base) == 0 &&
             base == end,
@@ -1448,6 +1482,12 @@ void CheckAmprOrdering(Loader::SymbolDatabase &symbols, uint32_t file_id) {
     Check(symbol != nullptr, "AMPR command and submission exports resolve");
     return symbol->vaddr;
   };
+  using GetFileStat = int (KYTY_SYSV_ABI *)(uint32_t, FileSystem::FileStat *);
+  FileSystem::FileStat stat {};
+  Check(reinterpret_cast<GetFileStat>(find("ApkYaHb8Sek"))(file_id, &stat) == OK &&
+            (stat.st_mode & 0170000u) == 0100000u && stat.st_size == 3 && stat.st_blocks == 1 &&
+            HasTestWriteTime(stat),
+        "APR file stat reports a regular file with its size and host times");
   using Unary = void (KYTY_SYSV_ABI *)(void *);
   using AprConstructor = void (KYTY_SYSV_ABI *)(void *, void *, void *);
   using SetBuffer = int (KYTY_SYSV_ABI *)(void *, void *, uint32_t);
@@ -1788,6 +1828,14 @@ void CheckAprPaths(const std::filesystem::path &root) {
               stat.st_size == static_cast<int64_t>(sizes[i]) && size == sizes[i],
           "APR re-resolution preserves each file's ID, host path and cached size");
   }
+  const char *directory_path[] = {"perf-audit"};
+  uint64_t directory_size = 0, cached_size = 1;
+  Check(resolve("/app0/", directory_path, 1, ids, &directory_size, &error_index) == OK &&
+            directory_size == 0x10000 &&
+            reinterpret_cast<Size>(size_symbol->vaddr)(ids[0], &cached_size) == OK &&
+            cached_size == 0 &&
+            reinterpret_cast<Size>(size_symbol->vaddr)(0xfffffffeu, &cached_size) != OK,
+        "APR resolves a directory and reports sizes only for known IDs");
 
   // PATH_MAX includes NUL; all components remain below NAME_MAX (255).
   std::string longest = "/app0/";
@@ -1812,6 +1860,7 @@ void CheckAprPaths(const std::filesystem::path &root) {
   Check(resolve(unterminated.data(), paths, 1, ids, sizes, &error_index) == -1 &&
             *Libs::Posix::GetErrorAddr() == Libs::Posix::POSIX_ENAMETOOLONG,
         "APR rejects an unterminated prefix");
+  SetUnixWriteTime(root / collision_paths[0], 1700000000123456700);
   CheckAmprOrdering(symbols, collision_ids[0]);
   FileSystem::Umount("/app0");
 }
@@ -2769,6 +2818,7 @@ int main(int argc, char** argv) {
   CheckAprPaths(temporary.Path());
   FileSystem::Mount(temporary.Path(), "/savedata0");
   TestSaveOpenVisibility();
+  TestStatTimes();
   TestFsync();
   TestSaveTruncate();
   TestSaveWritev();

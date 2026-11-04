@@ -3,11 +3,9 @@
 #include "common/archive.h"
 #include "common/assert.h"
 #include "common/common.h"
-#include "common/dateTime.h"
 #include "common/debugCounters.h"
 #include "common/emulatorConfig.h"
 #include "common/file.h"
-#include "common/hash.h"
 #include "common/logging/log.h"
 #include "common/stringUtils.h"
 #include "common/threads.h"
@@ -18,12 +16,15 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <climits>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <random>
+#include <string_view>
 #include <system_error>
 #include <vector>
 
@@ -113,9 +114,18 @@ static void FillRandomBuffer(void* buf, size_t nbytes) {
 	}
 }
 
-static void SecToTimespec(KernelTimespec* ts, double sec) {
-	ts->tv_sec  = static_cast<int64_t>(sec);
-	ts->tv_nsec = static_cast<int64_t>((sec - static_cast<double>(ts->tv_sec)) * 1000000000.0);
+// Without times (directories, devices) the current time is reported.
+static void SetStatTimes(FileStat* stat, std::optional<Common::File::Times> times) {
+	if (!times) {
+		const int64_t now =
+		    std::chrono::nanoseconds(std::chrono::system_clock::now().time_since_epoch()).count();
+		times = {now, now};
+	}
+	constexpr int64_t NANOS_PER_SEC = 1000000000;
+	stat->st_atim     = {times->access_ns / NANOS_PER_SEC, times->access_ns % NANOS_PER_SEC};
+	stat->st_mtim     = {times->write_ns / NANOS_PER_SEC, times->write_ns % NANOS_PER_SEC};
+	stat->st_ctim     = stat->st_atim;
+	stat->st_birthtim = stat->st_mtim;
 }
 
 static uint64_t AlignDown(uint64_t value, uint64_t alignment) {
@@ -144,7 +154,7 @@ static std::vector<uint8_t> PackDirents(const std::vector<Common::File::DirEntry
 			dirents.resize(offset + DIR_BLOCK_SIZE);
 		}
 		*reinterpret_cast<uint32_t*>(dirents.data() + offset) =
-		    Common::hash(name.data(), static_cast<uint32_t>(name.size()));
+		    static_cast<uint32_t>(std::hash<std::string_view> {}(name));
 		*reinterpret_cast<uint16_t*>(dirents.data() + offset + 4) = static_cast<uint16_t>(reclen);
 		dirents[offset + 6]                                       = entry.is_file ? 8 : 4;
 		dirents[offset + 7] = static_cast<uint8_t>(name.size());
@@ -1133,8 +1143,10 @@ int KYTY_SYSV_ABI KernelStat(const char* path, FileStat* sb) {
 		return OK;
 	}
 
-	auto real_file_name = g_mount_points->ResolvePath(path);
+	return StatHostPath(g_mount_points->ResolvePath(path), sb);
+}
 
+int StatHostPath(const std::filesystem::path& real_file_name, FileStat* sb) {
 	const auto info = Common::File::GetInfo(real_file_name);
 	if (!info) {
 		LOGF("\t file not found\n");
@@ -1146,9 +1158,6 @@ int KYTY_SYSV_ABI KernelStat(const char* path, FileStat* sb) {
 	FileStat stat {};
 	stat.st_mode = 0000777u | (is_dir ? 0040000u : 0100000u);
 
-	auto at = Common::DateTime::FromSystemUTC();
-	auto wt = at;
-
 	if (is_dir) {
 		stat.st_size =
 		    static_cast<int64_t>(PackDirents(Common::File::GetDirEntries(real_file_name)).size());
@@ -1158,15 +1167,10 @@ int KYTY_SYSV_ABI KernelStat(const char* path, FileStat* sb) {
 		stat.st_size    = static_cast<int64_t>(info->size);
 		stat.st_blksize = 512;
 		stat.st_blocks  = (stat.st_size + 511) / 512;
-
-		Common::File::GetLastAccessAndWriteTimeUTC(real_file_name, &at, &wt);
 	}
 
-	SecToTimespec(&stat.st_atim, at.ToUnix());
-	SecToTimespec(&stat.st_mtim, wt.ToUnix());
-	stat.st_ctim     = stat.st_atim;
-	stat.st_birthtim = stat.st_mtim;
-	*sb              = stat;
+	SetStatTimes(&stat, is_dir ? std::nullopt : Common::File::GetTimes(real_file_name));
+	*sb = stat;
 
 	return OK;
 }
@@ -1195,8 +1199,7 @@ int KYTY_SYSV_ABI KernelFstat(int d, FileStat* sb) {
 	FileStat stat {};
 	stat.st_mode = 0000777u | (file->directory ? 0040000u : 0100000u);
 
-	auto at = Common::DateTime::FromSystemUTC();
-	auto wt = at;
+	std::optional<Common::File::Times> times;
 
 	if (file->special != SpecialFile::None) {
 		stat.st_mode    = 0020644u;
@@ -1208,7 +1211,7 @@ int KYTY_SYSV_ABI KernelFstat(int d, FileStat* sb) {
 
 		bool is_invalid = file->f.IsInvalid();
 		auto size       = file->f.Size();
-		file->f.GetLastAccessAndWriteTimeUTC(&at, &wt);
+		times           = file->f.GetTimes();
 
 		file->mutex.Unlock();
 
@@ -1226,11 +1229,8 @@ int KYTY_SYSV_ABI KernelFstat(int d, FileStat* sb) {
 		stat.st_blocks  = stat.st_size / 512;
 	}
 
-	SecToTimespec(&stat.st_atim, at.ToUnix());
-	SecToTimespec(&stat.st_mtim, wt.ToUnix());
-	stat.st_ctim     = stat.st_atim;
-	stat.st_birthtim = stat.st_mtim;
-	*sb              = stat;
+	SetStatTimes(&stat, times);
+	*sb = stat;
 
 	return OK;
 }
@@ -1370,15 +1370,13 @@ int KYTY_SYSV_ABI KernelUnlink(const char* path) {
 		return KERNEL_ERROR_EROFS;
 	}
 
-	bool is_dir  = Common::File::IsDirectoryExisting(real_file_name);
-	bool is_file = Common::File::IsFileExisting(real_file_name);
-
-	if (is_dir) {
-		return KERNEL_ERROR_EPERM;
+	const auto info = Common::File::GetInfo(real_file_name);
+	if (!info) {
+		return KERNEL_ERROR_ENOENT;
 	}
 
-	if (!is_file) {
-		return KERNEL_ERROR_ENOENT;
+	if (!info->is_file) {
+		return KERNEL_ERROR_EPERM;
 	}
 
 	auto* open_file = g_files->GetFile(real_file_name);
@@ -1497,19 +1495,11 @@ int KYTY_SYSV_ABI KernelMkdir(const char* path, uint16_t mode) {
 		return KERNEL_ERROR_EROFS;
 	}
 
-	if (Common::File::IsDirectoryExisting(real_name)) {
+	if (Common::File::GetInfo(real_name)) {
 		return KERNEL_ERROR_EEXIST;
 	}
 
-	if (!Common::File::CreateDirectory(real_name)) {
-		return KERNEL_ERROR_EIO;
-	}
-
-	if (!Common::File::IsDirectoryExisting(real_name)) {
-		return KERNEL_ERROR_ENOENT;
-	}
-
-	return OK;
+	return Common::File::CreateDirectory(real_name) ? OK : KERNEL_ERROR_EIO;
 }
 
 int KYTY_SYSV_ABI KernelRmdir(const char* path) {
@@ -1558,11 +1548,7 @@ int KYTY_SYSV_ABI KernelCheckReachability(const char* path) {
 
 	auto real_name = g_mount_points->ResolvePath(mounted_path);
 
-	if (Common::File::IsFileExisting(real_name) || Common::File::IsDirectoryExisting(real_name)) {
-		return OK;
-	}
-
-	return KERNEL_ERROR_ENOENT;
+	return Common::File::GetInfo(real_name) ? OK : KERNEL_ERROR_ENOENT;
 }
 
 } // namespace Libs::LibKernel::FileSystem
