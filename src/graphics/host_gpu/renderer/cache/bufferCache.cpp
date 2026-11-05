@@ -256,7 +256,7 @@ BufferCache::BufferCache(GraphicContext& graphics, CommandScheduler& scheduler,
                              BDA_PAGETABLE_SIZE),
       m_memory_tracker(page_manager),
       m_staging_buffer(graphics, scheduler, MemoryUsage::Upload, 512 * MiB),
-      m_stream_buffer(graphics, scheduler, MemoryUsage::Stream, 64 * MiB),
+      m_stream_buffer(graphics, scheduler, MemoryUsage::Stream, 256 * MiB),
       m_download_buffer(graphics, scheduler, MemoryUsage::Download, 64 * MiB),
       m_device_buffer(graphics, scheduler, MemoryUsage::DeviceLocal, 128 * MiB),
       m_texture_cache(texture_cache) {
@@ -313,7 +313,7 @@ void BufferCache::InvalidateMemory(uint64_t vaddr, uint64_t size) {
 					const auto buf_end   = buf_start + buffer->Size();
 					if (vaddr >= buf_start && vaddr < buf_end) {
 						const auto page_start = Common::AlignDown(vaddr, TRACKER_PAGE_SIZE);
-						constexpr uint64_t MaxCluster = 64 * 1024;
+						constexpr uint64_t MaxCluster = 32 * 1024;
 						const auto cluster_end = std::min({buf_end, page_start + MaxCluster,
 						                                  Common::AlignUp(page_start + 1, TRACKER_REGION_SIZE)});
 						if (cluster_end > page_start &&
@@ -545,11 +545,17 @@ std::pair<Buffer*, uint64_t> BufferCache::ObtainBuffer(uint64_t vaddr, uint64_t 
                                                        BufferId id) {
 	EXIT_IF(!(GuestRange {vaddr, size}.Valid()));
 
-	if (!is_written && size <= CACHING_PAGESIZE &&
-	    !m_memory_tracker.IsRegionGpuModified(vaddr, size) &&
-	    m_memory_tracker.IsRegionCpuModified(vaddr, size)) {
-		const auto alignment = std::max<uint64_t>(
-		    m_graphics.physical_device_properties.limits.minUniformBufferOffsetAlignment, 1);
+	constexpr uint64_t MaxStreamBufferSize = 512 * 1024;
+	const bool can_stream = !is_written && size <= MaxStreamBufferSize &&
+	                        (!is_texel_buffer || !m_texture_cache.FindImageFromRange(vaddr, size)) &&
+	                        !m_memory_tracker.IsRegionGpuModified(vaddr, size) &&
+	                        m_memory_tracker.IsRegionCpuModified(vaddr, size);
+	if (can_stream) {
+		const auto alignment = std::max({
+		    static_cast<uint64_t>(m_graphics.physical_device_properties.limits.minUniformBufferOffsetAlignment),
+		    static_cast<uint64_t>(m_graphics.physical_device_properties.limits.minStorageBufferOffsetAlignment),
+		    uint64_t {16}
+		});
 		auto [mapped, offset] = m_stream_buffer.Map(size, alignment, false);
 		if (mapped != nullptr) {
 			if (!LibKernel::Memory::CopySparseMemory(vaddr, mapped, size)) {
