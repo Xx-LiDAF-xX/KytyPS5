@@ -23,6 +23,7 @@
 #include "loader/guestInstructionPatcher.h"
 #include "loader/jit.h"
 #include "loader/symbolDatabase.h"
+#include "loader/systemContent.h"
 #include "loader/x64InstructionEmulator.h"
 
 #include <algorithm>
@@ -959,6 +960,32 @@ static void PatchProgram(Program* program, uint64_t address, uint64_t size) {
 				} else {
 					std::memset(ptr, 0x90, 12);
 				}
+			}
+		}
+	}
+
+	// PPSA03446 (Pumpkin Jack) - UE4 TSparseArray null-buffer compact guard.
+	// When an RHI resource flush callback frees the sparse array during iteration,
+	// [rdi] (the element buffer) becomes null. Attempting to compact elements in
+	// the deallocated container results in a null pointer dereference at 0x90164d0c9.
+	// Guard against a null element buffer before entering the compaction loop.
+	std::string title_id;
+	if (SystemContentParamSfoGetString("TITLE_ID", &title_id) && title_id == "PPSA03446") {
+		constexpr uint64_t patch_va = 0x164d0a1;
+		if (program->base_vaddr + patch_va >= address &&
+		    program->base_vaddr + patch_va + 15 <= address + size) {
+			auto* ptr = reinterpret_cast<uint8_t*>(program->base_vaddr + patch_va);
+			const uint8_t expected_nop[15] = {
+			    0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00};
+			if (std::memcmp(ptr, expected_nop, sizeof(expected_nop)) == 0) {
+				LOGF("Patch PPSA03446 TSparseArray null-buffer compact guard at [%016" PRIx64 "]\n",
+				     reinterpret_cast<uint64_t>(ptr));
+				const uint8_t patch[15] = {
+				    0x48, 0x83, 0x7d, 0xc8, 0x00, // cmp qword ptr [rbp - 0x38], 0
+				    0x74, 0xbf,                   // je 0x90164d067 (-0x41)
+				    0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00 // 8-byte NOP
+				};
+				std::memcpy(ptr, patch, sizeof(patch));
 			}
 		}
 	}
