@@ -306,9 +306,10 @@ void BufferCache::InvalidateMemory(uint64_t vaddr, uint64_t size) {
 		const auto page = vaddr >> PageTable::kPageBits;
 		if (page < PageTable::kPageCount) {
 			const auto page_start = Common::AlignDown(vaddr, TRACKER_PAGE_SIZE);
-			constexpr uint64_t MaxCluster = 64 * 1024;
-			uint64_t cluster_limit = Common::AlignUp(page_start + 1, TRACKER_REGION_SIZE);
+			constexpr uint64_t MaxCluster = 512 * 1024;
 			bool has_owner = false;
+			uint64_t cluster_start = Common::AlignDown(vaddr, MaxCluster);
+			uint64_t cluster_end   = cluster_start + MaxCluster;
 
 			const auto* owner = m_page_table.Find(page);
 			if (owner != nullptr && *owner && *owner != NULL_BUFFER_ID) {
@@ -317,17 +318,44 @@ void BufferCache::InvalidateMemory(uint64_t vaddr, uint64_t size) {
 					const auto buf_start = buffer->CpuAddress();
 					const auto buf_end   = buf_start + buffer->Size();
 					if (vaddr >= buf_start && vaddr < buf_end) {
-						cluster_limit = std::min(cluster_limit, buf_end);
 						has_owner = true;
+						if (buffer->Size() <= MaxCluster) {
+							cluster_start = buf_start;
+							cluster_end   = buf_end;
+						} else {
+							cluster_start = std::max(buf_start, Common::AlignDown(vaddr, MaxCluster));
+							cluster_end   = std::min(buf_end, cluster_start + MaxCluster);
+						}
 					}
 				}
 			}
 
-			const auto cluster_end = std::min(page_start + MaxCluster, cluster_limit);
-			if (cluster_end > page_start &&
-			    !m_memory_tracker.IsRegionGpuModified(page_start, cluster_end - page_start)) {
-				inv_vaddr = page_start;
-				inv_size  = cluster_end - page_start;
+			if (!has_owner) {
+				const auto region_start = Common::AlignDown(vaddr, TRACKER_REGION_SIZE);
+				const auto region_end   = Common::AlignUp(vaddr + 1, TRACKER_REGION_SIZE);
+				cluster_start = std::max(cluster_start, region_start);
+				cluster_end   = std::min(cluster_end, region_end);
+			}
+
+			if (cluster_end > cluster_start &&
+			    !m_memory_tracker.IsRegionGpuModified(cluster_start, cluster_end - cluster_start)) {
+				inv_vaddr = cluster_start;
+				inv_size  = cluster_end - cluster_start;
+			} else {
+				uint64_t safe_start = page_start;
+				uint64_t safe_end   = page_start + TRACKER_PAGE_SIZE;
+				const auto forward_limit = std::min(page_start + 64 * 1024, cluster_end);
+				if (forward_limit > safe_end &&
+				    !m_memory_tracker.IsRegionGpuModified(safe_end, forward_limit - safe_end)) {
+					safe_end = forward_limit;
+				}
+				if (!m_memory_tracker.IsRegionGpuModified(safe_start, safe_end - safe_start)) {
+					inv_vaddr = safe_start;
+					inv_size  = safe_end - safe_start;
+				}
+			}
+
+			if (inv_size > 1) {
 				if (has_owner) {
 					Common::DebugCounters::Add(Common::DebugCounters::Counter::BufferFaultsClusteredOwner);
 				} else {
