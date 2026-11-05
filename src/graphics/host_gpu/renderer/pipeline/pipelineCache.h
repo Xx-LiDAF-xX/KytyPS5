@@ -14,9 +14,12 @@
 #include "graphics/shader/rectListShader.h"
 #include "graphics/shader/shader.h"
 
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <deque>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -32,6 +35,7 @@ namespace Libs::Graphics {
 struct GraphicContext;
 struct ShaderParams;
 class CommandBuffer;
+class CommandScheduler;
 
 namespace ShaderRecompiler {
 struct CompileOptions;
@@ -174,9 +178,11 @@ private:
 // The owning renderer serializes access, including saves while the GPU is running.
 class PipelineCache {
 public:
-	// Without a shader store path nothing is kept across runs.
+	// Without a shader store path nothing is kept across runs. The scheduler is only needed to
+	// retire replaced pipelines safely, so a null one keeps the cache single threaded.
 	PipelineCache(GraphicContext& graphics, ShaderRecompiler::IR::ImageHeapSource* image_heap,
-	              const std::filesystem::path& shader_store = {});
+	              const std::filesystem::path& shader_store = {},
+	              CommandScheduler*            scheduler    = nullptr);
 	~PipelineCache();
 	KYTY_CLASS_NO_COPY(PipelineCache);
 	void Save();
@@ -189,6 +195,13 @@ public:
 		vk::ShaderStageFlags    push_stages;
 		bool                    uses_push_descriptors = false;
 		bool                    uses_image_heap       = false;
+		// Graphics pipeline library path: the retained libraries a relink needs, plus the draw
+		// count that decides when the relink has been earned.
+		std::array<vk::Pipeline, 4> libraries {};
+		uint32_t                    library_count = 0;
+		uint32_t                    draws         = 0;
+		bool                        lto_pending   = false;
+		bool                        lto_done      = false;
 	};
 
 	// Reads the shaders and registers bound in `command` into the state's shader stages.
@@ -238,6 +251,28 @@ private:
 
 	using ModuleMap = std::unordered_map<uint64_t, const ShaderModule*>;
 
+	// A background link-time-optimization relink. The libraries stay owned by the pipeline, so
+	// the job only carries handles the worker may read while the render thread keeps drawing.
+	struct LinkJob {
+		GraphicsPipelineKey         key;
+		vk::PipelineLayout          layout = nullptr;
+		std::array<vk::Pipeline, 4> libraries {};
+		uint32_t                    library_count = 0;
+		vk::Pipeline                previous      = nullptr;
+	};
+
+	struct LinkResult {
+		GraphicsPipelineKey key;
+		vk::Pipeline        pipeline = nullptr;
+		vk::Pipeline        previous = nullptr;
+	};
+
+	// A replaced pipeline is destroyed only once the GPU tick that last used it has passed.
+	struct RetiredPipeline {
+		vk::Pipeline handle = nullptr;
+		uint64_t     tick   = 0;
+	};
+
 	GraphicContext&                        m_graphics;
 	ShaderRecompiler::IR::ImageHeapSource* m_image_heap;
 	std::unordered_map<ProgramKey, Program, ProgramKeyHash> m_program_cache;
@@ -254,6 +289,21 @@ private:
 	// Records everything first created; closed without a shader store.
 	ShaderStoreWriter m_store;
 
+	// Graphics pipeline library relinking.
+	CommandScheduler*            m_scheduler = nullptr;
+	std::mutex                   m_link_mutex;
+	std::condition_variable_any  m_link_ready;
+	std::deque<LinkJob>          m_link_jobs;
+	std::vector<LinkResult>      m_link_results;
+	// Mirrors m_link_results under the mutex, so the render thread can skip the lock while the
+	// worker has nothing to publish.
+	std::atomic<bool>            m_link_has_results {false};
+	std::vector<RetiredPipeline> m_retired;
+	std::atomic<uint32_t>        m_link_outstanding {0};
+	bool                         m_link_stop = false;
+	// Declared last, so it joins before the state it reads is destroyed.
+	std::jthread m_link_thread;
+
 	template <typename InputInfo>
 	const ShaderModule* GetProgram(const ShaderParams& params, InputInfo& input_info,
 	                               uint32_t& push_data_cursor);
@@ -263,6 +313,13 @@ private:
 	                            uint32_t                          push_data_cursor);
 	void InitializeDriverCache();
 	void CheckpointDriverCache();
+	// True when a relink may be queued, which also means a scheduler exists to retire with.
+	[[nodiscard]] bool GraphicsPipelineLibraryEnabled() const noexcept;
+	void               PollPipelineLinks();
+	void               QueuePipelineLink(const GraphicsPipelineKey& key, Pipeline& pipeline);
+	void               RetirePipeline(vk::Pipeline handle, uint64_t tick);
+	void               DestroyRetiredPipelines(bool force);
+	void               RunPipelineLinkThread();
 
 	// pipelineSerialization.cpp
 	void WarmUp(const std::filesystem::path& path);
@@ -284,13 +341,21 @@ std::filesystem::path ShaderStorePath();
 // Host capabilities that change the emitted SPIR-V.
 ShaderRecompiler::Spirv::Profile SpirvProfile(const GraphicContext& graphics);
 
-// Stages are indexed like GraphicsPipelineKey::stage_ids.
-void CreatePipelineInternal(GraphicContext& graphics, PipelineCache::Pipeline& pipeline,
+// Stages are indexed like GraphicsPipelineKey::stage_ids. Returns true when the pipeline came
+// from the graphics pipeline library path, which is what makes a relink possible.
+bool CreatePipelineInternal(GraphicContext& graphics, PipelineCache::Pipeline& pipeline,
                             const GraphicsPipelineKey&                 key,
                             const std::array<const ShaderModule*, 4>& stages,
-                            vk::PipelineCache                          driver_cache);
+                            vk::PipelineCache                          driver_cache,
+                            bool                                       allow_pipeline_library);
 void CreatePipelineInternal(GraphicContext& graphics, PipelineCache::Pipeline& pipeline,
                             const ShaderModule& module, vk::PipelineCache driver_cache);
+// Links retained pipeline libraries into one pipeline. Returns null when the driver rejects the
+// link. `driver_cache` may be null when the link runs off the thread that owns the cache.
+vk::Pipeline LinkPipelineLibraries(GraphicContext& graphics, vk::PipelineLayout layout,
+                                   std::span<const vk::Pipeline> libraries,
+                                   bool                          link_time_optimization,
+                                   vk::PipelineCache             driver_cache);
 
 } // namespace Libs::Graphics
 

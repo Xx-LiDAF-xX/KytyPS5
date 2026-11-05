@@ -1427,6 +1427,21 @@ void TestIndirectImageSamplerClasses(bool mixed) {
   }
 }
 
+void TestDeadImageMemoryEntriesAreNotRemapped() {
+  using namespace Libs::Graphics::ShaderRecompiler::IR;
+  Program program;
+  program.stage = Libs::Graphics::ShaderType::Compute;
+  program.srt_plan_complete = program.resource_tracking_complete = true;
+  AddValueBlock(program);
+  // Translation appends memory entries and resource tracking never prunes them, so an entry can
+  // outlive the instruction that created it and still name an image the program no longer has.
+  program.memory_info.push_back({.kind = ResourceKind::Image, .resource = 2u});
+  ResourceSpecialization empty;
+  ApplyResourceSpecialization(program, empty);
+  Check(program.memory_info.front().resource == 2u,
+        "a dead image memory entry was remapped through an empty specialization");
+}
+
 void TestShaderCacheRecords() {
   using namespace Libs::Graphics::ShaderRecompiler::IR;
   // Equivalent selector domains share one key group, which a load rebuilds.
@@ -1503,6 +1518,7 @@ int main() {
   TestSignedStorageSpecialization();
   for (const bool atomic64 : {false, true}) TestUnreachedImageIgnoresSharedDescriptor(atomic64);
   for (const bool mixed : {false, true}) TestIndirectImageSamplerClasses(mixed);
+  TestDeadImageMemoryEntriesAreNotRemapped();
   TestShaderCacheRecords();
   std::puts("ResourceMaterializationTests: all cases passed");
   return 0;

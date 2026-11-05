@@ -45,6 +45,11 @@ namespace {
 
 constexpr auto DriverCacheSaveInterval = std::chrono::minutes {5};
 
+// How many draws a fast-linked pipeline has to serve before the optimized relink is worth its
+// CPU time, and how many relinks may wait in the queue at once.
+constexpr uint32_t LtoPromoteDraws   = 3;
+constexpr uint32_t MaxOutstandingLinks = 2;
+
 uint8_t RemapSourceAlphaFactor(uint8_t factor) {
 	switch (static_cast<Prospero::BlendFactor>(factor)) {
 		case Prospero::BlendFactor::kSrcAlpha:
@@ -464,19 +469,44 @@ const ShaderModule* PipelineCache::GetProgram(const ShaderParams& params, InputI
 
 PipelineCache::PipelineCache(GraphicContext&                         graphics,
                              ShaderRecompiler::IR::ImageHeapSource* image_heap,
-                             const std::filesystem::path&           shader_store)
+                             const std::filesystem::path&           shader_store,
+                             CommandScheduler*                      scheduler)
     : m_graphics(graphics), m_image_heap(image_heap),
-      m_next_driver_cache_save(std::chrono::steady_clock::now() + DriverCacheSaveInterval) {
+      m_next_driver_cache_save(std::chrono::steady_clock::now() + DriverCacheSaveInterval),
+      m_scheduler(scheduler) {
 	EXIT_NOT_IMPLEMENTED(!Common::Thread::IsMainThread());
 	InitializeDriverCache();
 	WarmUp(shader_store);
+	// Without a scheduler there is nothing to retire a replaced pipeline against, so the whole
+	// library path stays off and pipelines are created in one piece.
+	if (GraphicsPipelineLibraryEnabled()) {
+		m_link_thread = std::jthread {[this](std::stop_token) { RunPipelineLinkThread(); }};
+	}
 }
 
 PipelineCache::~PipelineCache() {
+	{
+		const std::lock_guard lock(m_link_mutex);
+		m_link_stop = true;
+	}
+	m_link_ready.notify_all();
+	if (m_link_thread.joinable()) {
+		m_link_thread.join();
+	}
 	Save();
+	// The worker is gone, so a finished relink can no longer be published. Drop those handles and
+	// everything waiting on the GPU; nothing draws any more.
+	for (const auto& result: m_link_results) {
+		m_graphics.device.destroyPipeline(result.pipeline, nullptr);
+	}
+	m_link_results.clear();
+	DestroyRetiredPipelines(true);
 	auto destroy = [this](const auto& pipelines) {
 		for (const auto& pipeline: pipelines | std::views::values) {
 			m_graphics.device.destroyPipeline(pipeline.pipeline, nullptr);
+			for (uint32_t i = 0; i < pipeline.library_count; i++) {
+				m_graphics.device.destroyPipeline(pipeline.libraries[i], nullptr);
+			}
 			m_graphics.device.destroyPipelineLayout(pipeline.pipeline_layout, nullptr);
 			m_graphics.device.destroyDescriptorSetLayout(pipeline.descriptor_set_layout, nullptr);
 		}
@@ -489,6 +519,108 @@ PipelineCache::~PipelineCache() {
 		}
 	}
 	m_graphics.device.destroyPipelineCache(m_driver_cache, nullptr);
+}
+
+bool PipelineCache::GraphicsPipelineLibraryEnabled() const noexcept {
+	return m_scheduler != nullptr && m_graphics.graphics_pipeline_library_enabled;
+}
+
+void PipelineCache::RetirePipeline(vk::Pipeline handle, uint64_t tick) {
+	if (handle == nullptr) {
+		return;
+	}
+	m_retired.push_back({handle, tick});
+}
+
+void PipelineCache::DestroyRetiredPipelines(bool force) {
+	std::erase_if(m_retired, [this, force](const RetiredPipeline& retired) {
+		if (!force && (m_scheduler == nullptr || !m_scheduler->IsFree(retired.tick))) {
+			return false;
+		}
+		m_graphics.device.destroyPipeline(retired.handle, nullptr);
+		return true;
+	});
+}
+
+void PipelineCache::PollPipelineLinks() {
+	if (m_link_has_results.load(std::memory_order_acquire)) {
+		std::vector<LinkResult> results;
+		{
+			const std::lock_guard lock(m_link_mutex);
+			results.swap(m_link_results);
+			m_link_has_results.store(false, std::memory_order_release);
+		}
+		for (const auto& result: results) {
+			const auto iter = m_graphics_pipelines.find(result.key);
+			// Only publish onto the exact pipeline the job was queued for; anything else means
+			// the result has no owner left.
+			if (iter == m_graphics_pipelines.end() || iter->second.pipeline != result.previous) {
+				m_graphics.device.destroyPipeline(result.pipeline, nullptr);
+				continue;
+			}
+			auto& pipeline    = iter->second;
+			pipeline.pipeline = result.pipeline;
+			pipeline.lto_done = true;
+			// The previous handle may still be referenced by the recording that is in progress,
+			// so it is destroyed only once the tick that recording will carry has completed.
+			RetirePipeline(result.previous, m_scheduler->CurrentTick());
+		}
+	}
+	DestroyRetiredPipelines(false);
+}
+
+void PipelineCache::QueuePipelineLink(const GraphicsPipelineKey& key, Pipeline& pipeline) {
+	if (!GraphicsPipelineLibraryEnabled() || pipeline.lto_pending || pipeline.lto_done ||
+	    pipeline.pipeline == nullptr || pipeline.library_count == 0) {
+		return;
+	}
+	// The relink is opportunistic: a queue of them would only delay the frames that need the CPU.
+	if (m_link_outstanding.load(std::memory_order_acquire) >= MaxOutstandingLinks) {
+		return;
+	}
+	LinkJob job;
+	job.key           = key;
+	job.layout        = pipeline.pipeline_layout;
+	job.libraries     = pipeline.libraries;
+	job.library_count = pipeline.library_count;
+	job.previous      = pipeline.pipeline;
+	pipeline.lto_pending = true;
+	m_link_outstanding.fetch_add(1, std::memory_order_acq_rel);
+	{
+		const std::lock_guard lock(m_link_mutex);
+		m_link_jobs.push_back(std::move(job));
+	}
+	m_link_ready.notify_one();
+}
+
+void PipelineCache::RunPipelineLinkThread() {
+	for (;;) {
+		LinkJob job;
+		{
+			std::unique_lock lock(m_link_mutex);
+			m_link_ready.wait(lock, [this] { return m_link_stop || !m_link_jobs.empty(); });
+			if (m_link_stop) {
+				return;
+			}
+			job = std::move(m_link_jobs.front());
+			m_link_jobs.pop_front();
+		}
+
+		LinkResult result;
+		result.key      = job.key;
+		result.previous = job.previous;
+		// The driver cache is externally synchronized, so the worker links without it.
+		result.pipeline = LinkPipelineLibraries(
+		    m_graphics, job.layout, {job.libraries.data(), job.library_count}, true,
+		    VK_NULL_HANDLE);
+
+		{
+			const std::lock_guard lock(m_link_mutex);
+			m_link_results.push_back(std::move(result));
+			m_link_has_results.store(true, std::memory_order_release);
+		}
+		m_link_outstanding.fetch_sub(1, std::memory_order_acq_rel);
+	}
 }
 
 void PipelineCache::InitializeDriverCache() {
@@ -911,10 +1043,14 @@ PipelineCache::Pipeline& PipelineCache::GetGraphicsPipeline(const CommandBuffer&
 		EXIT_IF(slot >= RENDER_COLOR_ATTACHMENTS_MAX);
 		rendering.color_count = std::max(rendering.color_count, slot + 1);
 		EXIT_IF(!colors[i].image_id || colors[i].desc.view_info.format == vk::Format::eUndefined);
-		static_params.color_mask[slot] = colors[i].export_mapping.ApplyMask(
-		    render_target_mask_slot(ctx.GetRenderTargetMask(), colors[i].target_slot));
-		if (colors[i].desc.info.guest_format == Prospero::BufferFormat::k11_11_10UNorm) {
-			static_params.color_mask[slot] = 1u;
+		// A pipeline without an active pixel shader has no colour exports, so every write is
+		// masked off; the null fragment shader must never touch the attachments.
+		if (ps_active) {
+			static_params.color_mask[slot] = colors[i].export_mapping.ApplyMask(
+			    render_target_mask_slot(ctx.GetRenderTargetMask(), colors[i].target_slot));
+			if (colors[i].desc.info.guest_format == Prospero::BufferFormat::k11_11_10UNorm) {
+				static_params.color_mask[slot] = 1u;
+			}
 		}
 		rendering.color_formats[slot] = colors[i].desc.view_info.format;
 		if (attachment_samples == 0) {
@@ -1040,9 +1176,20 @@ PipelineCache::Pipeline& PipelineCache::GetGraphicsPipeline(const CommandBuffer&
 		}
 	}
 
+	// Publish any relink that finished since the last draw before this frame looks anything up.
+	PollPipelineLinks();
+
 	auto [iter, inserted] = m_graphics_pipelines.try_emplace(key);
 	auto& pipeline        = iter->second;
 	if (!inserted) {
+		// The first draws run on the fast link; a pipeline the title keeps drawing is worth the
+		// background relink, and one it never comes back to is not.
+		if (pipeline.draws < LtoPromoteDraws) {
+			pipeline.draws++;
+			if (pipeline.draws == LtoPromoteDraws) {
+				QueuePipelineLink(key, pipeline);
+			}
+		}
 		return pipeline;
 	}
 
@@ -1057,7 +1204,8 @@ PipelineCache::Pipeline& PipelineCache::GetGraphicsPipeline(const CommandBuffer&
 		Common::DebugCounters::ScopedTimer timer(Common::DebugCounters::Counter::PipelinesCreated,
 		                                         Common::DebugCounters::Counter::PipelineCreateNs,
 		                                         Common::DebugCounters::Peak::PipelineCreateNs);
-		CreatePipelineInternal(m_graphics, pipeline, key, stages, m_driver_cache);
+		CreatePipelineInternal(m_graphics, pipeline, key, stages, m_driver_cache,
+		                       GraphicsPipelineLibraryEnabled());
 	}
 	StorePipeline(key);
 	CheckpointDriverCache();

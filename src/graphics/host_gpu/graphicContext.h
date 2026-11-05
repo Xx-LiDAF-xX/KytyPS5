@@ -43,6 +43,13 @@ struct GraphicContext {
 	bool                               supports_block_texel_view              = false;
 	bool                                      mesh_shader_enabled                   = false;
 	vk::PhysicalDeviceMeshShaderPropertiesEXT mesh_shader_properties                = {};
+	// Optional graphics pipeline library path. Enabling the feature never forces its use.
+	bool graphics_pipeline_library_enabled      = false;
+	bool graphics_pipeline_library_fast_linking = false;
+	// Descriptor buffers conflict with the persistent update-after-bind image heap, so the
+	// capability is probed and stored now while adoption stays behind a later flag.
+	bool descriptor_buffer_supported = false;
+	bool descriptor_buffer_enabled   = false;
 	uint32_t                           subgroup_size                         = 0;
 	uint32_t                           min_subgroup_size                     = 0;
 	uint32_t                           max_subgroup_size                     = 0;

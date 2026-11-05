@@ -327,7 +327,9 @@ bool PipelineCache::CreateGraphicsPipeline(Pipeline& pipeline, const GraphicsPip
 		}
 		stages[i] = found->second;
 	}
-	CreatePipelineInternal(m_graphics, pipeline, key, stages, m_driver_cache);
+	// Warm-up runs on the calling thread before any scheduler exists to retire against, so it
+	// always takes the single-create path.
+	CreatePipelineInternal(m_graphics, pipeline, key, stages, m_driver_cache, false);
 	return true;
 }
 

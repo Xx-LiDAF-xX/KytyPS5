@@ -1952,6 +1952,10 @@ void ApplyResourceSpecialization(Program& program, const ResourceSpecialization&
 		}
 	}
 	const ImageRemap image_remap(specialization);
+	// Memory entries are appended during translation and never pruned, so entries left behind by
+	// eliminated instructions can name an image index that the specialization no longer has.
+	// Only entries still referenced by a live image instruction need (and may) be remapped.
+	std::vector<bool> live_image_memory(memory_info.size(), false);
 	for (auto* block: program.blocks) {
 		for (auto it = block->begin(); it != block->end(); ++it) {
 			auto& inst = *it;
@@ -2023,6 +2027,7 @@ void ApplyResourceSpecialization(Program& program, const ResourceSpecialization&
 			EXIT_IF(index >= memory_info.size());
 			auto& memory = memory_info[index];
 			EXIT_IF(memory.resource >= images.size());
+			live_image_memory[index] = true;
 			const auto& image = images[memory.resource];
 			if (specialization.images[memory.resource].fmask) {
 				EXIT_IF(inst.GetOpcode() != ValueOpcode::ImageRead || memory.data_bits != 32u);
@@ -2055,8 +2060,9 @@ void ApplyResourceSpecialization(Program& program, const ResourceSpecialization&
 			        inst.GetOpcode() != ValueOpcode::ImageWrite);
 		}
 	}
-	for (auto& memory: memory_info) {
-		if (memory.kind == ResourceKind::Image && !memory.planning_only) {
+	for (uint32_t index = 0; index < memory_info.size(); index++) {
+		auto& memory = memory_info[index];
+		if (live_image_memory[index] && memory.kind == ResourceKind::Image && !memory.planning_only) {
 			memory.resource = image_remap[memory.resource];
 		}
 	}

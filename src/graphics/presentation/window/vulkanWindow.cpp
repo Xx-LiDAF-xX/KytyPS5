@@ -396,11 +396,14 @@ static vk::Device VulkanCreateDevice(GraphicContext&          graphics,
 	                   vk::PhysicalDeviceShaderClockFeaturesKHR,
 	                   vk::PhysicalDeviceShaderImageAtomicInt64FeaturesEXT,
 	                   vk::PhysicalDeviceConditionalRenderingFeaturesEXT,
-	                   vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR>
+	                   vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR,
+	                   vk::PhysicalDeviceGraphicsPipelineLibraryFeaturesEXT,
+	                   vk::PhysicalDeviceDescriptorBufferFeaturesEXT>
 	    supported;
 	auto& [supported2, supported12, supported13, robustness2, workgroup_layout, mesh,
 	       feedback_layout, feedback_dynamic, provoking_vertex, maintenance8, shader_clock,
-	       image_atomic_int64, conditional_rendering, barycentric] = supported;
+	       image_atomic_int64, conditional_rendering, barycentric, pipeline_library,
+	       descriptor_buffer] = supported;
 	graphics.memory_budget_ext_enabled = add(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
 	add(VK_EXT_DEPTH_RANGE_UNRESTRICTED_EXTENSION_NAME);
 	const bool extended_dynamic_state = add(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME);
@@ -436,9 +439,31 @@ static vk::Device VulkanCreateDevice(GraphicContext&          graphics,
 	if (!add(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME)) {
 		supported.unlink<vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR>();
 	}
+	// These stay in the query only when the device advertises the extension; enabling them on
+	// the device is a separate decision taken once the feature bits are known. Graphics pipeline
+	// libraries depend on VK_KHR_pipeline_library, so both have to be there.
+	const bool pipeline_library_extension =
+	    HasExtension(available_extensions, VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME) &&
+	    HasExtension(available_extensions, VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME);
+	if (!pipeline_library_extension) {
+		supported.unlink<vk::PhysicalDeviceGraphicsPipelineLibraryFeaturesEXT>();
+	}
+	const bool descriptor_buffer_extension =
+	    HasExtension(available_extensions, VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME);
+	if (!descriptor_buffer_extension) {
+		supported.unlink<vk::PhysicalDeviceDescriptorBufferFeaturesEXT>();
+	}
 	Vr::OpenXrAppendExtensions(device_extensions, available_extensions, true);
 	physical_device.getFeatures2(&supported2);
 	const bool barycentric_supported = barycentric.fragmentShaderBarycentric == VK_TRUE;
+	graphics.graphics_pipeline_library_enabled =
+	    pipeline_library_extension && pipeline_library.graphicsPipelineLibrary == VK_TRUE;
+	graphics.descriptor_buffer_supported =
+	    descriptor_buffer_extension && descriptor_buffer.descriptorBuffer == VK_TRUE;
+	if (graphics.graphics_pipeline_library_enabled) {
+		device_extensions.push_back(VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME);
+		device_extensions.push_back(VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME);
+	}
 	if (!barycentric_supported) {
 		Log::WriteToConsoleAndLog(
 		    "WARNING: Your GPU is not fully supported (fragmentShaderBarycentric is unavailable). "
@@ -464,19 +489,32 @@ static vk::Device VulkanCreateDevice(GraphicContext&          graphics,
 	    vk::PhysicalDeviceProperties2, vk::PhysicalDeviceFloatControlsProperties,
 	    vk::PhysicalDeviceRobustness2PropertiesEXT, vk::PhysicalDeviceVulkan11Properties,
 	    vk::PhysicalDeviceSubgroupSizeControlProperties, vk::PhysicalDevicePushDescriptorProperties,
-	    vk::PhysicalDeviceMeshShaderPropertiesEXT>
+	    vk::PhysicalDeviceMeshShaderPropertiesEXT,
+	    vk::PhysicalDeviceGraphicsPipelineLibraryPropertiesEXT>
 	    properties;
 	auto& [properties2, float_controls, robustness2_props, properties11, subgroup_control,
-	       push_descriptor, mesh_properties] = properties;
+	       push_descriptor, mesh_properties, pipeline_library_properties] = properties;
 	if (!graphics.mesh_shader_enabled) {
 		properties.unlink<vk::PhysicalDeviceMeshShaderPropertiesEXT>();
+	}
+	if (!pipeline_library_extension) {
+		properties.unlink<vk::PhysicalDeviceGraphicsPipelineLibraryPropertiesEXT>();
 	}
 	physical_device.getProperties2(&properties2);
 	EXIT_NOT_IMPLEMENTED(!(properties11.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eVote));
 	graphics.physical_device_properties = properties2.properties;
 	graphics.max_push_descriptors       = push_descriptor.maxPushDescriptors;
 	graphics.mesh_shader_properties     = mesh_properties;
+	graphics.graphics_pipeline_library_fast_linking =
+	    graphics.graphics_pipeline_library_enabled &&
+	    pipeline_library_properties.graphicsPipelineLibraryFastLinking == VK_TRUE;
 	LOGF("Select device: %s\n", graphics.physical_device_properties.deviceName.data());
+	LOGF("Vulkan graphics pipeline library: %s (fast linking: %s)\n",
+	     graphics.graphics_pipeline_library_enabled ? "true" : "false",
+	     graphics.graphics_pipeline_library_fast_linking ? "true" : "false");
+	LOGF("Vulkan descriptor buffers: supported=%s enabled=%s\n",
+	     graphics.descriptor_buffer_supported ? "true" : "false",
+	     graphics.descriptor_buffer_enabled ? "true" : "false");
 
 	const auto subgroup_stages = subgroup_control.requiredSubgroupSizeStages;
 	graphics.subgroup_size     = properties11.subgroupSize;
@@ -603,7 +641,9 @@ static vk::Device VulkanCreateDevice(GraphicContext&          graphics,
 	    // The renderer only uses the Vulkan 1.3 core dynamic states, but RADV (Mesa 26.3) creates
 	    // its PS epilog cache only when this EXT feature is enabled and crashes in vkCmdDraw when
 	    // a depth- or stencil-writing fragment shader needs an epilog.
-	    vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT {.extendedDynamicState = VK_TRUE}};
+	    vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT {.extendedDynamicState = VK_TRUE},
+	    vk::PhysicalDeviceGraphicsPipelineLibraryFeaturesEXT {
+	        .graphicsPipelineLibrary = VK_TRUE}};
 	if (!workgroup_layout.workgroupMemoryExplicitLayout) {
 		create.unlink<vk::PhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR>();
 	}
@@ -637,10 +677,33 @@ static vk::Device VulkanCreateDevice(GraphicContext&          graphics,
 	if (!extended_dynamic_state) {
 		create.unlink<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
 	}
+	if (!graphics.graphics_pipeline_library_enabled) {
+		create.unlink<vk::PhysicalDeviceGraphicsPipelineLibraryFeaturesEXT>();
+	}
 
 	vk::Device device = nullptr;
-	RequireVulkanSuccess(physical_device.createDevice(&create.get(), nullptr, &device),
-	                     "vkCreateDevice");
+	auto       result = physical_device.createDevice(&create.get(), nullptr, &device);
+	if (result != vk::Result::eSuccess && graphics.graphics_pipeline_library_enabled) {
+		const bool retryable = result == vk::Result::eErrorFeatureNotPresent ||
+		                       result == vk::Result::eErrorExtensionNotPresent ||
+		                       result == vk::Result::eErrorInitializationFailed;
+		if (retryable) {
+			LOGF("WARNING: Device rejected the graphics pipeline library path (%s); retrying "
+			     "without it. Pipelines will use monolithic creation.\n",
+			     vk::to_string(result).c_str());
+			graphics.graphics_pipeline_library_enabled      = false;
+			graphics.graphics_pipeline_library_fast_linking = false;
+			create.unlink<vk::PhysicalDeviceGraphicsPipelineLibraryFeaturesEXT>();
+			std::erase(device_extensions, VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME);
+			std::erase(device_extensions, VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME);
+			auto& create_device_info              = create.get<vk::DeviceCreateInfo>();
+			create_device_info.enabledExtensionCount =
+			    static_cast<uint32_t>(device_extensions.size());
+			create_device_info.ppEnabledExtensionNames = device_extensions.data();
+			result = physical_device.createDevice(&create.get(), nullptr, &device);
+		}
+	}
+	RequireVulkanSuccess(result, "vkCreateDevice");
 	return device;
 }
 
