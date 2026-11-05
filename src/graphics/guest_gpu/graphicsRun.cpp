@@ -209,6 +209,9 @@ void CommandProcessor::BufferInit() {
 }
 
 void CommandProcessor::BufferFlush() {
+	if (!GetScheduler().Active()) {
+		return;
+	}
 	m_renderer.GetTextureCache().ProcessDownloadImages();
 	GetScheduler().Flush();
 	// Harvest completed occlusion dumps without stalling intermediate flushes.
@@ -451,7 +454,6 @@ void GuestGpu::ThreadRun(void* data) {
 		}
 
 		if (command) {
-			gpu->m_gfx_cp->BufferFlush();
 			{
 				Common::DebugCounters::ScopedTimer busy(
 				    Common::DebugCounters::Counter::GpuThreadBusyNs);
