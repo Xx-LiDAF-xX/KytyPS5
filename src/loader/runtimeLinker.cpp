@@ -990,6 +990,74 @@ static void PatchProgram(Program* program, uint64_t address, uint64_t size) {
 		}
 	}
 
+	// PPSA13526 (GYLT) - PhysX 3.4 Sq::AABBTree::refitMarkedNodes red zone stack allocation fix.
+	// The function is a leaf compiled without stack frame allocation (sub rsp, ...), relying on the
+	// SysV AMD64 128-byte red zone below rsp. On Windows x64, kernel interrupts, thread context switches,
+	// and APCs clobber memory below rsp. When [rsp - 0x18] (bitmask pointer) is zeroed out during the loop,
+	// clearing bits[w] at RVA 0x4b4e209 faults with an access violation at 0x10.
+	// Fix by allocating a 0x28 stack frame in prologue and shifting stack accesses above rsp.
+	if (title_id == "PPSA13526" ||
+	    (title_id.empty() && SystemContentParamSfoGetString("TITLE_ID", &title_id) && title_id == "PPSA13526")) {
+		constexpr uint64_t patch_va   = 0x4b4e090;
+		constexpr size_t   patch_size = 432;
+		if (program->base_vaddr + patch_va >= address &&
+		    program->base_vaddr + patch_va + patch_size <= address + size) {
+			auto* ptr = reinterpret_cast<uint8_t*>(program->base_vaddr + patch_va);
+			const uint8_t expected_entry[16] = {
+			    0x48, 0x8b, 0x4f, 0x50, 0x48, 0x85, 0xc9, 0x0f,
+			    0x84, 0x99, 0x01, 0x00, 0x00, 0x55, 0x41, 0x57};
+			if (std::memcmp(ptr, expected_entry, sizeof(expected_entry)) == 0) {
+				LOGF("Patch PPSA13526 AABBTree::refitMarkedNodes red zone stack frame at [%016" PRIx64 "]\n",
+				     reinterpret_cast<uint64_t>(ptr));
+
+				// 0x4b4e097: replace 6-byte 'je 0x4b4e236' with 'jnz +1; ret; nop'
+				const uint8_t early_ret[6] = {0x75, 0x01, 0xc3, 0x0f, 0x1f, 0x00};
+				std::memcpy(ptr + 0x07, early_ret, sizeof(early_ret));
+
+				// 0x4b4e0a7 .. 0x4b4e0f0: allocate 0x28 stack frame, store variables above rsp, absorb into nop padding
+				const uint8_t new_prologue[73] = {
+				    0x48, 0x83, 0xec, 0x28,                         // sub rsp, 0x28
+				    0x8b, 0x57, 0x60,                               // mov edx, dword ptr [rdi + 0x60]
+				    0x48, 0x89, 0x7c, 0x24, 0x08,                   // mov qword ptr [rsp + 8], rdi
+				    0x41, 0x89, 0xd6,                               // mov r14d, edx
+				    0x41, 0xff, 0xc6,                               // inc r14d
+				    0x0f, 0x84, 0x61, 0x01, 0x00, 0x00,             // je 0x4b4e220 (+0x161)
+				    0x48, 0x8b, 0x44, 0x24, 0x08,                   // mov rax, qword ptr [rsp + 8]
+				    0xc4, 0xe2, 0x79, 0x18, 0x05, 0x5f, 0x35, 0xae, 0x01, // vbroadcastss xmm0, [rip + 0x1ae355f]
+				    0xc4, 0xe2, 0x79, 0x18, 0x0d, 0xe6, 0x3c, 0xae, 0x01, // vbroadcastss xmm1, [rip + 0x1ae3ce6]
+				    0x48, 0x89, 0x4c, 0x24, 0x10,                   // mov qword ptr [rsp + 0x10], rcx
+				    0x48, 0x8b, 0x38,                               // mov rdi, qword ptr [rax]
+				    0x4c, 0x8b, 0x50, 0x10,                         // mov r10, qword ptr [rax + 0x10]
+				    0x48, 0x89, 0x7c, 0x24, 0x20,                   // mov qword ptr [rsp + 0x20], rdi
+				    0x66, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00  // 9-byte NOP padding to 0x4b4e0f0
+				};
+				std::memcpy(ptr + (0x4b4e0a7 - 0x4b4e090), new_prologue, sizeof(new_prologue));
+
+				// Shift loop stack accesses from [rsp - disp] to [rsp + disp]:
+				ptr[0x4b4e10b - 0x4b4e090 + 4] = 0x18; // [rsp + 0x18] (was [rsp - 0x10])
+				ptr[0x4b4e18f - 0x4b4e090 + 4] = 0x20; // [rsp + 0x20] (was [rsp - 0x08])
+				ptr[0x4b4e1ff - 0x4b4e090 + 4] = 0x10; // [rsp + 0x10] (was [rsp - 0x18])
+				ptr[0x4b4e204 - 0x4b4e090 + 4] = 0x18; // [rsp + 0x18] (was [rsp - 0x10])
+
+				// 0x4b4e220 .. 0x4b4e240: epilogue restoring rax from [rsp + 8], adding rsp, 0x28, and popping
+				const uint8_t new_epilogue[32] = {
+				    0x48, 0x8b, 0x44, 0x24, 0x08,                   // mov rax, qword ptr [rsp + 8]
+				    0xc7, 0x40, 0x60, 0x00, 0x00, 0x00, 0x00,       // mov dword ptr [rax + 0x60], 0
+				    0x48, 0x83, 0xc4, 0x28,                         // add rsp, 0x28
+				    0x5b,                                           // pop rbx
+				    0x41, 0x5c,                                     // pop r12
+				    0x41, 0x5d,                                     // pop r13
+				    0x41, 0x5e,                                     // pop r14
+				    0x41, 0x5f,                                     // pop r15
+				    0x5d,                                           // pop rbp
+				    0xc3,                                           // ret
+				    0xcc, 0xcc, 0xcc, 0xcc, 0xcc                    // int3 x 5
+				};
+				std::memcpy(ptr + (0x4b4e220 - 0x4b4e090), new_epilogue, sizeof(new_epilogue));
+			}
+		}
+	}
+
 	if (!program->elf->IsShared() && program->tls.handler_vaddr != 0 &&
 	    size >= Jit::Call9::GetSize()) {
 		// Replace:
