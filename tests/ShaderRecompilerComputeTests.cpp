@@ -14499,6 +14499,50 @@ public:
     std::printf("[gpu]     %-32s ok\n", name);
   }
 
+  void CheckSamplerFilterMode() {
+    constexpr const char *name = "SamplerFilterMode";
+    auto &context = RuntimeRenderer();
+    // Bilinear halfway between texels 0.0 and 1.0: blend, minimum and maximum.
+    auto image = CreateImage2D(name, 2, 1, vk::Format::eR32Sfloat,
+        vk::ImageUsageFlagBits::eSampled, {0u, 0x3f800000u}, 1,
+        vk::ImageLayout::eShaderReadOnlyOptimal);
+    for (const auto [mode, expected] : {std::pair{0u, 0x3f000000u}, std::pair{1u, 0u},
+                                        std::pair{2u, 0x3f800000u}}) {
+      ShaderSamplerResource sampler_descriptor{};
+      sampler_descriptor.fields[0] = mode << 29u;
+      sampler_descriptor.fields[2] = (1u << 20u) | (1u << 22u);
+      TestCase test;
+      test.name = name;
+      test.has_user_data = true;
+      test.user_data = MakeSampledTextureData(Prospero::BufferFormat::k32Float);
+      test.user_data[2] = 1u;
+      std::copy_n(sampler_descriptor.fields, 4, test.user_data.begin() + 8);
+      test.user_data[50] = sizeof(u32);
+      test.user_data[51] = 3u << 28u;
+      test.opcodes = {ShaderOpcode::V_MOV_B32, ShaderOpcode::IMAGE_SAMPLE,
+                      ShaderOpcode::BUFFER_STORE_DWORD, ShaderOpcode::S_ENDPGM};
+      AppendVMovLiteral(&test.code, 20, std::bit_cast<u32>(0.5f));
+      AppendVMovLiteral(&test.code, 21, std::bit_cast<u32>(0.5f));
+      test.code.push_back(EncodeMimg0(0x20, 0x1));
+      test.code.push_back(EncodeMimg1(0, 20, 0, 2));
+      AppendStoreVgpr(&test.code, 0, 0);
+      AppendEnd(&test.code);
+      test.expected = {expected};
+      const auto compiled = CompileCase(test, SubgroupSize());
+      auto output = CreateStorageBuffer(name, {}, 1);
+      const auto sampler = context.GetSamplerCache().GetSampler(sampler_descriptor, false);
+      Dispatch(test, compiled, output, nullptr, &image, nullptr, nullptr, sampler);
+      const auto actual = ReadBuffer(name, output, 1);
+      if (actual[0] != expected) {
+        Fail(name, "filtered sample", "mode=" + std::to_string(mode) +
+            " expected=" + std::to_string(expected) + " actual=" + std::to_string(actual[0]));
+      }
+      DestroyBuffer(&output);
+    }
+    DestroyImage(&image);
+    std::printf("[gpu]     %-32s ok\n", name);
+  }
+
   void CheckComparisonDepthTexture() {
     constexpr const char *name = "ComparisonDepthTexture";
     constexpr uintptr_t base = 0x0000000204200000ull;
@@ -16980,6 +17024,31 @@ public:
               "pending clear did not use DB_DEPTH_CLEAR or cleared the next acquisition again");
       DestroyBuffer(&bounds_readback);
 
+      // PPSA32236: a compression-disabled pass expands a pending HTile clear; without HTile it
+      // binds nothing.
+      registers.SetDepthRenderTarget(depth_only_target);
+      registers.SetDepthControl({});
+      registers.SetRenderControl({.depth_compress_disable = true});
+      (void)texture_cache.ClearMeta(depth_only_htile_address);
+      RenderDepthInfo decompress_depth{};
+      RenderExecutorTestAccess::ResolveRenderDepthTarget(
+          executor, scheduler.Current(), decompress_depth);
+      const auto decompress_rendering = RenderExecutorTestAccess::AcquireRenderTargets(
+          executor, scheduler.Current(), &no_color, 0, decompress_depth);
+      RenderExecutorTestAccess::ResetBindings(executor);
+      auto uncompressed_target = depth_only_target;
+      uncompressed_target.z_info.htile_acceleration = false;
+      registers.SetDepthRenderTarget(uncompressed_target);
+      RenderDepthInfo uncompressed_depth{};
+      RenderExecutorTestAccess::ResolveRenderDepthTarget(
+          executor, scheduler.Current(), uncompressed_depth);
+      Require(name, "in-place depth decompress",
+              decompress_depth.image_id == depth_only.image_id &&
+                  decompress_rendering.depth_stencil_attachment.depth_clear &&
+                  !texture_cache.IsMetaCleared(depth_only_htile_address, 0) &&
+                  !uncompressed_depth.image_id,
+              "a compression-disabled pass did not expand its pending HTile clear");
+
       // Captured DB_DEPTH_VIEW selects one layer of an 87-layer HTile target.
       auto high_slice_target = depth_only_target;
       high_slice_target.z_read_base_addr = base + 0x800000;
@@ -19438,8 +19507,6 @@ public:
         set_stencil(vk::StencilFaceFlagBits::eFront, depth.stencil_front);
         set_stencil(vk::StencilFaceFlagBits::eBack, depth.stencil_back);
       }
-      const vk::Bool32 write = true;
-      cmd.setColorWriteEnableEXT(1, &write);
       cmd.setAttachmentFeedbackLoopEnableEXT(feedback_aspects);
       const vk::DeviceSize offset = 0;
       cmd.bindVertexBuffers(0, 1, &buffer.buffer, &offset);
@@ -22488,6 +22555,7 @@ private:
     m_runtime_context.r8_srgb_views = m_runtime_context.SamplesFiltered(vk::Format::eR8Srgb);
     m_runtime_context.r8g8_srgb_views = m_runtime_context.SamplesFiltered(vk::Format::eR8G8Srgb);
     m_runtime_context.conditional_rendering_enabled = true;
+    m_runtime_context.sampler_filter_minmax_enabled = true;
     m_runtime_context.attachment_feedback_loop_enabled = m_rasterization_supported;
     m_runtime_context.provoking_vertex_last_enabled = m_rasterization_supported;
     m_runtime_context.mesh_shader_enabled = true;
@@ -22628,10 +22696,8 @@ private:
     available_depth_clip.pNext = &available_derivatives;
     vk::PhysicalDeviceDepthClipControlFeaturesEXT available_clip_control{};
     available_clip_control.pNext = &available_depth_clip;
-    vk::PhysicalDeviceColorWriteEnableFeaturesEXT available_color_write{};
-    available_color_write.pNext = &available_clip_control;
     vk::PhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT available_feedback_layout{};
-    available_feedback_layout.pNext = &available_color_write;
+    available_feedback_layout.pNext = &available_clip_control;
     vk::PhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT available_feedback_dynamic{};
     available_feedback_dynamic.pNext = &available_feedback_layout;
     vk::PhysicalDeviceProvokingVertexFeaturesEXT available_provoking_vertex{};
@@ -22720,7 +22786,6 @@ private:
                                 available_features.fragmentStoresAndAtomics &&
                                 available_depth_clip.depthClipEnable &&
                                 available_clip_control.depthClipControl &&
-                                available_color_write.colorWriteEnable &&
                                 available_feedback_layout.attachmentFeedbackLoopLayout &&
                                 available_feedback_dynamic.attachmentFeedbackLoopDynamicState &&
                                 available_provoking_vertex.provokingVertexLast;
@@ -22744,6 +22809,7 @@ private:
     auto device_features11 = WindowContext::RequiredVulkan11Features();
     auto device_features12 = WindowContext::RequiredVulkan12Features();
     device_features12.shaderSharedInt64Atomics = true;
+    device_features12.samplerFilterMinmax = true;
     vk::PhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR workgroup_layout{};
     workgroup_layout.workgroupMemoryExplicitLayout = true;
     device_features12.pNext = &device_features11;
@@ -22768,7 +22834,6 @@ private:
     // rasterization feature chain is only chained in when every part is available.
     vk::PhysicalDeviceDepthClipEnableFeaturesEXT depth_clip{};
     vk::PhysicalDeviceDepthClipControlFeaturesEXT clip_control{};
-    vk::PhysicalDeviceColorWriteEnableFeaturesEXT color_write{};
     vk::PhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT feedback_layout{};
     vk::PhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT feedback_dynamic{};
     vk::PhysicalDeviceProvokingVertexFeaturesEXT provoking_vertex{};
@@ -22777,9 +22842,7 @@ private:
       depth_clip.depthClipEnable = true;
       clip_control.pNext = &depth_clip;
       clip_control.depthClipControl = true;
-      color_write.pNext = &clip_control;
-      color_write.colorWriteEnable = true;
-      feedback_layout.pNext = &color_write;
+      feedback_layout.pNext = &clip_control;
       feedback_layout.attachmentFeedbackLoopLayout = true;
       feedback_dynamic.pNext = &feedback_layout;
       feedback_dynamic.attachmentFeedbackLoopDynamicState = true;
@@ -22841,7 +22904,6 @@ private:
     if (m_rasterization_supported) {
       device_extensions.push_back(VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME);
       device_extensions.push_back(VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME);
-      device_extensions.push_back(VK_EXT_COLOR_WRITE_ENABLE_EXTENSION_NAME);
       device_extensions.push_back(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME);
       device_extensions.push_back(
           VK_EXT_ATTACHMENT_FEEDBACK_LOOP_DYNAMIC_STATE_EXTENSION_NAME);
@@ -33978,7 +34040,7 @@ TestCase ScalarBranchRestoresInactiveLanes(u32 wave_size, u32 threads, bool uppe
 }
 
 // Each case spins until S_MEMREALTIME advances 64 ticks, capped at 2^20 reads, and stores
-// min(delta, 64). The profile period picks the host clock shift.
+// min(delta, 64). The profile period picks the host clock divisor.
 std::vector<TestCase> ScalarMemRealtimeCases() {
   using O = ShaderOpcode;
   namespace D = ShaderRecompiler::Decoder;
@@ -34011,14 +34073,18 @@ std::vector<TestCase> ScalarMemRealtimeCases() {
     ShaderProfile profile;
     std::vector<std::string> required, forbidden;
   } variants[] = {
-      {"ScalarMemRealtimeShiftsNanosecondClock",
+      {"ScalarMemRealtimeDividesNanosecondClockBy10",
        {.maintenance8 = true, .device_clock_period_ps = 1000},
-       {"OpShiftRightLogical %ulong", "%uint_3\n"},
+       {"OpUMulExtended", "%ulong_1844674407370955162\n"},
        {}},
       {"ScalarMemRealtimeKeeps100MHzClock",
        {.maintenance8 = true, .device_clock_period_ps = 10000},
        {"OpReadClockKHR %ulong %uint_1"},
-       {"OpShiftRightLogical %ulong"}}};
+       {"OpUMulExtended"}},
+      {"ScalarMemRealtimeKeeps19MHzClock",
+       {.maintenance8 = true, .device_clock_period_ps = 52083},
+       {"OpReadClockKHR %ulong %uint_1"},
+       {"OpUMulExtended"}}};
   std::vector<TestCase> tests;
   for (const auto &variant : variants) {
     TestCase test{variant.name, code, {}, {64},
@@ -52255,9 +52321,9 @@ void CheckPm4NativeTargetGeometryRegisters(RenderContext &renderer) {
 
   // Removed GCN shader resource/checksum/queue registers. Numeric offsets keep
   // this check independent of the deleted legacy names.
-  constexpr std::array<uint32_t, 17> legacy_shader_slots{
+  constexpr std::array<uint32_t, 16> legacy_shader_slots{
       0x000u, 0x001u, 0x030u, 0x0b0u, 0x0bcu, 0x130u,
-      0x14au, 0x14bu, 0x20eu, 0x20fu, 0x210u, 0x211u, 0x216u, 0x217u,
+      0x14bu, 0x20eu, 0x20fu, 0x210u, 0x211u, 0x216u, 0x217u,
       0x219u, 0x21au, 0x27du,
   };
   for (const auto offset : legacy_shader_slots) {
@@ -52306,7 +52372,7 @@ void CheckPm4NativeTargetGeometryRegisters(RenderContext &renderer) {
 
 void CheckPm4IndirectShaderRegisters(RenderContext &renderer) {
   CommandProcessor processor(renderer, 0);
-  std::array<uint32_t, 24> registers{
+  std::array<uint32_t, 34> registers{
       Pm4::SPI_SHADER_PGM_RSRC4_GS, 0x0badc0deu,
       Pm4::SPI_SHADER_PGM_CHKSUM_HS, 0x12345678u,
       Pm4::SPI_SHADER_PGM_RSRC4_HS, 0x87654321u,
@@ -52319,6 +52385,11 @@ void CheckPm4IndirectShaderRegisters(RenderContext &renderer) {
       Pm4::SPI_SHADER_PGM_HI_PS, 0u,
       Pm4::SPI_SHADER_PGM_RSRC1_PS, 0x022c018du,
       Pm4::SPI_SHADER_PGM_RSRC2_PS, 0x0000003cu,
+      Pm4::SPI_SHADER_PGM_RSRC1_HS, 0x30000007u,
+      Pm4::SPI_SHADER_PGM_RSRC2_HS, 0x00000018u,
+      0x0000014au, 0x03000007u,
+      Pm4::SPI_SHADER_PGM_LO_LS, 0x11654288u,
+      Pm4::SPI_SHADER_PGM_HI_LS, 0u,
   };
   const auto address = reinterpret_cast<uint64_t>(registers.data());
   std::array<uint32_t, 5> command{
@@ -52346,6 +52417,11 @@ void CheckPm4IndirectShaderRegisters(RenderContext &renderer) {
               ps.data_addr == 0x500010400ull && ps.rsrc1.vgprs == 13u &&
               ps.rsrc2.user_sgpr == 30u,
           "GS-front metadata changed native GS state or prevented later PS writes");
+  Require("Pm4IndirectShaderRegisters", "HS state around front metadata",
+          vs.ls_regs.data_addr == 0x1165428800ull &&
+              vs.hs_regs.rsrc1.ls_vgpr_component_count == 3u &&
+              vs.hs_regs.rsrc2.user_sgpr == 12u,
+          "HS-front metadata changed HS state or prevented later LS writes");
   std::printf("[host]    %-32s ok\n", "Pm4IndirectShaderRegisters");
 }
 
@@ -53862,6 +53938,119 @@ void CheckPm4LodStats(RenderContext &renderer) {
   std::printf("[host]    %-32s ok\n", name);
 }
 
+// With --lod-stats, GET_LOD_STATS reports the counter of a bound T# as sampled at its BASE_LEVEL,
+// clamped when MIN_LOD lies above that level; image heap elements and other counters report no
+// samples. Bit 18 or 19 resets the counters after its report. Without --lod-stats no slot reports
+// samples.
+void CheckPm4LodStatsBoundTextures(VulkanHarness &vulkan, bool enabled) {
+  constexpr const char *name = "Pm4LodStatsBoundTextures";
+  constexpr uintptr_t base = 0x0000000205100000ull;
+  constexpr uint64_t allocation_size = 0x10000;
+  Config::Load({.printf_direction = Config::LogDirection::Silent, .lod_stats_enabled = enabled});
+  int64_t direct_offset = -1;
+  Require(name, "direct allocation",
+          Libs::LibKernel::Memory::KernelAllocateDirectMemory(
+              0, Libs::LibKernel::Memory::KernelGetDirectMemorySize(),
+              allocation_size, 0x10000, 0, &direct_offset) == 0,
+          "texture allocation failed");
+  void *mapped = reinterpret_cast<void *>(base);
+  Require(name, "direct mapping",
+          Libs::LibKernel::Memory::KernelMapDirectMemory(
+              &mapped, allocation_size, 0x3, 0x10, direct_offset, 0x10000) == 0 &&
+              mapped == reinterpret_cast<void *>(base),
+          "texture mapping failed");
+  {
+    RenderContext context(vulkan.RuntimeContext());
+    HW::Context registers{};
+    HW::UserConfig user_config{};
+    HW::Shader shaders{};
+    auto &scheduler = context.GetCommandScheduler();
+    scheduler.Begin(registers, user_config, shaders);
+    context.MapMemory(base, allocation_size);
+    CommandProcessor processor(context, 0);
+    alignas(64) std::array<uint32_t, 16 + 256 * 2> report{};
+    std::array<uint32_t, 5> packet{};
+    std::array<std::array<uint32_t, 2>, 256> unsampled{};
+    for (u32 counter = 0; counter < 256; counter++) {
+      unsampled[counter] = {counter << 24u, 15u << 24u};
+    }
+    const auto run = [&](uint8_t force_reset, uint8_t report_and_reset, const auto &expected) {
+      report.fill(0);
+      CommandBufferLayout dcb{packet.data(), packet.data() + packet.size(), packet.data(),
+                              packet.data() + packet.size(), nullptr, nullptr, 0};
+      Pm4Execution execution;
+      return Gen5::AgcDcbGetLodStats(reinterpret_cast<Gen5::CommandBuffer *>(&dcb), 0,
+                                     report.data(), sizeof(report), 0, force_reset,
+                                     report_and_reset, 0) == packet.data() &&
+             processor.Process(execution, packet) == Pm4ProcessResult::Complete &&
+             report[0] != 0 && std::memcmp(&report[16], expected.data(), sizeof(expected)) == 0;
+    };
+
+    struct Binding {
+      u32 counter;
+      bool enabled;
+      u32 base_level;
+      u32 min_lod; // u4.8
+      bool heap;
+    };
+    // Counter 7 combines levels 1, 0 and 2; only the level 0 T# has MIN_LOD above its level.
+    const std::array bindings{Binding{3, true, 0, 0, false}, Binding{5, true, 1, 0x200, false},
+                              Binding{7, true, 1, 0x100, false}, Binding{7, true, 0, 0x80, false},
+                              Binding{7, true, 2, 0x200, false}, Binding{9, true, 0, 0x200, true},
+                              Binding{11, false, 0, 0x200, false}};
+    auto &executor = context.GetRenderExecutor();
+    const auto bind = [&] {
+      for (u32 index = 0; index < bindings.size(); index++) {
+        const auto &binding = bindings[index];
+        // 4x4 RGBA8 with levels 0-2.
+        const ShaderTextureResource descriptor{
+            {static_cast<u32>((base + index * 0x1000u) >> 8u),
+             (static_cast<u32>(Prospero::BufferFormat::k8_8_8_8UNorm) << 20u) | (3u << 30u) |
+                 (binding.min_lod << 8u),
+             3u << 14u,
+             DstSel(4, 5, 6, 7) | (binding.base_level << 12u) | (2u << 16u) |
+                 (static_cast<u32>(Prospero::TileMode::kLinear) << 20u) |
+                 (static_cast<u32>(Prospero::ImageType::kColor2D) << 28u),
+             0, 0x00700020u | (binding.enabled ? 1u << 25u : 0u), binding.counter, 0}};
+        ShaderRecompiler::IR::DescriptorValue value{};
+        value.dword_count = 8;
+        std::copy_n(descriptor.fields, 8, value.dwords.begin());
+        ShaderRecompiler::IR::ImageResource resource{};
+        resource.resource_class = ShaderRecompiler::IR::ImageResourceClass::Sampled;
+        resource.numeric_class = Prospero::TextureNumericClass::Float;
+        resource.dimension = ShaderRecompiler::Decoder::ImageDimension::Dim2D;
+        resource.read = true;
+        resource.heap = binding.heap;
+        static_cast<void>(RenderExecutorTestAccess::ResolveTexture(executor, resource, value));
+      }
+    };
+    auto expected = unsampled;
+    if (enabled) {
+      expected[3] = {3u << 24u, 1u};
+      expected[5] = {(5u << 24u) | 1u, 1u << 24u};
+      expected[7] = {(7u << 24u) | 1u, 1u};
+    }
+    bind();
+    Require(name, "bound counters", run(0, 0, expected),
+            enabled ? "bound counters did not report their finest base level and clamping"
+                    : "bound counters reported samples without --lod-stats");
+    Require(name, "report and reset", run(0, 1, expected) && run(0, 0, unsampled),
+            "bit 19 did not report, then clear, the counters");
+    bind();
+    Require(name, "force reset", run(1, 0, expected) && run(0, 0, unsampled),
+            "bit 18 did not report, then clear, the counters");
+    context.UnmapMemory(base, allocation_size);
+    scheduler.Finish();
+  }
+  Require(name, "unmap", Libs::LibKernel::Memory::KernelMunmap(base, allocation_size) == 0,
+          "texture mapping release failed");
+  Require(name, "release",
+          Libs::LibKernel::Memory::KernelReleaseDirectMemory(direct_offset, allocation_size) == 0,
+          "texture allocation release failed");
+  Config::Load({.printf_direction = Config::LogDirection::Silent});
+  std::printf("[gpu]     %-32s ok (--lod-stats %s)\n", name, enabled ? "on" : "off");
+}
+
 void CheckPm4MemSemaphore(RenderContext &renderer) {
   constexpr const char *name = "Pm4MemSemaphore";
   Loader::SymbolDatabase symbols;
@@ -55007,6 +55196,8 @@ int main(int argc, char **argv) {
     CheckPm4WaitPackets(vulkan.RuntimeRenderer());
     CheckPm4WaitResume(vulkan.RuntimeRenderer());
     CheckPm4LodStats(vulkan.RuntimeRenderer());
+    CheckPm4LodStatsBoundTextures(vulkan, false);
+    CheckPm4LodStatsBoundTextures(vulkan, true);
     CheckPm4MemSemaphore(vulkan.RuntimeRenderer());
     return 0;
   }
@@ -55136,6 +55327,7 @@ int main(int argc, char **argv) {
     CheckImageSamplerSpecialization();
     VulkanHarness vulkan;
     vulkan.CheckSamplerBorderColors();
+    vulkan.CheckSamplerFilterMode();
     return 0;
   }
   if (argc == 2 && std::strcmp(argv[1], "--sampled-depth-resource-only") == 0) {
@@ -55259,6 +55451,7 @@ int main(int argc, char **argv) {
   CheckSampledDepthResource();
   CheckDepthTextureEncoding();
   vulkan.CheckSamplerBorderColors();
+  vulkan.CheckSamplerFilterMode();
   if (rasterization) {
     vulkan.CheckComparisonDepthTexture();
     vulkan.CheckRasterization(true);
@@ -55318,6 +55511,8 @@ int main(int argc, char **argv) {
   CheckPm4IndirectControlFlow(vulkan.RuntimeRenderer());
   CheckPm4WaitResume(vulkan.RuntimeRenderer());
   CheckPm4LodStats(vulkan.RuntimeRenderer());
+  CheckPm4LodStatsBoundTextures(vulkan, false);
+  CheckPm4LodStatsBoundTextures(vulkan, true);
   CheckPm4MemSemaphore(vulkan.RuntimeRenderer());
   CheckPm4RewindResume(vulkan.RuntimeRenderer());
   CheckEmbeddedFetchVertexOffset();
