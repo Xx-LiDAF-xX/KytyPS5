@@ -1195,18 +1195,6 @@ void RenderExecutor::ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallIn
 	}
 	buffer.BeginRendering(rendering);
 	vk_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.pipeline);
-#if !defined(__APPLE__)
-	// MoltenVK has no VK_EXT_color_write_enable; its pipelines use the static colorWriteMask.
-	// Every other pipeline declares VK_DYNAMIC_STATE_COLOR_WRITE_ENABLE_EXT, and binding one
-	// invalidates any value set for the previous pipeline, so record it for each draw. Vulkan
-	// requires at least one element even when the pass has no colour attachments.
-	std::array<vk::Bool32, RENDER_COLOR_ATTACHMENTS_MAX> color_write_enable {};
-	for (uint32_t slot = 0; slot < rendering.num_color_attachments; slot++) {
-		color_write_enable[slot] = rendering.color_attachments[slot].image_view != nullptr;
-	}
-	vk_buffer.setColorWriteEnableEXT(std::max(1u, rendering.num_color_attachments),
-	                                 color_write_enable.data());
-#endif
 	auto&         occlusion_queries = m_context.GetOcclusionQueries();
 	const int32_t occlusion_query   = occlusion_queries.Begin(vk_buffer);
 	if (mesh_task) {

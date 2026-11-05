@@ -677,12 +677,7 @@ void Swapchain::DrawLayer(vk::CommandBuffer command, const Presenter::Layer& lay
 		vk::PipelineColorBlendStateCreateInfo blend {};
 		blend.attachmentCount = 1;
 		blend.pAttachments    = &attachment;
-#if defined(__APPLE__)
 		const std::array dynamic_states {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
-#else
-		const std::array dynamic_states {vk::DynamicState::eViewport, vk::DynamicState::eScissor,
-		                                 vk::DynamicState::eColorWriteEnableEXT};
-#endif
 		vk::PipelineDynamicStateCreateInfo dynamic {};
 		dynamic.dynamicStateCount = static_cast<uint32_t>(dynamic_states.size());
 		dynamic.pDynamicStates    = dynamic_states.data();
@@ -733,10 +728,6 @@ void Swapchain::DrawLayer(vk::CommandBuffer command, const Presenter::Layer& lay
 	command.pushConstants(m_overlay_layout, vk::ShaderStageFlagBits::eFragment, 0,
 	                      sizeof(flags), &flags);
 	command.bindPipeline(vk::PipelineBindPoint::eGraphics, m_overlay_pipeline);
-#if !defined(__APPLE__)
-	const vk::Bool32 color_write_enable = VK_TRUE;
-	command.setColorWriteEnableEXT(1, &color_write_enable);
-#endif
 	vk::RenderingAttachmentInfo attachment {};
 	attachment.imageView   = m_image_views[m_image_index];
 	attachment.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
