@@ -36,7 +36,9 @@ namespace {
 constexpr uint64_t NumFramesBeforeRemoval = 32;
 constexpr int64_t  GiB                    = 1024ll * 1024 * 1024;
 // Largest GPU-written tiled image (in texels) that is always written back to guest memory on submit.
-constexpr uint64_t SmallTiledReadbackTexels = 512 * 512;
+// Small tiled targets are for reductions and simulation state (e.g. 1x1 ocean wave origins).
+// Large tiled render targets (shadows, AO, bloom pyramids) stay in VRAM unless --readback-tiled-images is set.
+constexpr uint64_t SmallTiledReadbackTexels = 64 * 64;
 // Largest GPU-written linear image (in texels) that is always written back. Linear surfaces hold
 // GPU results the guest polls directly: PPSA01411 spins on the tail word of its 384x216
 // reprojection target and never observes the copy otherwise. Full-size frame buffers are far

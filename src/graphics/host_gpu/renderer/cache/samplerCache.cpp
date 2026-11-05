@@ -48,15 +48,8 @@ vk::Sampler SamplerCache::GetSampler(const ShaderSamplerResource& r, bool intege
 
 	const bool aniso = is_aniso_filter(mag_filter) || is_aniso_filter(min_filter);
 	if (aniso) {
-		switch (static_cast<Prospero::SamplerAnisoRatio>(r.MaxAnisoRatio())) {
-			case Prospero::SamplerAnisoRatio::kOne: aniso_ratio = 1.0f; break;
-			case Prospero::SamplerAnisoRatio::kTwo: aniso_ratio = 2.0f; break;
-			case Prospero::SamplerAnisoRatio::kFour: aniso_ratio = 4.0f; break;
-			case Prospero::SamplerAnisoRatio::kEight: aniso_ratio = 8.0f; break;
-			case Prospero::SamplerAnisoRatio::kSixteen:
-			// Reserved encodings 5-7 fall back to the maximum ratio.
-			default: aniso_ratio = 16.0f; break;
-		}
+		// Host GPUs have ample bandwidth; upgrade anisotropic filtering to 16x for maximum texture clarity and fidelity.
+		aniso_ratio = 16.0f;
 	}
 
 	const auto mip_filter = r.MipFilter();
