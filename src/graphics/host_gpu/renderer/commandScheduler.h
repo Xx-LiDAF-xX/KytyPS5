@@ -8,9 +8,11 @@
 #include "graphics/host_gpu/renderer/render.h"
 
 #include <condition_variable>
+#include <functional>
 #include <mutex>
 #include <queue>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace Libs::Graphics {
@@ -51,14 +53,21 @@ public:
 	[[nodiscard]] RenderContext&   Context() const noexcept { return m_context; }
 	[[nodiscard]] GraphicContext&  Graphics() const noexcept { return m_graphics; }
 
+	// Pillar 4: Thread-local secondary command pool support & parallel recording
+	vk::CommandBuffer CommitSecondary();
+	void RecordParallel(uint32_t count,
+	                    const std::function<void(uint32_t index, vk::CommandBuffer secondary)>& record_fn);
+
 private:
 	class CommandPool {
 	public:
-		CommandPool(GraphicContext& graphics, MasterSemaphore& master);
+		CommandPool(GraphicContext& graphics, MasterSemaphore& master,
+		            vk::CommandBufferLevel level = vk::CommandBufferLevel::ePrimary);
 		~CommandPool();
 		KYTY_CLASS_NO_COPY(CommandPool);
 
 		vk::CommandBuffer Commit();
+		[[nodiscard]] vk::CommandBufferLevel Level() const noexcept { return m_level; }
 
 	private:
 		static constexpr size_t GrowStep = 4;
@@ -67,11 +76,14 @@ private:
 
 		GraphicContext&                m_graphics;
 		MasterSemaphore&               m_master;
-		vk::CommandPool                m_pool = nullptr;
+		vk::CommandBufferLevel         m_level = vk::CommandBufferLevel::ePrimary;
+		vk::CommandPool                m_pool  = nullptr;
 		std::vector<vk::CommandBuffer> m_buffers;
 		std::vector<uint64_t>          m_ticks;
 		size_t                         m_hint = 0;
 	};
+
+	CommandPool& GetWorkerPool();
 
 	enum class OperationState { Open, Draining, Closed };
 
@@ -89,6 +101,8 @@ private:
 	RenderContext&               m_context;
 	GraphicContext&              m_graphics;
 	CommandPool                  m_command_pool;
+	std::mutex                   m_worker_pools_mutex;
+	std::unordered_map<std::thread::id, std::unique_ptr<CommandPool>> m_worker_pools;
 	CommandBuffer                m_command;
 	DynamicState                 m_dynamic_state;
 	std::queue<PendingOperation> m_pending_operations;

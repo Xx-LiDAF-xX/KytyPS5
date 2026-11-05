@@ -11,8 +11,9 @@ namespace Libs::Graphics {
 
 static thread_local CommandScheduler* g_deferred_callback_scheduler = nullptr;
 
-CommandScheduler::CommandPool::CommandPool(GraphicContext& graphics, MasterSemaphore& master)
-    : m_graphics(graphics), m_master(master) {
+CommandScheduler::CommandPool::CommandPool(GraphicContext& graphics, MasterSemaphore& master,
+                                           vk::CommandBufferLevel level)
+    : m_graphics(graphics), m_master(master), m_level(level) {
 	EXIT_IF(graphics.queue_family == static_cast<uint32_t>(-1));
 	vk::CommandPoolCreateInfo create {};
 	create.queueFamilyIndex = graphics.queue_family;
@@ -33,7 +34,7 @@ size_t CommandScheduler::CommandPool::Grow() {
 
 	vk::CommandBufferAllocateInfo allocate {};
 	allocate.commandPool        = m_pool;
-	allocate.level              = vk::CommandBufferLevel::ePrimary;
+	allocate.level              = m_level;
 	allocate.commandBufferCount = static_cast<uint32_t>(GrowStep);
 	EXIT_IF(m_graphics.device.allocateCommandBuffers(&allocate, m_buffers.data() + first) !=
 	        vk::Result::eSuccess);
@@ -119,6 +120,10 @@ void CommandScheduler::Shutdown() {
 		EXIT_IF(!m_pending_operations.empty() || !m_priority_operations.empty() ||
 		        m_priority_active_tick != 0);
 		m_operation_state = OperationState::Closed;
+	}
+	{
+		std::lock_guard lock(m_worker_pools_mutex);
+		m_worker_pools.clear();
 	}
 	m_operation_available.notify_all();
 }
@@ -348,6 +353,69 @@ uint64_t CommandScheduler::Submit(SubmitInfo submit) {
 void CommandScheduler::BeginNext() {
 	CheckActive();
 	BeginCommand();
+}
+
+CommandScheduler::CommandPool& CommandScheduler::GetWorkerPool() {
+	const auto tid = std::this_thread::get_id();
+	std::lock_guard lock(m_worker_pools_mutex);
+	auto iter = m_worker_pools.find(tid);
+	if (iter == m_worker_pools.end()) {
+		iter = m_worker_pools
+		           .emplace(tid, std::make_unique<CommandPool>(m_graphics, m_master,
+		                                                       vk::CommandBufferLevel::eSecondary))
+		           .first;
+	}
+	return *iter->second;
+}
+
+vk::CommandBuffer CommandScheduler::CommitSecondary() {
+	return GetWorkerPool().Commit();
+}
+
+void CommandScheduler::RecordParallel(
+    uint32_t count,
+    const std::function<void(uint32_t index, vk::CommandBuffer secondary)>& record_fn) {
+	if (count == 0) {
+		return;
+	}
+	CheckActive();
+	EXIT_IF(m_command.IsInvalid());
+
+	// If currently inside dynamic rendering, flush it so secondary commands record cleanly
+	m_command.EndRendering();
+
+	std::vector<vk::CommandBuffer> secondaries(count);
+
+	if (count == 1) {
+		auto sec = CommitSecondary();
+		vk::CommandBufferInheritanceInfo inheritance {};
+		vk::CommandBufferBeginInfo       begin_info {};
+		begin_info.flags            = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+		begin_info.pInheritanceInfo = &inheritance;
+		EXIT_IF(sec.begin(&begin_info) != vk::Result::eSuccess);
+		record_fn(0, sec);
+		EXIT_IF(sec.end() != vk::Result::eSuccess);
+		secondaries[0] = sec;
+	} else {
+		std::vector<std::jthread> workers;
+		workers.reserve(count);
+		for (uint32_t i = 0; i < count; ++i) {
+			workers.emplace_back([this, i, &secondaries, &record_fn] {
+				auto sec = CommitSecondary();
+				vk::CommandBufferInheritanceInfo inheritance {};
+				vk::CommandBufferBeginInfo       begin_info {};
+				begin_info.flags            = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+				begin_info.pInheritanceInfo = &inheritance;
+				EXIT_IF(sec.begin(&begin_info) != vk::Result::eSuccess);
+				record_fn(i, sec);
+				EXIT_IF(sec.end() != vk::Result::eSuccess);
+				secondaries[i] = sec;
+			});
+		}
+		workers.clear(); // Joins all worker threads
+	}
+
+	m_command.Handle().executeCommands(static_cast<uint32_t>(secondaries.size()), secondaries.data());
 }
 
 } // namespace Libs::Graphics
