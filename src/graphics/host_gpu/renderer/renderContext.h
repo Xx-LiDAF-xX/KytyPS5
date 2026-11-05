@@ -17,6 +17,7 @@
 #include "graphics/host_gpu/renderer/pipeline/pipelineCache.h"
 #include "kernel/eventQueue.h"
 
+#include <atomic>
 #include <memory>
 #include <shared_mutex>
 #include <vector>
@@ -64,6 +65,7 @@ public:
 	void AddInterruptEq(LibKernel::EventQueue::KernelEqueue eq, int event_id);
 	void DeleteInterruptEq(LibKernel::EventQueue::KernelEqueue eq, int event_id);
 	void TriggerInterrupt(int event_id, uint32_t context_id);
+	[[nodiscard]] bool HasInterruptEq(int event_id) const noexcept;
 
 private:
 	struct InterruptEqRegistration {
@@ -89,8 +91,9 @@ private:
 	VideoOut::VideoOutDriver* m_video_out = nullptr;
 	bool                      m_fault_process_pending = false;
 
-	Common::Mutex                        m_interrupt_mutex;
+	mutable Common::Mutex                m_interrupt_mutex;
 	std::vector<InterruptEqRegistration> m_interrupt_eqs;
+	std::atomic<bool>                    m_has_interrupt_eqs = false;
 };
 
 } // namespace Libs::Graphics

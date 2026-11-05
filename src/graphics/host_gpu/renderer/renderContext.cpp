@@ -163,6 +163,7 @@ void RenderContext::AddInterruptEq(LibKernel::EventQueue::KernelEqueue eq, int e
 	}
 
 	m_interrupt_eqs.push_back({eq, event_id});
+	m_has_interrupt_eqs.store(true, std::memory_order_release);
 }
 
 void RenderContext::DeleteInterruptEq(LibKernel::EventQueue::KernelEqueue eq, int event_id) {
@@ -176,6 +177,20 @@ void RenderContext::DeleteInterruptEq(LibKernel::EventQueue::KernelEqueue eq, in
 	}
 
 	m_interrupt_eqs.erase(it);
+	m_has_interrupt_eqs.store(!m_interrupt_eqs.empty(), std::memory_order_release);
+}
+
+bool RenderContext::HasInterruptEq(int event_id) const noexcept {
+	if (!m_has_interrupt_eqs.load(std::memory_order_relaxed)) {
+		return false;
+	}
+	Common::LockGuard lock(m_interrupt_mutex);
+	for (const auto& registration: m_interrupt_eqs) {
+		if (registration.event_id == event_id) {
+			return true;
+		}
+	}
+	return false;
 }
 
 void RenderContext::TriggerInterrupt(int event_id, uint32_t context_id) {

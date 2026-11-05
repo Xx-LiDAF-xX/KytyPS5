@@ -494,19 +494,14 @@ void GuestGpu::ThreadRun(void* data) {
 			              gpu->m_renderer.GetCommandScheduler().HasPendingPriorityOperations() ||
 			              (gpu->m_submission_count == 0);
 			if (!needs_flush) {
-				bool has_ready_submission = false;
 				for (uint32_t offset = 0; offset < QueueCount; offset++) {
 					const auto id = (gpu->m_next_queue + offset) % QueueCount;
 					if (!gpu->m_queues[id].empty() && !gpu->m_queues[id].front().blocked) {
 						if (id != submission.queue_id) {
 							needs_flush = true;
 						}
-						has_ready_submission = true;
 						break;
 					}
-				}
-				if (!has_ready_submission) {
-					needs_flush = true;
 				}
 			}
 
@@ -979,14 +974,12 @@ void CommandProcessor::ReleaseMem(uint32_t data_sel, uint32_t interrupt_selector
 	}
 
 	// GuestGpu::Process's end-of-slice flush submits the work this interrupt waits on.
-	if (interrupt) {
+	const bool has_listener = interrupt && m_renderer.HasInterruptEq(m_interrupt_event_id);
+	if (has_listener) {
 		GetScheduler().DeferPriorityOperation(
 		    [&renderer = m_renderer, event_id = m_interrupt_event_id, interrupt_context_id] {
 			    renderer.TriggerInterrupt(event_id, interrupt_context_id);
 		    });
-	}
-
-	if (data_sel != 0 || interrupt) {
 		m_needs_flush = true;
 	}
 }
