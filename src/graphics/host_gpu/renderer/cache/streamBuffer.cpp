@@ -17,9 +17,6 @@ namespace {
 constexpr size_t WATCHES_INITIAL_RESERVE = 0x4000;
 constexpr size_t WATCHES_RESERVE_CHUNK   = 0x1000;
 
-constexpr vk::AccessFlags MEMORY_ACCESS =
-    vk::AccessFlagBits::eMemoryRead | vk::AccessFlagBits::eMemoryWrite;
-
 [[nodiscard]] VmaAllocationCreateFlags AllocationFlags(MemoryUsage usage) {
 	switch (usage) {
 		case MemoryUsage::Upload:
@@ -158,24 +155,40 @@ void Buffer::CopyFrom(CommandBuffer& command, const Buffer& source, uint64_t sou
 		EXIT("Buffer: overlapping self-copy\n");
 	}
 	command.EndRendering();
+	constexpr vk::PipelineStageFlags BufferPipelineStages =
+	    vk::PipelineStageFlagBits::eVertexInput |
+	    vk::PipelineStageFlagBits::eVertexShader |
+	    vk::PipelineStageFlagBits::eFragmentShader |
+	    vk::PipelineStageFlagBits::eComputeShader |
+	    vk::PipelineStageFlagBits::eTransfer |
+	    vk::PipelineStageFlagBits::eDrawIndirect;
+
+	constexpr vk::AccessFlags BufferAccessFlags =
+	    vk::AccessFlagBits::eVertexAttributeRead |
+	    vk::AccessFlagBits::eIndexRead |
+	    vk::AccessFlagBits::eUniformRead |
+	    vk::AccessFlagBits::eShaderRead |
+	    vk::AccessFlagBits::eShaderWrite |
+	    vk::AccessFlagBits::eTransferRead |
+	    vk::AccessFlagBits::eTransferWrite |
+	    vk::AccessFlagBits::eIndirectCommandRead;
+
 	const vk::BufferMemoryBarrier before[] = {
-	    source.Barrier(source_offset, size, vk::AccessFlagBits::eMemoryWrite,
+	    source.Barrier(source_offset, size, vk::AccessFlagBits::eTransferWrite | vk::AccessFlagBits::eShaderWrite,
 	                   vk::AccessFlagBits::eTransferRead),
-	    Barrier(destination_offset, size, MEMORY_ACCESS, vk::AccessFlagBits::eTransferWrite),
+	    Barrier(destination_offset, size, BufferAccessFlags, vk::AccessFlagBits::eTransferWrite),
 	};
 	const auto native = command.Handle();
-	native.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
-	                       vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
-	                       0, nullptr, 2, before, 0, nullptr);
+	native.pipelineBarrier(BufferPipelineStages, vk::PipelineStageFlagBits::eTransfer,
+	                       {}, 0, nullptr, 2, before, 0, nullptr);
 	const vk::BufferCopy copy {source_offset, destination_offset, size};
 	native.copyBuffer(source.Handle(), Handle(), 1, &copy);
 	const vk::BufferMemoryBarrier after[] = {
-	    source.Barrier(source_offset, size, vk::AccessFlagBits::eTransferRead, MEMORY_ACCESS),
-	    Barrier(destination_offset, size, vk::AccessFlagBits::eTransferWrite, MEMORY_ACCESS),
+	    source.Barrier(source_offset, size, vk::AccessFlagBits::eTransferRead, BufferAccessFlags),
+	    Barrier(destination_offset, size, vk::AccessFlagBits::eTransferWrite, BufferAccessFlags),
 	};
-	native.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-	                       vk::PipelineStageFlagBits::eAllCommands,
-	                       vk::DependencyFlagBits::eByRegion, 0, nullptr, 2, after, 0, nullptr);
+	native.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, BufferPipelineStages,
+	                       {}, 0, nullptr, 2, after, 0, nullptr);
 }
 
 void Buffer::Fill(uint64_t offset, uint64_t size, uint32_t value) {
@@ -184,16 +197,32 @@ void Buffer::Fill(uint64_t offset, uint64_t size, uint32_t value) {
 	}
 	auto& command = Scheduler().Current();
 	command.EndRendering();
-	const auto before = Barrier(offset, size, MEMORY_ACCESS, vk::AccessFlagBits::eTransferWrite);
+	constexpr vk::PipelineStageFlags BufferPipelineStages =
+	    vk::PipelineStageFlagBits::eVertexInput |
+	    vk::PipelineStageFlagBits::eVertexShader |
+	    vk::PipelineStageFlagBits::eFragmentShader |
+	    vk::PipelineStageFlagBits::eComputeShader |
+	    vk::PipelineStageFlagBits::eTransfer |
+	    vk::PipelineStageFlagBits::eDrawIndirect;
+
+	constexpr vk::AccessFlags BufferAccessFlags =
+	    vk::AccessFlagBits::eVertexAttributeRead |
+	    vk::AccessFlagBits::eIndexRead |
+	    vk::AccessFlagBits::eUniformRead |
+	    vk::AccessFlagBits::eShaderRead |
+	    vk::AccessFlagBits::eShaderWrite |
+	    vk::AccessFlagBits::eTransferRead |
+	    vk::AccessFlagBits::eTransferWrite |
+	    vk::AccessFlagBits::eIndirectCommandRead;
+
+	const auto before = Barrier(offset, size, BufferAccessFlags, vk::AccessFlagBits::eTransferWrite);
 	const auto native = command.Handle();
-	native.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
-	                       vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
-	                       0, nullptr, 1, &before, 0, nullptr);
+	native.pipelineBarrier(BufferPipelineStages, vk::PipelineStageFlagBits::eTransfer,
+	                       {}, 0, nullptr, 1, &before, 0, nullptr);
 	native.fillBuffer(Handle(), offset, size, value);
-	const auto after = Barrier(offset, size, vk::AccessFlagBits::eTransferWrite, MEMORY_ACCESS);
-	native.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-	                       vk::PipelineStageFlagBits::eAllCommands,
-	                       vk::DependencyFlagBits::eByRegion, 0, nullptr, 1, &after, 0, nullptr);
+	const auto after = Barrier(offset, size, vk::AccessFlagBits::eTransferWrite, BufferAccessFlags);
+	native.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, BufferPipelineStages,
+	                       {}, 0, nullptr, 1, &after, 0, nullptr);
 }
 
 StreamBuffer::StreamBuffer(GraphicContext& graphics, CommandScheduler& scheduler, MemoryUsage usage,

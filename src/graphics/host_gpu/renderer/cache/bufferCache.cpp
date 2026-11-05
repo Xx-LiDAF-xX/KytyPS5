@@ -64,18 +64,32 @@ void BufferCache::WriteDataBuffer(Buffer& buffer, uint64_t address, const void* 
 		EXIT_IF(destination_offset > buffer.Size() || chunk > buffer.Size() - destination_offset);
 		m_scheduler.EndRendering();
 		const auto command = m_scheduler.Current().Handle();
+		constexpr auto BufferPipelineStages2 =
+		    vk::PipelineStageFlagBits2::eVertexInput |
+		    vk::PipelineStageFlagBits2::eVertexShader |
+		    vk::PipelineStageFlagBits2::eFragmentShader |
+		    vk::PipelineStageFlagBits2::eComputeShader |
+		    vk::PipelineStageFlagBits2::eTransfer |
+		    vk::PipelineStageFlagBits2::eDrawIndirect;
+
+		constexpr auto BufferAccessFlags2 =
+		    vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite |
+		    vk::AccessFlagBits2::eTransferRead | vk::AccessFlagBits2::eTransferWrite |
+		    vk::AccessFlagBits2::eUniformRead | vk::AccessFlagBits2::eVertexAttributeRead |
+		    vk::AccessFlagBits2::eIndexRead | vk::AccessFlagBits2::eIndirectCommandRead;
+
 		vk::BufferMemoryBarrier2 before {};
-		before.srcStageMask  = vk::PipelineStageFlagBits2::eAllCommands;
-		before.srcAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite;
-		before.dstStageMask  = vk::PipelineStageFlagBits2::eTransfer;
-		before.dstAccessMask = vk::AccessFlagBits2::eTransferWrite;
+		before.srcStageMask        = BufferPipelineStages2;
+		before.srcAccessMask       = BufferAccessFlags2;
+		before.dstStageMask        = vk::PipelineStageFlagBits2::eTransfer;
+		before.dstAccessMask       = vk::AccessFlagBits2::eTransferWrite;
 		before.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		before.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		before.buffer        = buffer.Handle();
-		before.offset        = destination_offset;
-		before.size          = chunk;
+		before.buffer              = buffer.Handle();
+		before.offset              = destination_offset;
+		before.size                = chunk;
 		vk::DependencyInfo dependency {};
-		dependency.dependencyFlags          = vk::DependencyFlagBits::eByRegion;
+		dependency.dependencyFlags          = {};
 		dependency.bufferMemoryBarrierCount = 1;
 		dependency.pBufferMemoryBarriers    = &before;
 		command.pipelineBarrier2(dependency);
@@ -84,8 +98,8 @@ void BufferCache::WriteDataBuffer(Buffer& buffer, uint64_t address, const void* 
 		auto after          = before;
 		after.srcStageMask  = vk::PipelineStageFlagBits2::eTransfer;
 		after.srcAccessMask = vk::AccessFlagBits2::eTransferWrite;
-		after.dstStageMask  = vk::PipelineStageFlagBits2::eAllCommands;
-		after.dstAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite;
+		after.dstStageMask  = BufferPipelineStages2;
+		after.dstAccessMask = BufferAccessFlags2;
 		dependency.pBufferMemoryBarriers = &after;
 		command.pipelineBarrier2(dependency);
 		bytes += chunk;
@@ -435,27 +449,42 @@ bool BufferCache::SynchronizeBuffer(Buffer& buffer, uint64_t vaddr, uint64_t siz
 		auto& command = m_scheduler.Current();
 		command.EndRendering();
 		const auto native = command.Handle();
+
+		constexpr vk::PipelineStageFlags BufferPipelineStages =
+		    vk::PipelineStageFlagBits::eVertexInput |
+		    vk::PipelineStageFlagBits::eVertexShader |
+		    vk::PipelineStageFlagBits::eFragmentShader |
+		    vk::PipelineStageFlagBits::eComputeShader |
+		    vk::PipelineStageFlagBits::eTransfer |
+		    vk::PipelineStageFlagBits::eDrawIndirect;
+
+		constexpr vk::AccessFlags BufferAccessFlags =
+		    vk::AccessFlagBits::eVertexAttributeRead |
+		    vk::AccessFlagBits::eIndexRead |
+		    vk::AccessFlagBits::eUniformRead |
+		    vk::AccessFlagBits::eShaderRead |
+		    vk::AccessFlagBits::eShaderWrite |
+		    vk::AccessFlagBits::eTransferRead |
+		    vk::AccessFlagBits::eTransferWrite |
+		    vk::AccessFlagBits::eIndirectCommandRead;
+
 		vk::BufferMemoryBarrier before {};
-		before.srcAccessMask = vk::AccessFlagBits::eMemoryRead | vk::AccessFlagBits::eMemoryWrite |
-		                       vk::AccessFlagBits::eTransferRead |
-		                       vk::AccessFlagBits::eTransferWrite;
+		before.srcAccessMask       = BufferAccessFlags;
 		before.dstAccessMask       = vk::AccessFlagBits::eTransferWrite;
 		before.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		before.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		before.buffer              = buffer.Handle();
 		before.offset              = 0;
 		before.size                = buffer.Size();
-		native.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
-		                       vk::PipelineStageFlagBits::eTransfer,
-		                       vk::DependencyFlagBits::eByRegion, 0, nullptr, 1, &before, 0, nullptr);
+		native.pipelineBarrier(BufferPipelineStages, vk::PipelineStageFlagBits::eTransfer,
+		                       {}, 0, nullptr, 1, &before, 0, nullptr);
 		native.copyBuffer(source, buffer.Handle(), static_cast<uint32_t>(copies.size()),
 		                  copies.data());
 		auto after          = before;
 		after.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-		after.dstAccessMask = vk::AccessFlagBits::eMemoryRead | vk::AccessFlagBits::eMemoryWrite;
-		native.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-		                       vk::PipelineStageFlagBits::eAllCommands,
-		                       vk::DependencyFlagBits::eByRegion, 0, nullptr, 1, &after, 0, nullptr);
+		after.dstAccessMask = BufferAccessFlags;
+		native.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, BufferPipelineStages,
+		                       {}, 0, nullptr, 1, &after, 0, nullptr);
 	}
 	if (is_texel_buffer && !is_written) {
 		return SynchronizeBufferFromImage(buffer, vaddr, size);
@@ -718,10 +747,15 @@ void BufferCache::QueueBdaSync(uint64_t vaddr, uint64_t size) {
 	const auto end   = Common::AlignUp(vaddr + size, TRACKER_PAGE_SIZE);
 	std::lock_guard lock(m_bda_sync_mutex);
 	m_bda_sync.Add(begin, end - begin);
+	m_has_bda_sync.store(true, std::memory_order_release);
 }
 
 RangeSet BufferCache::TakeBdaSync() {
+	if (!m_has_bda_sync.load(std::memory_order_acquire)) {
+		return {};
+	}
 	std::lock_guard lock(m_bda_sync_mutex);
+	m_has_bda_sync.store(false, std::memory_order_release);
 	return std::exchange(m_bda_sync, {});
 }
 

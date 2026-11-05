@@ -102,10 +102,18 @@ void ShaderAccessBarrier(vk::CommandBuffer vk_buffer, vk::PipelineStageFlags sou
 
 void ShaderWriteHazardBarrier(vk::CommandBuffer      vk_buffer,
                               vk::PipelineStageFlags destination_stages) {
+	constexpr vk::PipelineStageFlags BufferPipelineStages =
+	    vk::PipelineStageFlagBits::eVertexInput |
+	    vk::PipelineStageFlagBits::eVertexShader |
+	    vk::PipelineStageFlagBits::eFragmentShader |
+	    vk::PipelineStageFlagBits::eComputeShader |
+	    vk::PipelineStageFlagBits::eTransfer |
+	    vk::PipelineStageFlagBits::eDrawIndirect;
+
 	const vk::MemoryBarrier barrier {
 	    .srcAccessMask = vk::AccessFlagBits::eMemoryRead | vk::AccessFlagBits::eMemoryWrite,
 	    .dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite};
-	vk_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, destination_stages,
+	vk_buffer.pipelineBarrier(BufferPipelineStages, destination_stages,
 	                          vk::DependencyFlags {}, 1, &barrier, 0, nullptr, 0, nullptr);
 }
 
