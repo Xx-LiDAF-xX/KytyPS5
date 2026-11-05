@@ -115,6 +115,17 @@ public:
 	void             ProcessIndirectBuffer(std::span<const uint32_t> commands, bool chain);
 
 	[[nodiscard]] bool IsAsyncComputeQueue() const { return m_interrupt_event_id >= 0x20; }
+	[[nodiscard]] bool NeedsFlush() const noexcept { return m_needs_flush; }
+	void               RecordDrawCall() noexcept {
+		if (++m_draws_in_batch >= 128) {
+			m_needs_flush = true;
+		}
+	}
+	void RecordDispatch() noexcept {
+		if (++m_draws_in_batch >= 64) {
+			m_needs_flush = true;
+		}
+	}
 
 private:
 	void ProcessPm4(Pm4Execution& execution);
@@ -142,6 +153,8 @@ private:
 	const int m_interrupt_event_id;
 	uint64_t  m_synthetic_occlusion_counter = 0;
 	bool      m_predicate_skip              = false;
+	bool      m_needs_flush                 = false;
+	uint32_t  m_draws_in_batch              = 0;
 };
 
 } // namespace Libs::Graphics

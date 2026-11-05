@@ -180,6 +180,8 @@ void CommandProcessor::Reset() {
 	m_predicate_skip                   = false;
 	m_draw_indirect_args_base_addr     = 0;
 	m_dispatch_indirect_args_base_addr = 0;
+	m_needs_flush                      = false;
+	m_draws_in_batch                   = 0;
 }
 
 void CommandProcessor::ApplyContextStateOperation(ContextStateOperation operation) {
@@ -211,6 +213,8 @@ void CommandProcessor::BufferFlush() {
 	GetScheduler().Flush();
 	// Harvest completed occlusion dumps without stalling intermediate flushes.
 	m_renderer.GetOcclusionQueries().Publish(false);
+	m_needs_flush    = false;
+	m_draws_in_batch = 0;
 }
 
 void CommandProcessor::BufferWait() {
@@ -447,6 +451,7 @@ void GuestGpu::ThreadRun(void* data) {
 		}
 
 		if (command) {
+			gpu->m_gfx_cp->BufferFlush();
 			{
 				Common::DebugCounters::ScopedTimer busy(
 				    Common::DebugCounters::Counter::GpuThreadBusyNs);
@@ -467,21 +472,50 @@ void GuestGpu::ThreadRun(void* data) {
 			return gpu->Process(submission);
 		}();
 
-		Common::LockGuard lock(gpu->m_queue_mutex);
-		if (!complete) {
-			submission.blocked = true;
-			gpu->m_queues[submission.queue_id].push_front(std::move(submission));
-			gpu->m_submission_count++;
-		} else {
-			for (auto& queue: gpu->m_queues) {
-				if (!queue.empty()) {
-					queue.front().blocked = false;
+		bool needs_flush = false;
+		{
+			Common::LockGuard lock(gpu->m_queue_mutex);
+			if (!complete) {
+				submission.blocked = true;
+				gpu->m_queues[submission.queue_id].push_front(std::move(submission));
+				gpu->m_submission_count++;
+			} else {
+				for (auto& queue: gpu->m_queues) {
+					if (!queue.empty()) {
+						queue.front().blocked = false;
+					}
 				}
 			}
+
+			needs_flush = !complete ||
+			              gpu->GetProcessor(submission.queue_id).NeedsFlush() ||
+			              gpu->m_renderer.GetCommandScheduler().HasPendingPriorityOperations() ||
+			              (gpu->m_submission_count == 0);
+			if (!needs_flush) {
+				bool has_ready_submission = false;
+				for (uint32_t offset = 0; offset < QueueCount; offset++) {
+					const auto id = (gpu->m_next_queue + offset) % QueueCount;
+					if (!gpu->m_queues[id].empty() && !gpu->m_queues[id].front().blocked) {
+						if (id != submission.queue_id) {
+							needs_flush = true;
+						}
+						has_ready_submission = true;
+						break;
+					}
+				}
+				if (!has_ready_submission) {
+					needs_flush = true;
+				}
+			}
+
+			gpu->m_processing = false;
+			if (gpu->m_commands.empty() && gpu->m_submission_count == 0) {
+				gpu->m_idle.SignalAll();
+			}
 		}
-		gpu->m_processing = false;
-		if (gpu->m_commands.empty() && gpu->m_submission_count == 0) {
-			gpu->m_idle.SignalAll();
+
+		if (submission.type == SubmissionType::Commands && needs_flush) {
+			gpu->GetProcessor(submission.queue_id).BufferFlush();
 		}
 	}
 }
@@ -496,9 +530,6 @@ bool GuestGpu::Process(Submission& submission) {
 		case SubmissionType::Commands:
 			complete =
 			    cp.Process(submission.execution, submission.commands) == Pm4ProcessResult::Complete;
-			if (submission.execution.MadeProgress()) {
-				cp.BufferFlush();
-			}
 			break;
 		case SubmissionType::FlipPreparation:
 			cp.PrepareCpuFlip(submission.flip_request_id);
@@ -708,6 +739,7 @@ void CommandProcessor::SetPredication(uint32_t condition, uint32_t op, uint32_t 
 }
 
 void CommandProcessor::DrawIndex(DrawIndexArgs args) {
+	RecordDrawCall();
 	args.index_type_and_size = m_index_type_and_size;
 	if (args.instance_count == 0) {
 		args.instance_count = NumInstances();
@@ -779,6 +811,7 @@ void CommandProcessor::DrawIndirectMulti(uint32_t data_offset, uint32_t max_coun
                                          const volatile uint32_t* count_addr,
                                          uint32_t stride_in_bytes, IndirectDrawRegisters registers,
                                          uint32_t draw_initiator, bool indexed) {
+	RecordDrawCall();
 	EXIT_NOT_IMPLEMENTED((draw_initiator & ~0x20u) != (indexed ? 0u : 2u));
 	EXIT_NOT_IMPLEMENTED(m_draw_indirect_args_base_addr == 0);
 	// The guest records match Vulkan's indirect commands byte for byte.
@@ -844,6 +877,7 @@ void CommandProcessor::DrawIndirectMulti(uint32_t data_offset, uint32_t max_coun
 
 void CommandProcessor::DispatchDirect(uint32_t thread_group_x, uint32_t thread_group_y,
                                       uint32_t thread_group_z, uint32_t mode) {
+	RecordDispatch();
 	m_sh_ctx.SetCsWaveSize(Pm4::ComputeWaveSize(mode));
 	m_renderer.GetRenderExecutor().DispatchDirect(CurrentBuffer(), thread_group_x, thread_group_y,
 	                                              thread_group_z, mode, IsAsyncComputeQueue());
@@ -855,6 +889,7 @@ void CommandProcessor::ProcessPssr(const Pssr::Request& request) {
 }
 
 void CommandProcessor::DispatchIndirect(uint64_t args_addr, uint32_t mode) {
+	RecordDispatch();
 	EXIT_NOT_IMPLEMENTED(args_addr == 0 || (args_addr & 3u) != 0);
 	if ((mode & Pm4::COMPUTE_DISPATCH_INITIATOR_USE_THREAD_DIMENSIONS) != 0) {
 		const auto* args = reinterpret_cast<const vk::DispatchIndirectCommand*>(args_addr);
@@ -867,6 +902,7 @@ void CommandProcessor::DispatchIndirect(uint64_t args_addr, uint32_t mode) {
 }
 
 void CommandProcessor::DrawIndexAuto(DrawAutoArgs args) {
+	RecordDrawCall();
 	if (args.instance_count == 0) {
 		args.instance_count = NumInstances();
 	}
@@ -946,6 +982,10 @@ void CommandProcessor::ReleaseMem(uint32_t data_sel, uint32_t interrupt_selector
 		    [&renderer = m_renderer, event_id = m_interrupt_event_id, interrupt_context_id] {
 			    renderer.TriggerInterrupt(event_id, interrupt_context_id);
 		    });
+	}
+
+	if (data_sel != 0 || interrupt) {
+		m_needs_flush = true;
 	}
 }
 

@@ -359,15 +359,6 @@ void BufferCache::InvalidateMemory(uint64_t vaddr, uint64_t size) {
 				}
 			}
 
-			static std::atomic<uint32_t> s_fault_log_count = 0;
-			if (s_fault_log_count.fetch_add(1, std::memory_order_relaxed) < 20) {
-				std::printf("[Fault] vaddr=0x%016llx buf_size=%llu inv_size=%llu owner=%d\n",
-				    static_cast<unsigned long long>(vaddr),
-				    static_cast<unsigned long long>(has_owner && buffer != nullptr ? buffer->Size() : 0ULL),
-				    static_cast<unsigned long long>(inv_size),
-				    has_owner ? 1 : 0);
-			}
-
 			if (inv_size > 1) {
 				if (has_owner) {
 					Common::DebugCounters::Add(Common::DebugCounters::Counter::BufferFaultsClusteredOwner);
