@@ -301,37 +301,40 @@ BufferCache::~BufferCache() {
 void BufferCache::InvalidateMemory(uint64_t vaddr, uint64_t size) {
 	uint64_t inv_vaddr = vaddr;
 	uint64_t inv_size  = size;
+	bool has_owner = false;
+	const Buffer* buffer = nullptr;
+
+	const auto page = vaddr >> PageTable::kPageBits;
+	if (page < PageTable::kPageCount) {
+		const auto* owner = m_page_table.Find(page);
+		if (owner != nullptr && *owner && *owner != NULL_BUFFER_ID) {
+			buffer = m_slot_buffers.try_get(*owner);
+			if (buffer != nullptr && !buffer->is_deleted) {
+				const auto buf_start = buffer->CpuAddress();
+				const auto buf_end   = buf_start + buffer->Size();
+				if (vaddr >= buf_start && vaddr < buf_end) {
+					has_owner = true;
+				}
+			}
+		}
+	}
 
 	if (size == 1) {
-		const auto page = vaddr >> PageTable::kPageBits;
 		if (page < PageTable::kPageCount) {
 			const auto page_start = Common::AlignDown(vaddr, TRACKER_PAGE_SIZE);
 			constexpr uint64_t MaxCluster = 512 * 1024;
-			bool has_owner = false;
 			uint64_t cluster_start = Common::AlignDown(vaddr, MaxCluster);
 			uint64_t cluster_end   = cluster_start + MaxCluster;
 
-			const Buffer* buffer = nullptr;
-			const auto* owner = m_page_table.Find(page);
-			if (owner != nullptr && *owner && *owner != NULL_BUFFER_ID) {
-				buffer = m_slot_buffers.try_get(*owner);
-				if (buffer != nullptr && !buffer->is_deleted) {
-					const auto buf_start = buffer->CpuAddress();
-					const auto buf_end   = buf_start + buffer->Size();
-					if (vaddr >= buf_start && vaddr < buf_end) {
-						has_owner = true;
-						if (buffer->Size() <= MaxCluster) {
-							cluster_start = buf_start;
-							cluster_end   = buf_end;
-						} else {
-							cluster_start = std::max(buf_start, Common::AlignDown(vaddr, MaxCluster));
-							cluster_end   = std::min(buf_end, cluster_start + MaxCluster);
-						}
-					}
+			if (has_owner && buffer != nullptr) {
+				if (buffer->Size() <= MaxCluster) {
+					cluster_start = buffer->CpuAddress();
+					cluster_end   = buffer->CpuAddress() + buffer->Size();
+				} else {
+					cluster_start = std::max(buffer->CpuAddress(), Common::AlignDown(vaddr, MaxCluster));
+					cluster_end   = std::min(buffer->CpuAddress() + buffer->Size(), cluster_start + MaxCluster);
 				}
-			}
-
-			if (!has_owner) {
+			} else {
 				const auto region_start = Common::AlignDown(vaddr, TRACKER_REGION_SIZE);
 				const auto region_end   = Common::AlignUp(vaddr + 1, TRACKER_REGION_SIZE);
 				cluster_start = std::max(cluster_start, region_start);
@@ -377,7 +380,14 @@ void BufferCache::InvalidateMemory(uint64_t vaddr, uint64_t size) {
 
 	m_memory_tracker.InvalidateRegion(inv_vaddr, inv_size,
 	                                  [this, inv_vaddr, inv_size] { ReadMemory(inv_vaddr, inv_size, true); });
-	QueueBdaSync(vaddr, size);
+
+	constexpr uint64_t MaxStreamBufferSize = 64 * 1024;
+	const bool can_stream_owner =
+	    has_owner && buffer != nullptr && buffer->Size() <= MaxStreamBufferSize &&
+	    !m_texture_cache.FindImageFromRange(buffer->CpuAddress(), buffer->Size());
+	if (!can_stream_owner) {
+		QueueBdaSync(vaddr, size);
+	}
 }
 
 void BufferCache::ReadMemory(uint64_t vaddr, uint64_t size, bool is_write) {
