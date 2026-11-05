@@ -49,12 +49,36 @@ void OcclusionQueries::Dump(uint64_t address) {
 	} else if (m_open != 0) {
 		m_open--;
 	}
+	if (m_begun - m_read >= QUERY_COUNT - 512) {
+		Publish(true);
+	}
 	m_dumps.push_back({address, m_scheduler.CurrentTick(), m_begun, m_uncounted});
 }
 
-void OcclusionQueries::PublishDumps() {
-	if (const auto last = m_dumps.back().queries; last != m_read) {
+void OcclusionQueries::PublishDumps(bool wait) {
+	if (m_dumps.empty()) {
+		return;
+	}
+
+	size_t ready_count = 0;
+	if (wait) {
 		m_scheduler.Wait(m_dumps.back().tick);
+		ready_count = m_dumps.size();
+	} else {
+		for (size_t i = 0; i < m_dumps.size(); ++i) {
+			if (m_scheduler.IsFree(m_dumps[i].tick)) {
+				ready_count = i + 1;
+			} else {
+				break;
+			}
+		}
+		if (ready_count == 0) {
+			return;
+		}
+	}
+
+	const auto last = m_dumps[ready_count - 1].queries;
+	if (last != m_read) {
 		// The unread queries wrap around the pool at most once.
 		for (uint64_t read = m_read; read < last;) {
 			const auto first = static_cast<uint32_t>(read % QUERY_COUNT);
@@ -69,14 +93,19 @@ void OcclusionQueries::PublishDumps() {
 			read += count;
 		}
 	}
-	for (const auto& dump: m_dumps) {
+	for (size_t i = 0; i < ready_count; ++i) {
+		const auto& dump = m_dumps[i];
 		for (; m_read < dump.queries; m_read++) {
 			m_samples += m_results[m_read % QUERY_COUNT];
 		}
 		WriteZPassCounters(reinterpret_cast<volatile uint64_t*>(dump.address),
 		                   m_samples + dump.uncounted, (dump.address & 8u) == 0);
 	}
-	m_dumps.clear();
+	if (ready_count == m_dumps.size()) {
+		m_dumps.clear();
+	} else {
+		m_dumps.erase(m_dumps.begin(), m_dumps.begin() + ready_count);
+	}
 }
 
 } // namespace Libs::Graphics

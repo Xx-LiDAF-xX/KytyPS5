@@ -209,13 +209,14 @@ void CommandProcessor::BufferInit() {
 void CommandProcessor::BufferFlush() {
 	m_renderer.GetTextureCache().ProcessDownloadImages();
 	GetScheduler().Flush();
-	// The occlusion counters reach a guest that polls them without waiting for a later fence.
-	m_renderer.GetOcclusionQueries().Publish();
+	// Harvest completed occlusion dumps without stalling intermediate flushes.
+	m_renderer.GetOcclusionQueries().Publish(false);
 }
 
 void CommandProcessor::BufferWait() {
 	BufferInit();
 	GetScheduler().Finish();
+	m_renderer.GetOcclusionQueries().Publish(true);
 }
 
 void CommandProcessor::WaitForRewind(bool valid) {
@@ -507,6 +508,7 @@ bool GuestGpu::Process(Submission& submission) {
 			m_renderer.RunGarbageCollector();
 			m_renderer.GetCommandScheduler().DeferPriorityOperation(
 			    [ready = m_suspend_point_ready] { ready->release(); });
+			m_renderer.GetOcclusionQueries().Publish(true);
 			cp.BufferFlush();
 			cp.Reset();
 			break;
@@ -673,7 +675,7 @@ void CommandProcessor::SetPredication(uint32_t condition, uint32_t op, uint32_t 
 			return;
 		case 0x01: {
 			EXIT_NOT_IMPLEMENTED(address == nullptr);
-			m_renderer.GetOcclusionQueries().Publish();
+			m_renderer.GetOcclusionQueries().Publish(true);
 			// One begin/end pair per DB; bit 63 marks each counter ready.
 			constexpr uint64_t ready_bit = 1ull << 63u;
 			const auto* results = reinterpret_cast<const volatile uint64_t*>(address);
@@ -904,7 +906,7 @@ void CommandProcessor::ReleaseMem(uint32_t data_sel, uint32_t interrupt_selector
 	}
 
 	// Dumped occlusion counters are written before any end-of-pipe signal reaches the guest.
-	m_renderer.GetOcclusionQueries().Publish();
+	m_renderer.GetOcclusionQueries().Publish(true);
 
 	// A label beside GPU-written bytes goes to the backing store, so they are not downloaded.
 	// Other labels go through the guest mapping: its fault keeps a clean cached copy current and
@@ -1029,7 +1031,7 @@ void CommandProcessor::Flip(int handle, int index, int flip_mode, int64_t flip_a
 	if (graphics_debug_dump_enabled()) {
 		LOGF("CommandProcessor::Flip()\n");
 	}
-	m_renderer.GetOcclusionQueries().Publish();
+	m_renderer.GetOcclusionQueries().Publish(true);
 
 	auto& command = CurrentBuffer();
 	auto  request = Sync::PrepareVideoOutFlip(command, handle, index, flip_mode, flip_arg);

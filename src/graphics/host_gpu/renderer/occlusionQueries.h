@@ -49,10 +49,11 @@ public:
 
 	// A PIXEL_PIPE_STAT_DUMP to address, after the draws recorded so far.
 	void Dump(uint64_t address);
-	// Waits for the GPU to run the dumps and writes their counters.
-	void Publish() {
+	// Harvests completed dumps and writes their counters.
+	// When wait is true, blocks until all pending dumps finish on the GPU.
+	void Publish(bool wait = true) {
 		if (!m_dumps.empty()) {
-			PublishDumps();
+			PublishDumps(wait);
 		}
 	}
 
@@ -65,7 +66,7 @@ private:
 	};
 
 	int32_t BeginQuery(vk::CommandBuffer command);
-	void    PublishDumps();
+	void    PublishDumps(bool wait);
 
 	CommandScheduler&        m_scheduler;
 	vk::Device               m_device;
