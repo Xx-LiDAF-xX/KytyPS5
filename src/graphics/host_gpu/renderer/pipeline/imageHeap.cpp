@@ -2,6 +2,7 @@
 
 #include "common/alignment.h"
 #include "common/assert.h"
+#include "common/debugCounters.h"
 #include "common/profiler.h"
 #include "graphics/host_gpu/pageManager.h"
 #include "graphics/host_gpu/regionDefinitions.h"
@@ -275,6 +276,7 @@ void ImageHeap::InvalidateMemory(uint64_t address, uint64_t size) {
 		const auto end    = std::min(address + size,
 		                             origin + memory->dirty_pages.size() * TRACKER_PAGE_SIZE);
 		if (begin >= end) continue;
+		Common::DebugCounters::Add(Common::DebugCounters::Counter::ImageHeapFaults);
 		MarkDirty(*memory, (begin - origin) / TRACKER_PAGE_SIZE,
 		          (end - 1u - origin) / TRACKER_PAGE_SIZE + 1u);
 	}

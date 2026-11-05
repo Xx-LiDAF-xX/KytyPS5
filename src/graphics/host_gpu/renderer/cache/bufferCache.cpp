@@ -305,6 +305,11 @@ void BufferCache::InvalidateMemory(uint64_t vaddr, uint64_t size) {
 	if (size == 1) {
 		const auto page = vaddr >> PageTable::kPageBits;
 		if (page < PageTable::kPageCount) {
+			const auto page_start = Common::AlignDown(vaddr, TRACKER_PAGE_SIZE);
+			constexpr uint64_t MaxCluster = 64 * 1024;
+			uint64_t cluster_limit = Common::AlignUp(page_start + 1, TRACKER_REGION_SIZE);
+			bool has_owner = false;
+
 			const auto* owner = m_page_table.Find(page);
 			if (owner != nullptr && *owner && *owner != NULL_BUFFER_ID) {
 				const auto* buffer = m_slot_buffers.try_get(*owner);
@@ -312,16 +317,21 @@ void BufferCache::InvalidateMemory(uint64_t vaddr, uint64_t size) {
 					const auto buf_start = buffer->CpuAddress();
 					const auto buf_end   = buf_start + buffer->Size();
 					if (vaddr >= buf_start && vaddr < buf_end) {
-						const auto page_start = Common::AlignDown(vaddr, TRACKER_PAGE_SIZE);
-						constexpr uint64_t MaxCluster = 512 * 1024;
-						const auto cluster_end = std::min({buf_end, page_start + MaxCluster,
-						                                  Common::AlignUp(page_start + 1, TRACKER_REGION_SIZE)});
-						if (cluster_end > page_start &&
-						    !m_memory_tracker.IsRegionGpuModified(page_start, cluster_end - page_start)) {
-							inv_vaddr = page_start;
-							inv_size  = cluster_end - page_start;
-						}
+						cluster_limit = std::min(cluster_limit, buf_end);
+						has_owner = true;
 					}
+				}
+			}
+
+			const auto cluster_end = std::min(page_start + MaxCluster, cluster_limit);
+			if (cluster_end > page_start &&
+			    !m_memory_tracker.IsRegionGpuModified(page_start, cluster_end - page_start)) {
+				inv_vaddr = page_start;
+				inv_size  = cluster_end - page_start;
+				if (has_owner) {
+					Common::DebugCounters::Add(Common::DebugCounters::Counter::BufferFaultsClusteredOwner);
+				} else {
+					Common::DebugCounters::Add(Common::DebugCounters::Counter::BufferFaultsClusteredNoOwner);
 				}
 			}
 		}
@@ -329,7 +339,7 @@ void BufferCache::InvalidateMemory(uint64_t vaddr, uint64_t size) {
 
 	m_memory_tracker.InvalidateRegion(inv_vaddr, inv_size,
 	                                  [this, inv_vaddr, inv_size] { ReadMemory(inv_vaddr, inv_size, true); });
-	QueueBdaSync(inv_vaddr, inv_size);
+	QueueBdaSync(vaddr, size);
 }
 
 void BufferCache::ReadMemory(uint64_t vaddr, uint64_t size, bool is_write) {
@@ -545,8 +555,7 @@ std::pair<Buffer*, uint64_t> BufferCache::ObtainBuffer(uint64_t vaddr, uint64_t 
                                                        BufferId id) {
 	EXIT_IF(!(GuestRange {vaddr, size}.Valid()));
 
-	constexpr uint64_t MaxStreamBufferSize = 512 * 1024;
-	const bool can_stream = !is_written && !is_texel_buffer && size <= MaxStreamBufferSize &&
+	const bool can_stream = !is_written && !is_texel_buffer && size <= CACHING_PAGESIZE &&
 	                        !m_memory_tracker.IsRegionGpuModified(vaddr, size) &&
 	                        m_memory_tracker.IsRegionCpuModified(vaddr, size);
 	if (can_stream) {

@@ -1864,6 +1864,7 @@ void TextureCache::InvalidateMemory(uint64_t address, uint64_t size) {
 	const auto       page_begin = Common::AlignDown(address, TRACKER_PAGE_SIZE);
 	const auto       page_end   = Common::AlignUp(address + size, TRACKER_PAGE_SIZE);
 	for (const auto id: FindImagesInRegion(page_begin, page_end - page_begin)) {
+		Common::DebugCounters::Add(Common::DebugCounters::Counter::TextureCacheFaults);
 		auto& owner = m_slot_images[id];
 		if (owner.Overlaps(address, size)) {
 			owner.MarkCpuDirty();

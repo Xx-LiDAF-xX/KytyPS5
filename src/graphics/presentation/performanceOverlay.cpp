@@ -638,6 +638,14 @@ void DrawGpu(const Snapshot& shown, const GraphicContext& graphics) {
 		Row("Queue submits", Fmt("%.0f/s", Rate(shown, Counter::QueueSubmits)));
 		const auto faults = Rate(shown, Counter::GpuFaults);
 		Row("Write-tracking faults", Fmt("%.0f/s", faults), LevelColor(faults, 20000, 100000));
+		const auto buf_own = Rate(shown, Counter::BufferFaultsClusteredOwner);
+		const auto buf_no_own = Rate(shown, Counter::BufferFaultsClusteredNoOwner);
+		const auto img_heap = Rate(shown, Counter::ImageHeapFaults);
+		const auto tex_cache = Rate(shown, Counter::TextureCacheFaults);
+		if (faults > 0) {
+			Row("  Buf cluster (own/no)", Fmt("%.0f / %.0f/s", buf_own, buf_no_own));
+			Row("  ImgHeap / TexCache", Fmt("%.0f / %.0f/s", img_heap, tex_cache));
+		}
 		CompilationRows(shown);
 		ImGui::EndTable();
 	}
