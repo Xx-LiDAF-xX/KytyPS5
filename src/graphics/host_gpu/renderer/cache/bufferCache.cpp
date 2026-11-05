@@ -311,9 +311,10 @@ void BufferCache::InvalidateMemory(uint64_t vaddr, uint64_t size) {
 			uint64_t cluster_start = Common::AlignDown(vaddr, MaxCluster);
 			uint64_t cluster_end   = cluster_start + MaxCluster;
 
+			const Buffer* buffer = nullptr;
 			const auto* owner = m_page_table.Find(page);
 			if (owner != nullptr && *owner && *owner != NULL_BUFFER_ID) {
-				const auto* buffer = m_slot_buffers.try_get(*owner);
+				buffer = m_slot_buffers.try_get(*owner);
 				if (buffer != nullptr && !buffer->is_deleted) {
 					const auto buf_start = buffer->CpuAddress();
 					const auto buf_end   = buf_start + buffer->Size();
@@ -353,6 +354,15 @@ void BufferCache::InvalidateMemory(uint64_t vaddr, uint64_t size) {
 					inv_vaddr = safe_start;
 					inv_size  = safe_end - safe_start;
 				}
+			}
+
+			static std::atomic<uint32_t> s_fault_log_count = 0;
+			if (s_fault_log_count.fetch_add(1, std::memory_order_relaxed) < 20) {
+				std::printf("[Fault] vaddr=0x%016llx buf_size=%llu inv_size=%llu owner=%d\n",
+				    static_cast<unsigned long long>(vaddr),
+				    static_cast<unsigned long long>(has_owner && buffer != nullptr ? buffer->Size() : 0ULL),
+				    static_cast<unsigned long long>(inv_size),
+				    has_owner ? 1 : 0);
 			}
 
 			if (inv_size > 1) {
@@ -583,7 +593,10 @@ std::pair<Buffer*, uint64_t> BufferCache::ObtainBuffer(uint64_t vaddr, uint64_t 
                                                        BufferId id) {
 	EXIT_IF(!(GuestRange {vaddr, size}.Valid()));
 
-	const bool can_stream = !is_written && !is_texel_buffer && size <= CACHING_PAGESIZE &&
+	constexpr uint64_t MaxStreamBufferSize = 64 * 1024;
+	const bool can_stream = !is_written &&
+	                        (!is_texel_buffer || !m_texture_cache.FindImageFromRange(vaddr, size)) &&
+	                        size <= MaxStreamBufferSize &&
 	                        !m_memory_tracker.IsRegionGpuModified(vaddr, size) &&
 	                        m_memory_tracker.IsRegionCpuModified(vaddr, size);
 	if (can_stream) {
