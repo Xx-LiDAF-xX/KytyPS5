@@ -313,7 +313,7 @@ void BufferCache::InvalidateMemory(uint64_t vaddr, uint64_t size) {
 					const auto buf_end   = buf_start + buffer->Size();
 					if (vaddr >= buf_start && vaddr < buf_end) {
 						const auto page_start = Common::AlignDown(vaddr, TRACKER_PAGE_SIZE);
-						constexpr uint64_t MaxCluster = 32 * 1024;
+						constexpr uint64_t MaxCluster = 512 * 1024;
 						const auto cluster_end = std::min({buf_end, page_start + MaxCluster,
 						                                  Common::AlignUp(page_start + 1, TRACKER_REGION_SIZE)});
 						if (cluster_end > page_start &&
@@ -546,8 +546,7 @@ std::pair<Buffer*, uint64_t> BufferCache::ObtainBuffer(uint64_t vaddr, uint64_t 
 	EXIT_IF(!(GuestRange {vaddr, size}.Valid()));
 
 	constexpr uint64_t MaxStreamBufferSize = 512 * 1024;
-	const bool can_stream = !is_written && size <= MaxStreamBufferSize &&
-	                        (!is_texel_buffer || !m_texture_cache.FindImageFromRange(vaddr, size)) &&
+	const bool can_stream = !is_written && !is_texel_buffer && size <= MaxStreamBufferSize &&
 	                        !m_memory_tracker.IsRegionGpuModified(vaddr, size) &&
 	                        m_memory_tracker.IsRegionCpuModified(vaddr, size);
 	if (can_stream) {
