@@ -299,9 +299,37 @@ BufferCache::~BufferCache() {
 }
 
 void BufferCache::InvalidateMemory(uint64_t vaddr, uint64_t size) {
-	m_memory_tracker.InvalidateRegion(vaddr, size,
-	                                  [this, vaddr, size] { ReadMemory(vaddr, size, true); });
-	QueueBdaSync(vaddr, size);
+	uint64_t inv_vaddr = vaddr;
+	uint64_t inv_size  = size;
+
+	if (size == 1) {
+		const auto page = vaddr >> PageTable::kPageBits;
+		if (page < PageTable::kPageCount) {
+			const auto* owner = m_page_table.Find(page);
+			if (owner != nullptr && *owner && *owner != NULL_BUFFER_ID) {
+				const auto* buffer = m_slot_buffers.try_get(*owner);
+				if (buffer != nullptr && !buffer->is_deleted) {
+					const auto buf_start = buffer->CpuAddress();
+					const auto buf_end   = buf_start + buffer->Size();
+					if (vaddr >= buf_start && vaddr < buf_end) {
+						const auto page_start = Common::AlignDown(vaddr, TRACKER_PAGE_SIZE);
+						constexpr uint64_t MaxCluster = 64 * 1024;
+						const auto cluster_end = std::min({buf_end, page_start + MaxCluster,
+						                                  Common::AlignUp(page_start + 1, TRACKER_REGION_SIZE)});
+						if (cluster_end > page_start &&
+						    !m_memory_tracker.IsRegionGpuModified(page_start, cluster_end - page_start)) {
+							inv_vaddr = page_start;
+							inv_size  = cluster_end - page_start;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	m_memory_tracker.InvalidateRegion(inv_vaddr, inv_size,
+	                                  [this, inv_vaddr, inv_size] { ReadMemory(inv_vaddr, inv_size, true); });
+	QueueBdaSync(inv_vaddr, inv_size);
 }
 
 void BufferCache::ReadMemory(uint64_t vaddr, uint64_t size, bool is_write) {
