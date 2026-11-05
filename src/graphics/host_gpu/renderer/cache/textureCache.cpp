@@ -35,8 +35,8 @@ namespace {
 
 constexpr uint64_t NumFramesBeforeRemoval = 32;
 constexpr int64_t  GiB                    = 1024ll * 1024 * 1024;
-// Largest GPU-written tiled image (in texels) that is written back to guest memory on submit.
-constexpr uint64_t SmallTiledReadbackTexels = 64 * 64;
+// Largest GPU-written tiled image (in texels) that is always written back to guest memory on submit.
+constexpr uint64_t SmallTiledReadbackTexels = 512 * 512;
 // Largest GPU-written linear image (in texels) that is always written back. Linear surfaces hold
 // GPU results the guest polls directly: PPSA01411 spins on the tail word of its 384x216
 // reprojection target and never observes the copy otherwise. Full-size frame buffers are far
@@ -401,7 +401,8 @@ void TextureCache::TrackImageDownload(ImageId id, Image& image) {
 	const auto  texels = static_cast<uint64_t>(info.extent.width) * info.extent.height *
 	                     info.extent.depth * info.resources.layers;
 	const bool small_linear = !info.IsTiled() && texels <= SmallLinearReadbackTexels;
-	const bool enroll = info.IsTiled() ? m_readback_tiled_images && texels <= SmallTiledReadbackTexels
+	const bool small_tiled  = info.IsTiled() && texels <= SmallTiledReadbackTexels;
+	const bool enroll = info.IsTiled() ? (m_readback_tiled_images || small_tiled)
 	                                   : (m_readback_linear_images || small_linear);
 	if (enroll) {
 		if (!image.IsGpuModified()) {

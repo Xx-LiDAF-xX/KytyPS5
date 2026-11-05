@@ -972,9 +972,13 @@ public:
 				return true;
 			}
 			auto now = CurrentTimeNoLock();
-			return now == 0 || candidate.info.time_stamp + candidate.timestamp_offset <= now;
+			return now == 0 || candidate.info.time_stamp + candidate.timestamp_offset <= now + 8;
 		});
 		if (!frame) {
+			if (DrainedNoLock() && state == State::Playing) {
+				state = State::Stopped;
+				emit_event(event, AVPLAYER_EVENT_STATE_STOP);
+			}
 			return false;
 		}
 		if (current_video) {
@@ -999,6 +1003,10 @@ public:
 		}
 		auto frame = audio_frames.TryPop();
 		if (!frame) {
+			if (DrainedNoLock() && state == State::Playing) {
+				state = State::Stopped;
+				emit_event(event, AVPLAYER_EVENT_STATE_STOP);
+			}
 			return false;
 		}
 		if (current_audio) {
@@ -1556,14 +1564,37 @@ private:
 		auto* dst = buffer->Get();
 		auto* c   = dst + pitch * h;
 		// PPSA02433 samples the padded columns; zero chroma would turn them green.
-		std::memset(dst, s->codecpar->color_range == AVCOL_RANGE_JPEG ? 0 : 16,
-		            static_cast<size_t>(pitch) * h);
-		std::memset(c, 128, static_cast<size_t>(pitch) * h / 2);
-		for (int y = 0; y < src->height; y++) {
-			std::memcpy(dst + y * pitch, nv12->data[0] + y * nv12->linesize[0], src->width);
+		if (pitch > static_cast<uint32_t>(src->width)) {
+			const auto pad_luma = s->codecpar->color_range == AVCOL_RANGE_JPEG ? 0 : 16;
+			for (int y = 0; y < src->height; y++) {
+				std::memset(dst + y * pitch + src->width, pad_luma, pitch - src->width);
+			}
+			for (int y = 0; y < src->height / 2; y++) {
+				std::memset(c + y * pitch + src->width, 128, pitch - src->width);
+			}
 		}
-		for (int y = 0; y < src->height / 2; y++) {
-			std::memcpy(c + y * pitch, nv12->data[1] + y * nv12->linesize[1], src->width);
+		if (h > static_cast<uint32_t>(src->height)) {
+			std::memset(dst + static_cast<size_t>(src->height) * pitch,
+			            s->codecpar->color_range == AVCOL_RANGE_JPEG ? 0 : 16,
+			            static_cast<size_t>(pitch) * (h - src->height));
+			std::memset(c + static_cast<size_t>(src->height / 2) * pitch, 128,
+			            static_cast<size_t>(pitch) * (h - src->height) / 2);
+		}
+		if (pitch == static_cast<uint32_t>(nv12->linesize[0]) &&
+		    pitch == static_cast<uint32_t>(src->width)) {
+			std::memcpy(dst, nv12->data[0], static_cast<size_t>(pitch) * src->height);
+		} else {
+			for (int y = 0; y < src->height; y++) {
+				std::memcpy(dst + y * pitch, nv12->data[0] + y * nv12->linesize[0], src->width);
+			}
+		}
+		if (pitch == static_cast<uint32_t>(nv12->linesize[1]) &&
+		    pitch == static_cast<uint32_t>(src->width)) {
+			std::memcpy(c, nv12->data[1], static_cast<size_t>(pitch) * (src->height / 2));
+		} else {
+			for (int y = 0; y < src->height / 2; y++) {
+				std::memcpy(c + y * pitch, nv12->data[1] + y * nv12->linesize[1], src->width);
+			}
 		}
 		std::memset(info, 0, sizeof(*info));
 		info->data       = dst;
@@ -1702,7 +1733,7 @@ struct AvPlayerInternal {
 	AvPlayerEventReplacement event;
 	AvPlayerPostInitData     post_init {};
 	bool                     auto_start        = false;
-	int32_t                  video_buffers     = 2;
+	int32_t                  video_buffers     = 4;
 	uint32_t                 sync_mode         = 0;
 	uint32_t                 start_bandwidth   = 0;
 	uint32_t                 minimum_bandwidth = 0;
@@ -1734,7 +1765,7 @@ static AvPlayerInternal* create_player(const AvPlayerMemAllocator&     mem,
 	h->file          = file;
 	h->event         = event;
 	h->auto_start    = auto_start || event.event_callback == nullptr;
-	h->video_buffers = std::clamp(video_buffers <= 0 ? 2 : video_buffers, 2, 16);
+	h->video_buffers = std::clamp(video_buffers <= 0 ? 4 : video_buffers, 3, 16);
 	h->post_init.demux_video_buffer_size = 4 * 1024 * 1024;
 	return h;
 }
@@ -2041,7 +2072,7 @@ Bool KYTY_SYSV_ABI AvPlayerGetAudioData(AvPlayerInternal* h, AvPlayerFrameInfo* 
 }
 Bool KYTY_SYSV_ABI AvPlayerIsActive(AvPlayerInternal* h) {
 	PRINT_NAME();
-	return h != nullptr && (h->source == nullptr || h->source->Active());
+	return h != nullptr && h->source != nullptr && h->source->Active() ? 1 : 0;
 }
 uint64_t KYTY_SYSV_ABI AvPlayerCurrentTime(AvPlayerInternal* h) {
 	PRINT_NAME();
