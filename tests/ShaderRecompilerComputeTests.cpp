@@ -3644,6 +3644,17 @@ public:
                 second_wait == 0 && second_count == 1 && second_event.data == 0xa2u,
             "a GDS release interrupt overtook an earlier interrupt");
 
+    // Repeats of the newest undelivered data count in its event instead of queuing.
+    for (const uint32_t data : {1u, 1u, 2u, 3u, 3u}) {
+      context.TriggerInterrupt(0, data);
+    }
+    const bool coalesced =
+        wait_for_interrupt(interrupt_event, interrupt_count) == 0 && interrupt_event.fflags == 2 &&
+        wait_for_interrupt(interrupt_event, interrupt_count) == 0 && interrupt_event.data == 2 &&
+        wait_for_interrupt(interrupt_event, interrupt_count) == 0 && interrupt_event.data == 3;
+    Require("GpuCommandLane", "interrupt coalescing", coalesced,
+            "undelivered interrupts with the same data were not counted in one event");
+
     interrupt_count = 0;
     const auto extra_interrupt_wait =
         wait_for_interrupt(interrupt_event, interrupt_count);
@@ -20454,6 +20465,48 @@ public:
               draws_with_back_cull(false) != draws_with_back_cull(true),
               "the draw's cull mode or front face did not reach the host GPU");
       registers.SetModeControl({});
+
+      // DRAW_INDEX_MULTI_INST draws the packet's instance count, not NUM_INSTANCES; only
+      // instance 1 covers the target, and zero instances draw nothing.
+      {
+        static const auto second_instance_vertex = [] {
+          auto code = native_vertex;
+          code.insert(std::ranges::find(code, EncodeExp0(0x0c, 0xf)),
+                      {EncodeVopc(0xc2, InlineU32(1), 8), EncodeVop2(0x01, 3, Vgpr(1), 3),
+                       EncodeVop2(0x01, 4, Vgpr(1), 4)});
+          return code;
+        }();
+        const auto second_instance_vs = reinterpret_cast<uint64_t>(second_instance_vertex.data());
+        ShaderMapUserData(second_instance_vs,
+            {.type = Prospero::ShaderBinaryType::kGs, .user_data = &native_user_data,
+             .code_size_bytes =
+                 static_cast<uint32_t>(second_instance_vertex.size() * sizeof(u32))});
+        shaders.SetEsShaderBase(second_instance_vs);
+        CommandProcessor processor(context, 0);
+        processor.SetIndexType(1);
+        // Zeroed guest memory: read as indices, the table draws no triangle.
+        constexpr uint64_t object_ids_address = index_address + 0x100;
+        for (const auto [instances, num_instances] : {std::pair{2u, 1u}, std::pair{0u, 2u}}) {
+          processor.SetNumInstances(num_instances);
+          TextureCacheTestAccess::ClearImage(cache, scheduler.Current(), sparse_color.image_id,
+              {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}, {});
+          const std::array<uint32_t, 9> packet{
+              KYTY_PM4(9, Pm4::IT_DRAW_INDEX_MULTI_INST, 0), instances,
+              static_cast<uint32_t>(object_ids_address),
+              static_cast<uint32_t>(object_ids_address >> 32u), 3,
+              static_cast<uint32_t>(index_address), static_cast<uint32_t>(index_address >> 32u),
+              3, 0x80};
+          Pm4Execution execution;
+          const bool complete =
+              processor.Process(execution, packet) == Pm4ProcessResult::Complete;
+          const auto pixels = ReadCachedTexel(name, context, sparse_color.image_id,
+                                              {}, {extent, extent, 1});
+          const bool drawn = std::ranges::any_of(pixels, [](u32 word) { return word != 0; });
+          Require("DrawIndexMultiInst", instances != 0 ? "instances" : "no instances",
+                  complete && drawn == (instances != 0),
+                  "the packet's instance count, index buffer or index count was misread");
+        }
+      }
 
       // Indirect records come from the GPU copy; the CPU backing holds zeros. Embedded
       // fetches use vertex offset 7. Native shaders receive raw vertex/instance IDs when
@@ -47476,7 +47529,7 @@ TestCase MultipleWorkitemsGlobalId() {
   return test;
 }
 
-TestCase DispatcherIrreducibleControlFlow() {
+TestCase IrreducibleControlFlow() {
   using O = ShaderOpcode;
 
   std::vector<u32> code;
@@ -47488,12 +47541,95 @@ TestCase DispatcherIrreducibleControlFlow() {
   AppendEnd(&code);
 
   TestCase test;
-  test.name = "DispatcherIrreducibleControlFlow";
+  test.name = "IrreducibleControlFlow";
   test.code = code;
   test.expected = {7};
   test.opcodes = {O::S_CBRANCH_SCC1, O::V_MOV_B32, O::BUFFER_STORE_DWORD,
                   O::S_CBRANCH_SCC0, O::S_BRANCH,  O::S_ENDPGM};
   return test;
+}
+
+// Cycles with several entries; dword 0 selects the entry, s20 accumulates and
+// lands in dword 1.
+TestCase IrreducibleCycleCase(const char *name, const std::vector<u32> &cycle,
+                              u32 entry, u32 result) {
+  using O = ShaderOpcode;
+
+  TestCase test;
+  test.name = name;
+  AppendVMovU32(&test.code, 30, 0);
+  AppendBufferLoadDword(&test.code, 0, 30);
+  // v_readfirstlane_b32 s21, v0
+  test.code.push_back(EncodeVop1(0x02, 21, Vgpr(0)));
+  test.code.push_back(EncodeSMovB32(20, InlineU32(0)));
+  test.code.insert(test.code.end(), cycle.begin(), cycle.end());
+  AppendStoreSgpr(&test.code, 20, 1);
+  AppendEnd(&test.code);
+  test.initial = {entry, 0};
+  test.expected = {entry, result};
+  test.opcodes = {O::V_MOV_B32,    O::BUFFER_LOAD_DWORD, O::V_READFIRSTLANE_B32,
+                  O::S_MOV_B32,    O::S_ADD_U32,         O::S_AND_B32,
+                  O::S_CMP_EQ_U32, O::S_CMP_LG_U32,      O::S_CMP_GT_U32,
+                  O::S_CMP_LT_U32, O::S_CBRANCH_SCC1,    O::BUFFER_STORE_DWORD,
+                  O::S_ENDPGM};
+  return test;
+}
+
+TestCase IrreducibleTwoEntryLoop(u32 entry) {
+  const std::vector<u32> cycle = {
+      EncodeSopc(0x06, 21, InlineU32(1)),      // s_cmp_eq_u32 s21, 1
+      EncodeSopp(0x05, 1),                     // s_cbranch_scc1 B
+      EncodeSop2(0x00, 20, 20, InlineU32(1)),  // A: s_add_u32 s20, s20, 1
+      EncodeSop2(0x00, 20, 20, InlineU32(16)), // B: s_add_u32 s20, s20, 16
+      EncodeSopc(0x0a, 20, InlineU32(50)),     // s_cmp_lt_u32 s20, 50
+      EncodeSopp(0x05, 0xfffcu),               // s_cbranch_scc1 A
+  };
+  return IrreducibleCycleCase(entry ? "IrreducibleTwoEntryLoop enter B"
+                                    : "IrreducibleTwoEntryLoop enter A",
+                              cycle, entry, entry ? 50u : 51u);
+}
+
+TestCase IrreducibleThreeEntryCycle(u32 entry) {
+  static constexpr const char *names[] = {"IrreducibleThreeEntryCycle enter A",
+                                          "IrreducibleThreeEntryCycle enter B",
+                                          "IrreducibleThreeEntryCycle enter C"};
+  static constexpr u32 results[] = {33, 32, 42};
+  const std::vector<u32> cycle = {
+      EncodeSopc(0x06, 21, InlineU32(1)),     // s_cmp_eq_u32 s21, 1
+      EncodeSopp(0x05, 3),                    // s_cbranch_scc1 B
+      EncodeSopc(0x06, 21, InlineU32(2)),     // s_cmp_eq_u32 s21, 2
+      EncodeSopp(0x05, 4),                    // s_cbranch_scc1 C
+      EncodeSop2(0x00, 20, 20, InlineU32(1)), // A: s_add_u32 s20, s20, 1
+      EncodeSop2(0x00, 20, 20, InlineU32(4)), // B: s_add_u32 s20, s20, 4
+      EncodeSopc(0x08, 20, InlineU32(30)),    // s_cmp_gt_u32 s20, 30
+      EncodeSopp(0x05, 3),                    // s_cbranch_scc1 exit
+      EncodeSop2(0x00, 20, 20, InlineU32(9)), // C: s_add_u32 s20, s20, 9
+      EncodeSopc(0x0a, 20, InlineU32(40)),    // s_cmp_lt_u32 s20, 40
+      EncodeSopp(0x05, 0xfff9u),              // s_cbranch_scc1 A
+  };
+  return IrreducibleCycleCase(names[entry], cycle, entry, results[entry]);
+}
+
+// A counted outer loop enters the inner two-entry cycle at A or B by parity.
+TestCase IrreducibleNestedTwoEntryCycle(u32 parity) {
+  const std::vector<u32> cycle = {
+      EncodeSMovB32(22, InlineU32(0)),        // s_mov_b32 s22, 0
+      EncodeSop2(0x00, 23, 22, 21),           // outer: s_add_u32 s23, s22, s21
+      EncodeSop2(0x0e, 23, 23, InlineU32(1)), // s_and_b32 s23, s23, 1
+      EncodeSopc(0x06, 23, InlineU32(1)),     // s_cmp_eq_u32 s23, 1
+      EncodeSopp(0x05, 1),                    // s_cbranch_scc1 B
+      EncodeSop2(0x00, 20, 20, InlineU32(2)), // A: s_add_u32 s20, s20, 2
+      EncodeSop2(0x00, 20, 20, InlineU32(3)), // B: s_add_u32 s20, s20, 3
+      EncodeSop2(0x0e, 25, 20, InlineU32(3)), // s_and_b32 s25, s20, 3
+      EncodeSopc(0x07, 25, InlineU32(0)),     // s_cmp_lg_u32 s25, 0
+      EncodeSopp(0x05, 0xfffbu),              // s_cbranch_scc1 A
+      EncodeSop2(0x00, 22, 22, InlineU32(1)), // s_add_u32 s22, s22, 1
+      EncodeSopc(0x0a, 22, InlineU32(5)),     // s_cmp_lt_u32 s22, 5
+      EncodeSopp(0x05, 0xfff4u),              // s_cbranch_scc1 outer
+  };
+  return IrreducibleCycleCase(parity ? "IrreducibleNestedTwoEntryCycle odd"
+                                     : "IrreducibleNestedTwoEntryCycle even",
+                              cycle, parity, parity ? 64u : 76u);
 }
 
 #include "ShaderRayTracingGpuTests.inc"
@@ -48139,7 +48275,13 @@ std::vector<TestCase> MakeCases() {
   AddCase(ImageAtomicFloatContendedWorkgroup<false>);
   AddCase(ImageAtomicGlc0DoesNotReturnOldValue);
   AddCase(MultipleWorkitemsGlobalId);
-  AddCase(DispatcherIrreducibleControlFlow);
+  AddCase(IrreducibleControlFlow);
+  for (const u32 entry : {0u, 1u})
+    cases.push_back(IrreducibleTwoEntryLoop(entry));
+  for (const u32 entry : {0u, 1u, 2u})
+    cases.push_back(IrreducibleThreeEntryCycle(entry));
+  for (const u32 parity : {0u, 1u})
+    cases.push_back(IrreducibleNestedTwoEntryCycle(parity));
 
   return cases;
 }
@@ -49097,6 +49239,61 @@ void CheckTessellationPatchConstants() {
 #endif
 }
 
+// With one output control point, each HS lane is one patch: control point outputs grow up
+// from the patch ordinal (v1 low byte) and patch constants grow down from the ring end.
+void CheckTessellationSingleControlPoint() {
+  using namespace ShaderRecompiler;
+  constexpr const char *name = "TessellationSingleControlPoint";
+  constexpr u32 ls_stride = 120, hs_stride = 128, patch_stride = 0x60;
+  std::vector<u32> local, control;
+  local.push_back(EncodeVop2(0x0b, 16, 255u, 3)); // v_mul_u32_u24 v16, ls_stride, v3
+  local.push_back(ls_stride);
+  local.push_back(EncodeDs0(0x0e, 29u << 8u)); // ds_write2_b32 v16, v2, v5 offset1:29
+  local.push_back(EncodeDs1Ex(0, 5, 2, 16));
+  local.push_back(EncodeSop1(0x20, 0, 6));
+
+  // SDWA takes no literal: s_movk_i32 vcc_lo, hs_stride
+  control.push_back(EncodeSopk(0x00, 106, hs_stride));
+  // v_mul_u32_u24_sdwa v33, vcc_lo, v1 src1_sel:BYTE_0
+  control.push_back(EncodeVop2(0x0b, 33, 249u, 1));
+  control.push_back(EncodeVop2Sdwa(106, 6, 0, 6, 0, 0, 0, 0, 0, 0, 0, 1));
+  control.push_back(EncodeMubuf0(0x1d)); // buffer_store_dwordx2 v[10:11], v33, s[8:11], s2 offen
+  control.push_back(EncodeMubuf1(10, 2, 33, 2));
+  control.push_back(EncodeVop2(0x1b, 32, 255u, 1)); // v_and_b32 v32, 0xff, v1
+  control.push_back(0xffu);
+  // v_lshlrev_b32 v34, 7, v32; buffer_store_dword v11, v34, s[8:11], s2 offen offset:116
+  control.push_back(EncodeVop2(0x1a, 34, InlineU32(7), 32));
+  control.push_back(EncodeMubuf0(0x1c, 116));
+  control.push_back(EncodeMubuf1(11, 2, 34, 2));
+  control.push_back(EncodeVop2(0x25, 0, InlineU32(1), 32)); // v_add_nc_u32 v0, 1, v32
+  control.push_back(EncodeVop2(0x0b, 0, 255u, 0));          // v_mul_u32_u24 v0, 0x60, v0
+  control.push_back(patch_stride);
+  control.push_back(EncodeVop2(0x26, 0, 255u, 0)); // v_sub_nc_u32 v0, 0x8000, v0
+  control.push_back(0x8000u);
+  control.push_back(EncodeMubuf0(0x1c)); // buffer_store_dword v2, v0, s[8:11], s2 offen
+  control.push_back(EncodeMubuf1(2, 2, 0, 2));
+  control.push_back(EncodeMubuf0(0x1c, 80));
+  control.push_back(EncodeMubuf1(3, 2, 0, 2));
+  AppendEnd(&control);
+
+  ShaderTessellationInputInfo tess{.input_control_points = 1, .output_control_points = 1};
+  AnalyzeTessellationPrograms(local, control, tess);
+  Require(name, "reflected interface",
+          tess.ls_stride == ls_stride && tess.hs_stride == hs_stride &&
+              tess.patch_base == 0x8000u - patch_stride && tess.patch_size == 84u,
+          "patch-ordinal control point stores and descending patch constants must reflect "
+          "the layout");
+  std::printf("[host]    %-32s ok\n", name);
+#if KYTY_PLATFORM != KYTY_PLATFORM_WINDOWS
+  // v_cmp_lt_f32 vcc, 0, v10 after s_movk_i32 replaces the staged stride.
+  control.insert(control.begin() + 1, EncodeVopc(0x01, InlineU32(0), 10));
+  ExpectFatal("TessellationClobberedScalar", [&] {
+    ShaderTessellationInputInfo info{.input_control_points = 1, .output_control_points = 1};
+    AnalyzeTessellationPrograms(local, control, info);
+  });
+#endif
+}
+
 void CheckTessellationPrograms() {
   CheckTessellationProgram("TessellationShiftedStride", 124, 128);
   CheckTessellationProgram("TessellationMultipliedStride", 108, 112);
@@ -49105,6 +49302,7 @@ void CheckTessellationPrograms() {
   CheckTessellationProgram("TessellationFractionalEvenQuads", 36, 128, 2, 2, 3);
   CheckTessellationProgram("TessellationMaskedControlPoint", 32, 256, 2);
   CheckTessellationPatchConstants();
+  CheckTessellationSingleControlPoint();
 }
 
 void CheckEmbeddedFetchVertexOffset() {
@@ -50162,9 +50360,12 @@ void CheckDepthTextureEncoding() {
   }};
   auto retained_metadata_address = compressed_descriptor;
   retained_metadata_address.fields[6] &= 0xff000000u;
+  auto pipe_aligned_metadata = disabled_metadata;
+  pipe_aligned_metadata.fields[6] = 1u << 19u; // META_PIPE_ALIGNED without COMPRESSION_EN
   Require("DepthTextureEncoding", "disabled metadata with retained address",
           IsSupportedDepthTextureEncoding(disabled_metadata) &&
-              IsSupportedDepthTextureEncoding(retained_metadata_address),
+              IsSupportedDepthTextureEncoding(retained_metadata_address) &&
+              IsSupportedDepthTextureEncoding(pipe_aligned_metadata),
           "uncompressed depth rejected inactive metadata address bits");
 
   const ShaderTextureResource first_use_depth{{
@@ -50186,13 +50387,16 @@ void CheckDepthTextureEncoding() {
   dcc_only_control.fields[6] |= 1u << 22u;
   auto non_msaa_iterate_256 = compressed_descriptor;
   non_msaa_iterate_256.fields[6] |= 1u << 10u;
+  auto uncompressed_dcc_control = pipe_aligned_metadata;
+  uncompressed_dcc_control.fields[6] |= 1u << 22u;
   Require(
       "DepthTextureEncoding", "invalid HTILE encoding",
       !IsSupportedDepthTextureEncoding(missing_metadata) &&
           !IsSupportedDepthTextureEncoding(out_of_range_metadata) &&
           !IsSupportedDepthTextureEncoding(unaligned_metadata) &&
           !IsSupportedDepthTextureEncoding(dcc_only_control) &&
-          !IsSupportedDepthTextureEncoding(non_msaa_iterate_256),
+          !IsSupportedDepthTextureEncoding(non_msaa_iterate_256) &&
+          !IsSupportedDepthTextureEncoding(uncompressed_dcc_control),
       "compressed sampled depth accepted an unsupported address or control");
 
   std::printf("[host]    %-32s ok\n", "DepthTextureEncoding");
@@ -53943,6 +54147,17 @@ void CheckPm4Flip() {
               flipped_arg == flip_arg,
           "R_FLIP did not publish the occlusion counters or flip");
 
+  // Vblanks while the event is undelivered count in that one event.
+  Require(name, "vblank event",
+          VideoOut::VideoOutAddVblankEvent(flips, handle, nullptr) == 0,
+          "vblank event registration failed");
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  timeout = 0;
+  Require(name, "vblank count",
+          EventQueue::KernelWaitEqueue(flips, &event, 1, &count, &timeout) == 0 &&
+              VideoOut::VideoOutGetEventCount(&event) >= 2,
+          "undelivered vblanks were queued as separate events");
+
   gpu.WaitForIdle();
   Require(name, "close", VideoOut::VideoOutClose(handle) == 0,
           "video-out close failed");
@@ -54894,7 +55109,7 @@ int main(int argc, char **argv) {
     RunCase(&vulkan, VectorAddcWritesPerLaneCarryOut());
     RunCase(&vulkan, VectorVop3BCarryOutWritesSgprMask());
     RunCase(&vulkan, VectorVop3BCarryOutUsesEncodedSdst());
-    RunCase(&vulkan, DispatcherIrreducibleControlFlow());
+    RunCase(&vulkan, IrreducibleControlFlow());
     RunCase(&vulkan, ScalarSaveExecOps());
     RunCase(&vulkan, ScalarOrn2SaveexecUsesSourceOrNotExec());
     RunCase(&vulkan, ScalarOrn2SaveexecB32(32, 32));
