@@ -259,6 +259,10 @@ struct TextureCacheTestAccess {
   static_assert(TextureCache::ImagePageTable::kFirstLevelBits == 14);
 
   static uint64_t GcTick(const TextureCache &cache) { return cache.m_gc_tick; }
+  // Suspend points that collect nothing.
+  static void SkipFrames(TextureCache &cache, uint64_t frames) {
+    cache.m_gc_tick += frames;
+  }
 
   static std::unique_lock<TrackingSpinLock> Lock(TextureCache &cache) {
     return std::unique_lock(cache.m_lock);
@@ -282,7 +286,7 @@ struct TextureCacheTestAccess {
     cache.m_lru_cache = {};
     cache.m_slot_images.ForEach([&](ImageId id, Image &image) {
       if (image.registered) {
-        image.tick_accessed_last = cache.m_scheduler.CurrentTick();
+        image.tick_accessed_last = tick;
         live.push_back(id);
       }
     });
@@ -5926,6 +5930,34 @@ public:
                   ImageHeapTestAccess::TailPageDirty(heap),
               "a write fault next to a table left its page watched");
       draw();
+      // The last suspend point released texture 0's image from the smaller
+      // table. Images age in frames, not command buffers: an alias frees it
+      // only after 16 frames.
+      const auto released =
+          TextureCacheTestAccess::FindImages(textures, texture(0), 64u);
+      const auto alias = [&](Prospero::TileMode tile) {
+        auto desc = MakeLinearDesc(
+            texture(0), 64u, vk::Format::eR8G8B8A8Unorm, Format::k8_8_8_8UNorm,
+            Prospero::ImageType::kColor2D, {4, 4, 1}, 1, 4, 1);
+        desc.info.tile_mode = tile;
+        desc.info.UpdateSize();
+        return textures.FindImage(desc);
+      };
+      for (uint32_t submit = 0; submit <= 16u; ++submit)
+        scheduler.Flush();
+      const auto standard = alias(Prospero::TileMode::kStandard4KB);
+      Require(name, "frame lifetime",
+              released.size() == 1u && standard != released[0] &&
+                  TextureCacheTestAccess::Contains(textures, released[0]) &&
+                  textures.GetImage(standard).tick_accessed_last ==
+                      TextureCacheTestAccess::GcTick(textures),
+              "one frame's command buffers aged a released heap image out, or "
+              "an alias missed its frame");
+      TextureCacheTestAccess::SkipFrames(textures, 17u);
+      (void)alias(Prospero::TileMode::kStandard256B);
+      Require(name, "frame aging",
+              !TextureCacheTestAccess::Contains(textures, released[0]),
+              "an alias kept a heap image unused for 17 frames");
       context.UnmapMemory(base, idle_table - base);
       scheduler.Finish();
       device.destroyPipelineLayout(layout, nullptr);
@@ -30414,6 +30446,44 @@ TestCase Vop1MoveRelDestination() {
   return test;
 }
 
+TestCase Vop1MoveRelDestinationSkipsLaneSpill() {
+  using O = ShaderOpcode;
+
+  std::vector<u32> code;
+  // Spill the output V# s[48:51] to v10 lanes 0..3, then clobber the SGPRs.
+  for (u32 lane = 0; lane < 4; lane++) {
+    AppendVop3(&code, 0x361, 10, 48 + lane, InlineU32(lane));
+    code.push_back(EncodeSMovB32(48 + lane, InlineU32(0)));
+  }
+  AppendVMovLiteral(&code, 1, 0x12345678u);
+  AppendVMovLiteral(&code, 2, 0x9abcdef0u);
+  // A runtime M0 of 0 writes v5 while v10 holds the spill.
+  code.push_back(EncodeVop1(0x02, 124, Vgpr(0)));
+  code.push_back(EncodeVop1(0x42, 5, Vgpr(1)));
+  for (u32 lane = 0; lane < 4; lane++)
+    AppendVop3(&code, 0x360, 48 + lane, Vgpr(10), InlineU32(lane));
+  // After the last lane read, M0 = 5 writes v10.
+  code.push_back(EncodeSMovB32(124, InlineU32(5)));
+  code.push_back(EncodeVop1(0x42, 5, Vgpr(2)));
+  AppendStoreVgpr(&code, 5, 0);
+  AppendStoreVgpr(&code, 10, 1);
+  AppendEnd(&code);
+
+  TestCase test;
+  test.name = "Vop1MoveRelDestinationSkipsLaneSpill";
+  test.code = code;
+  test.expected = {0x12345678u, 0x9abcdef0u};
+  test.opcodes = {O::V_WRITELANE_B32,     O::S_MOV_B32,     O::V_MOV_B32,
+                  O::V_READFIRSTLANE_B32, O::V_MOVRELD_B32, O::V_READLANE_B32,
+                  O::BUFFER_STORE_DWORD,  O::S_ENDPGM};
+  test.compute_info.threads_num[0] = 4;
+  test.compute_info.threads_num[1] = 1;
+  test.compute_info.threads_num[2] = 1;
+  test.compute_info.thread_ids_num = 1;
+  test.has_compute_info = true;
+  return test;
+}
+
 TestCase CubeIdCapturedNegationAndOutputScale() {
   using O = ShaderOpcode;
 
@@ -47756,6 +47826,7 @@ std::vector<TestCase> MakeCases() {
   AddCase(Vop3LdexpSourceModifier);
   AddCase(Vop1MoveRelSource);
   AddCase(Vop1MoveRelDestination);
+  AddCase(Vop1MoveRelDestinationSkipsLaneSpill);
   AddCase(VectorFloatSpecialOps);
   AddCase(CubeIdCapturedNegationAndOutputScale);
   AddCase(MadMixF16LiteralHalfSourceUsesOpsel);

@@ -33,11 +33,9 @@ namespace Libs::Graphics {
 
 namespace {
 
-constexpr uint64_t NumFramesBeforeRemoval = 32;
+constexpr uint64_t NumFramesBeforeRemoval = 16;
 constexpr int64_t  GiB                    = 1024ll * 1024 * 1024;
-// Largest GPU-written tiled image (in texels) that is always written back to guest memory on submit.
-// Small tiled targets are for reductions and simulation state (e.g. 1x1 ocean wave origins).
-// Large tiled render targets (shadows, AO, bloom pyramids) stay in VRAM unless --readback-tiled-images is set.
+// Largest GPU-written tiled image (in texels) that is written back to guest memory on submit.
 constexpr uint64_t SmallTiledReadbackTexels = 64 * 64;
 // Largest GPU-written linear image (in texels) that is always written back. Linear surfaces hold
 // GPU results the guest polls directly: PPSA01411 spins on the tail word of its 384x216
@@ -773,10 +771,8 @@ TextureCache::OverlapResult TextureCache::ResolveOverlap(const ImageInfo& reques
 		BcAlias::Resolve(*this, cached_id, merged_id);
 		return {merged_id};
 	}
-	const auto current_tick = m_scheduler.CurrentTick();
-	const bool safe_to_delete =
-	    current_tick - std::min(current_tick, cached.tick_accessed_last) > NumFramesBeforeRemoval &&
-	    cached.heap_refs.load(std::memory_order_relaxed) == 0u;
+	const bool safe_to_delete = m_gc_tick - cached.tick_accessed_last > NumFramesBeforeRemoval &&
+	                            cached.heap_refs.load(std::memory_order_relaxed) == 0u;
 
 	const uint32_t requested_block = requested.bytes_per_block * requested.samples;
 	const uint32_t cached_block    = cached.info.bytes_per_block * cached.info.samples;
@@ -1342,7 +1338,7 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_format) {
 		if (view_layer >= 0) {
 			desc.view_info.base_layer = static_cast<uint32_t>(view_layer);
 		}
-		image.tick_accessed_last = m_scheduler.CurrentTick();
+		image.tick_accessed_last = m_gc_tick;
 		TouchImage(image);
 	}
 	MaterializeColorClear(result, desc, metadata_base_layer);
