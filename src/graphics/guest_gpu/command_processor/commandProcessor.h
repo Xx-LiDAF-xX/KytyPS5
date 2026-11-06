@@ -116,6 +116,7 @@ public:
 
 	[[nodiscard]] bool IsAsyncComputeQueue() const { return m_interrupt_event_id >= 0x20; }
 	[[nodiscard]] bool NeedsFlush() const noexcept { return m_needs_flush; }
+	[[nodiscard]] bool HasWork() const noexcept { return m_draws_in_batch > 0 || m_needs_flush; }
 	void               RecordDrawCall() noexcept {
 		if (++m_draws_in_batch >= 128) {
 			m_needs_flush = true;

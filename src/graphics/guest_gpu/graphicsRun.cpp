@@ -409,6 +409,14 @@ void GuestGpu::ThreadRun(void* data) {
 			while (gpu->m_commands.empty() && gpu->m_submission_count == 0 && !gpu->m_stopping) {
 				gpu->m_processing = false;
 				gpu->m_idle.Signal();
+				if (gpu->m_gfx_cp && gpu->m_gfx_cp->HasWork()) {
+					gpu->m_gfx_cp->BufferFlush();
+				}
+				for (auto& cp: gpu->m_compute_cp) {
+					if (cp && cp->HasWork()) {
+						cp->BufferFlush();
+					}
+				}
 				gpu->m_work_available.Wait(&gpu->m_queue_mutex);
 			}
 			if (gpu->m_stopping && gpu->m_commands.empty() && gpu->m_submission_count == 0) {
@@ -491,8 +499,7 @@ void GuestGpu::ThreadRun(void* data) {
 
 			needs_flush = !complete ||
 			              gpu->GetProcessor(submission.queue_id).NeedsFlush() ||
-			              gpu->m_renderer.GetCommandScheduler().HasPendingPriorityOperations() ||
-			              (gpu->m_submission_count == 0);
+			              gpu->m_renderer.GetCommandScheduler().HasPendingPriorityOperations();
 			if (!needs_flush) {
 				for (uint32_t offset = 0; offset < QueueCount; offset++) {
 					const auto id = (gpu->m_next_queue + offset) % QueueCount;
@@ -927,8 +934,9 @@ void CommandProcessor::ReleaseMem(uint32_t data_sel, uint32_t interrupt_selector
 	}
 
 	// QueuedInterrupt: kNone, kOnly, kAfterWriteConfirm, kDataAfterWriteConfirm, kSendIntCtx.
+	// Only kOnly (1) and kSendIntCtx (4) are host interrupt requests; kAfterWriteConfirm (2) is a data label write.
 	EXIT_NOT_IMPLEMENTED(interrupt_selector > 4);
-	const bool interrupt = (interrupt_selector != 0 && interrupt_selector != 3);
+	const bool interrupt = (interrupt_selector == 1 || interrupt_selector == 4);
 	// kSendIntCtx has no label, and kOnly writes none on graphics queues.
 	if (address == nullptr || interrupt_selector == 4 ||
 	    (interrupt_selector == 1 && !IsAsyncComputeQueue())) {
