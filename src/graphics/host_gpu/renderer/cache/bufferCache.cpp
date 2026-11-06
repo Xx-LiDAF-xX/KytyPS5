@@ -248,6 +248,26 @@ bool BufferCache::DownloadBufferMemory(Buffer& buffer, uint64_t vaddr, uint64_t 
 	return true;
 }
 
+namespace {
+uint64_t CalculateStreamBufferSize(const GraphicContext& graphics) {
+	uint64_t total_vram = 0;
+	for (uint32_t i = 0; i < graphics.physical_device_memory_properties.memoryHeapCount; ++i) {
+		if (graphics.physical_device_memory_properties.memoryHeaps[i].flags &
+		    vk::MemoryHeapFlagBits::eDeviceLocal) {
+			total_vram = std::max(total_vram, static_cast<uint64_t>(
+			                                      graphics.physical_device_memory_properties.memoryHeaps[i].size));
+		}
+	}
+	if (total_vram >= 12ull * 1024 * 1024 * 1024) {
+		return 256 * MiB;
+	} else if (total_vram >= 8ull * 1024 * 1024 * 1024) {
+		return 128 * MiB;
+	} else {
+		return 64 * MiB;
+	}
+}
+} // namespace
+
 BufferCache::BufferCache(GraphicContext& graphics, CommandScheduler& scheduler,
                          PageManager& page_manager, TextureCache& texture_cache)
     : m_graphics(graphics), m_scheduler(scheduler), m_fault_manager(graphics, scheduler, *this),
@@ -256,7 +276,7 @@ BufferCache::BufferCache(GraphicContext& graphics, CommandScheduler& scheduler,
                              BDA_PAGETABLE_SIZE),
       m_memory_tracker(page_manager),
       m_staging_buffer(graphics, scheduler, MemoryUsage::Upload, 512 * MiB),
-      m_stream_buffer(graphics, scheduler, MemoryUsage::Stream, 256 * MiB),
+      m_stream_buffer(graphics, scheduler, MemoryUsage::Stream, CalculateStreamBufferSize(graphics)),
       m_download_buffer(graphics, scheduler, MemoryUsage::Download, 64 * MiB),
       m_device_buffer(graphics, scheduler, MemoryUsage::DeviceLocal, 128 * MiB),
       m_texture_cache(texture_cache) {

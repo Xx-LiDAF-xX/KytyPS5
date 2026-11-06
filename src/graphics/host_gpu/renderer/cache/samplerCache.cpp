@@ -48,8 +48,9 @@ vk::Sampler SamplerCache::GetSampler(const ShaderSamplerResource& r, bool intege
 
 	const bool aniso = is_aniso_filter(mag_filter) || is_aniso_filter(min_filter);
 	if (aniso) {
-		// Host GPUs have ample bandwidth; upgrade anisotropic filtering to 16x for maximum texture clarity and fidelity.
-		aniso_ratio = 16.0f;
+		// Adapt anisotropic filtering dynamically to host GPU capabilities (up to 16x).
+		const float max_supported = m_graphics.physical_device_properties.limits.maxSamplerAnisotropy;
+		aniso_ratio = std::clamp(16.0f, 1.0f, max_supported);
 	}
 
 	const auto mip_filter = r.MipFilter();

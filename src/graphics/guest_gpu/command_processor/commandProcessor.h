@@ -7,9 +7,11 @@
 #include "graphics/host_gpu/renderer/render.h"
 #include "graphics/host_gpu/renderer/renderContext.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <thread>
 #include <vector>
 
 namespace Libs::Graphics {
@@ -117,13 +119,21 @@ public:
 	[[nodiscard]] bool IsAsyncComputeQueue() const { return m_interrupt_event_id >= 0x20; }
 	[[nodiscard]] bool NeedsFlush() const noexcept { return m_needs_flush; }
 	[[nodiscard]] bool HasWork() const noexcept { return m_draws_in_batch > 0 || m_needs_flush; }
-	void               RecordDrawCall() noexcept {
-		if (++m_draws_in_batch >= 128) {
+	static uint32_t    MaxDrawsInBatch() noexcept {
+		const auto threads = std::thread::hardware_concurrency();
+		return std::clamp(threads != 0 ? threads * 8 : 128u, 32u, 256u);
+	}
+	static uint32_t MaxDispatchesInBatch() noexcept {
+		const auto threads = std::thread::hardware_concurrency();
+		return std::clamp(threads != 0 ? threads * 4 : 64u, 16u, 128u);
+	}
+	void RecordDrawCall() noexcept {
+		if (++m_draws_in_batch >= MaxDrawsInBatch()) {
 			m_needs_flush = true;
 		}
 	}
 	void RecordDispatch() noexcept {
-		if (++m_draws_in_batch >= 64) {
+		if (++m_draws_in_batch >= MaxDispatchesInBatch()) {
 			m_needs_flush = true;
 		}
 	}
