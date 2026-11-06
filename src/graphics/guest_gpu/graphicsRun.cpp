@@ -212,6 +212,9 @@ void CommandProcessor::BufferFlush() {
 	if (!GetScheduler().Active()) {
 		return;
 	}
+	if (!CurrentBuffer().IsInvalid()) {
+		m_renderer.GetRenderExecutor().FlushMdi(CurrentBuffer());
+	}
 	m_renderer.GetTextureCache().ProcessDownloadImages();
 	GetScheduler().Flush();
 	// Harvest completed occlusion dumps without stalling intermediate flushes.
@@ -222,6 +225,7 @@ void CommandProcessor::BufferFlush() {
 
 void CommandProcessor::BufferWait() {
 	BufferInit();
+	m_renderer.GetRenderExecutor().FlushMdi(CurrentBuffer());
 	GetScheduler().Finish();
 	m_renderer.GetOcclusionQueries().Publish(true);
 }
@@ -1075,9 +1079,9 @@ void CommandProcessor::Flip(int handle, int index, int flip_mode, int64_t flip_a
 	if (graphics_debug_dump_enabled()) {
 		LOGF("CommandProcessor::Flip()\n");
 	}
-	m_renderer.GetOcclusionQueries().Publish(true);
-
 	auto& command = CurrentBuffer();
+	m_renderer.GetRenderExecutor().FlushMdi(command);
+	m_renderer.GetOcclusionQueries().Publish(true);
 	auto  request = Sync::PrepareVideoOutFlip(command, handle, index, flip_mode, flip_arg);
 	GetScheduler().DeferPriorityOperation(
 	    [&renderer = m_renderer, request] { renderer.GetVideoOut().CompleteFlip(request); });
@@ -1086,6 +1090,7 @@ void CommandProcessor::Flip(int handle, int index, int flip_mode, int64_t flip_a
 
 void CommandProcessor::PrepareCpuFlip(uint64_t request_id) {
 	auto& command = CurrentBuffer();
+	m_renderer.GetRenderExecutor().FlushMdi(command);
 	m_renderer.GetVideoOut().PrepareFlip(request_id, command);
 	GetScheduler().DeferPriorityOperation(
 	    [this, request_id] { m_renderer.GetVideoOut().CompleteFlip(request_id); });

@@ -845,7 +845,7 @@ static VKAPI_ATTR vk::Bool32 VKAPI_CALL VulkanDebugMessengerCallback(
 	return VK_FALSE;
 }
 
-static void VulkanCheckInstanceVersion() {
+static uint32_t VulkanCheckInstanceVersion() {
 	uint32_t version = VK_API_VERSION_1_0;
 
 	if (VULKAN_HPP_DEFAULT_DISPATCHER.vkEnumerateInstanceVersion != nullptr) {
@@ -863,6 +863,11 @@ static void VulkanCheckInstanceVersion() {
 		     VK_VERSION_MINOR(VULKAN_TARGET_API_VERSION), VK_VERSION_MAJOR(version),
 		     VK_VERSION_MINOR(version), VK_VERSION_PATCH(version));
 	}
+#if defined(VK_API_VERSION_1_4)
+	return version >= VK_API_VERSION_1_4 ? VK_API_VERSION_1_4 : VULKAN_TARGET_API_VERSION;
+#else
+	return VULKAN_TARGET_API_VERSION;
+#endif
 }
 
 void WindowContext::CreateVulkan() {
@@ -884,13 +889,13 @@ void WindowContext::CreateVulkan() {
 	VulkanExtensions r;
 	VulkanGetExtensions(r);
 	Vr::OpenXrAppendExtensions(r.required_extensions, r.available_extensions, false);
-	VulkanCheckInstanceVersion();
+	const uint32_t negotiated_api_version = VulkanCheckInstanceVersion();
 
 	const vk::ApplicationInfo app_info {.pApplicationName   = "Kyty",
 	                                    .applicationVersion = 1,
 	                                    .pEngineName        = "Kyty",
 	                                    .engineVersion      = 1,
-	                                    .apiVersion         = VULKAN_TARGET_API_VERSION};
+	                                    .apiVersion         = negotiated_api_version};
 
 	if (Config::SpirvDebugPrintfEnabled() && Config::GpuAssistedValidationEnabled()) {
 		EXIT("--spirv-debug-printf and --gpu-assisted-validation are mutually exclusive\n");

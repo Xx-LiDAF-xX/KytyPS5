@@ -62,11 +62,13 @@ void OcclusionQueries::PublishDumps(bool wait) {
 
 	size_t ready_count = 0;
 	if (wait) {
-		m_scheduler.Wait(m_dumps.back().tick);
 		ready_count = m_dumps.size();
+		if (m_dumps.back().queries != m_read) {
+			m_scheduler.Wait(m_dumps.back().tick);
+		}
 	} else {
 		for (size_t i = 0; i < m_dumps.size(); ++i) {
-			if (m_scheduler.IsFree(m_dumps[i].tick)) {
+			if (m_dumps[i].queries == m_read || m_scheduler.IsFree(m_dumps[i].tick)) {
 				ready_count = i + 1;
 			} else {
 				break;

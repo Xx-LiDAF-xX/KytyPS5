@@ -36,6 +36,7 @@ public:
 	KYTY_CLASS_NO_COPY(OcclusionQueries);
 
 	[[nodiscard]] bool Enabled() const { return m_pool != nullptr; }
+	[[nodiscard]] bool IsOpen() const noexcept { return m_open > 0; }
 
 	// In the draw's rendering: the query that counts its samples, or -1.
 	[[nodiscard]] int32_t Begin(vk::CommandBuffer command) {

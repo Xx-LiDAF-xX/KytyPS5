@@ -3,6 +3,7 @@
 #include "common/assert.h"
 #include "common/debugCounters.h"
 #include "graphics/host_gpu/graphicContext.h"
+#include "graphics/host_gpu/renderer/renderContext.h"
 
 #include <algorithm>
 #include <optional>
@@ -208,10 +209,13 @@ void CommandScheduler::QueueOperation(Common::UniqueFunction<void>&& operation, 
 	EXIT_IF(!operation);
 	std::unique_lock lock(m_operation_mutex);
 	if (m_operation_state == OperationState::Open) {
-		auto& queue = priority ? m_priority_operations : m_pending_operations;
-		queue.push({std::move(operation), CurrentTick()});
+		const auto tick  = CurrentTick();
+		auto&      queue = priority ? m_priority_operations : m_pending_operations;
+		queue.push({std::move(operation), tick});
+		const bool can_wake =
+		    priority && tick <= m_submitted_tick.load(std::memory_order_acquire);
 		lock.unlock();
-		if (priority) {
+		if (can_wake) {
 			m_operation_available.notify_one();
 		}
 		return;
@@ -235,7 +239,10 @@ void CommandScheduler::PriorityOperationsThread(std::stop_token stop) {
 		{
 			std::unique_lock lock(m_operation_mutex);
 			m_operation_available.wait(lock, [this, &stop] {
-				return stop.stop_requested() || !m_priority_operations.empty();
+				return stop.stop_requested() ||
+				       (!m_priority_operations.empty() &&
+				        m_priority_operations.front().tick <=
+				            m_submitted_tick.load(std::memory_order_acquire));
 			});
 			if (stop.stop_requested()) {
 				return;
@@ -259,6 +266,8 @@ void CommandScheduler::PriorityOperationsThread(std::stop_token stop) {
 void CommandScheduler::DrainPriorityOperations() {
 	EXIT_IF(g_deferred_callback_scheduler == this);
 	std::unique_lock lock(m_operation_mutex);
+	EXIT_IF(!m_priority_operations.empty() &&
+	        m_priority_operations.back().tick > m_submitted_tick.load(std::memory_order_acquire));
 	m_operation_available.wait(
 	    lock, [this] { return m_priority_operations.empty() && m_priority_active_tick == 0; });
 }
@@ -266,6 +275,8 @@ void CommandScheduler::DrainPriorityOperations() {
 void CommandScheduler::WaitPriorityOperations(uint64_t tick) {
 	EXIT_IF(g_deferred_callback_scheduler == this);
 	std::unique_lock lock(m_operation_mutex);
+	EXIT_IF(tick > m_submitted_tick.load(std::memory_order_acquire) &&
+	        !m_priority_operations.empty() && m_priority_operations.front().tick <= tick);
 	m_operation_available.wait(lock, [this, tick] {
 		const bool active_before_or_at =
 		    m_priority_active_tick != 0 && m_priority_active_tick <= tick;
@@ -347,6 +358,11 @@ uint64_t CommandScheduler::Submit(SubmitInfo submit) {
 	}
 
 	m_command.m_buffer = nullptr;
+	{
+		std::lock_guard lock(m_operation_mutex);
+		m_submitted_tick.store(tick, std::memory_order_release);
+	}
+	m_operation_available.notify_all();
 	return tick;
 }
 
@@ -416,6 +432,8 @@ void CommandScheduler::RecordParallel(
 	}
 
 	m_command.Handle().executeCommands(static_cast<uint32_t>(secondaries.size()), secondaries.data());
+	m_context.GetRenderExecutor().InvalidateGraphicsState();
+	m_dynamic_state.Invalidate();
 }
 
 } // namespace Libs::Graphics
