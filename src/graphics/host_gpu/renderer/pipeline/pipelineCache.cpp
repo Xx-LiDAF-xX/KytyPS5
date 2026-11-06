@@ -43,7 +43,7 @@ namespace Libs::Graphics {
 
 namespace {
 
-constexpr auto DriverCacheSaveInterval = std::chrono::minutes {5};
+constexpr auto DriverCacheSaveInterval = std::chrono::minutes {1};
 
 // How many draws a fast-linked pipeline has to serve before the optimized relink is worth its
 // CPU time, and how many relinks may wait in the queue at once.
@@ -703,17 +703,23 @@ void PipelineCache::CheckpointDriverCache() {
 		return;
 	}
 	m_driver_cache_dirty = true;
-	if (std::chrono::steady_clock::now() >= m_next_driver_cache_save) {
-		Save();
+	if (const auto now = std::chrono::steady_clock::now(); now >= m_next_driver_cache_save) {
+		m_driver_cache_dirty     = false;
+		m_next_driver_cache_save = now + DriverCacheSaveInterval;
+		// The cache object is internally synchronized, so pipelines may be created meanwhile.
+		m_store.Post([this] { WriteDriverCache(); });
 	}
 }
 
 void PipelineCache::Save() {
-	if (m_driver_cache == nullptr || !m_driver_cache_dirty) {
-		return;
+	m_store.Finish();
+	if (m_driver_cache_dirty) {
+		m_driver_cache_dirty = false;
+		WriteDriverCache();
 	}
-	m_next_driver_cache_save = std::chrono::steady_clock::now() + DriverCacheSaveInterval;
+}
 
+void PipelineCache::WriteDriverCache() const {
 	size_t               size = 0;
 	vk::Result           result;
 	std::vector<uint8_t> payload;
@@ -768,7 +774,6 @@ void PipelineCache::Save() {
 	PipelineCacheLog("Vulkan pipeline cache: saved {:.2f} MB to {}",
 	                 static_cast<double>(payload.size()) / 1'000'000.0,
 	                 Common::PathToString(m_driver_cache_path));
-	m_driver_cache_dirty = false;
 }
 
 void PipelineCache::GetGraphicsPrograms(const CommandBuffer& command, DrawRenderState& state) {

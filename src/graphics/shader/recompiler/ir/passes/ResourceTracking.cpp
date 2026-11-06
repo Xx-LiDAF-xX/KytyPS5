@@ -163,7 +163,7 @@ public:
 	bool Excludes(Value condition, bool positive) {
 		for (uint32_t incoming = 0; incoming < m_induction.NumArgs(); ++incoming) {
 			m_incoming = m_induction.PhiBlock(incoming);
-			m_values[1].clear();
+			m_current  = 1u + incoming;
 			if (Evaluate(condition, true) != (positive ? 0u : 1u)) return false;
 		}
 		return true;
@@ -298,7 +298,7 @@ private:
 		}
 		const auto* inst = value.TryInstruction();
 		if (current && m_exclude_bound && inst == &m_bound) return 0u;
-		auto& values = m_values[current];
+		auto& values = m_values[current ? m_current : 0u];
 		if (const auto found = values.find(inst); found != values.end()) {
 			if (found->second == UINT32_MAX) found->second = Unknown(value.GetType());
 			return found->second;
@@ -362,11 +362,13 @@ private:
 	const Inst& m_induction;
 	const Inst& m_bound;
 	const Block* m_incoming = nullptr;
+	uint32_t m_current = 1;
 	uint32_t m_variables = 0;
 	bool m_exclude_bound = true;
 	std::vector<Node> m_nodes {{}, {}};
 	std::vector<std::pair<Value, uint32_t>> m_literals;
-	std::array<std::map<const Inst*, uint32_t>, 2> m_values;
+	// Previous-iteration values, then current ones per incoming edge, kept across conditions.
+	std::array<std::map<const Inst*, uint32_t>, 3> m_values;
 	std::map<std::array<uint32_t, 3>, uint32_t> m_nodes_by_key;
 	std::map<std::array<uint32_t, 3>, uint32_t> m_choices;
 	std::map<std::tuple<ValueOpcode, uint64_t, uint32_t, uint32_t>, uint32_t> m_predicates;
@@ -1805,12 +1807,17 @@ private:
 				return edge.positive && (lanes == LaneQuantifier::Any || edge.lanes == lanes) &&
 				       Implies(edge.condition, Value(use_of_key.user));
 			})) continue;
-			LoopBoundProof proof(m_program, *phi, *compare);
 			// The image bound and the increment guard are separate obligations: a
 			// skipped image alone does not prevent signed induction wraparound.
-			if (GuardedOnEntry(increment_block, stops, [&](const EdgePredicate& edge) {
-				return proof.Excludes(edge.condition, edge.positive);
-			})) return compare;
+			const auto [found, inserted] = m_loop_proofs.try_emplace(compare);
+			if (inserted) {
+				LoopBoundProof proof(m_program, *phi, *compare);
+				found->second =
+				    GuardedOnEntry(increment_block, stops, [&](const EdgePredicate& edge) {
+					    return proof.Excludes(edge.condition, edge.positive);
+				    });
+			}
+			if (found->second) return compare;
 		}
 		return {};
 	}
@@ -3538,7 +3545,7 @@ private:
 		if (table_source.dword_count == 2u) {
 			if (!MatchPackedScalarKey(key, indirect)) {
 				// EXEC implications must describe the same iteration as the selected value.
-				if (m_native_cfg.irreducible || !m_native_cfg.back_edges.empty()) return false;
+				if (m_program.cyclic) return false;
 				const auto* lane = key.Resolve().TryInstruction();
 				if (lane == nullptr || lane->GetOpcode() != ValueOpcode::ReadFirstLane ||
 				    !std::ranges::all_of(handle.Uses(), [&](const Use& use) {
@@ -3728,8 +3735,8 @@ private:
 				if (!initial.IsEmpty()) return SelectorMaximum(initial, bounds, depth + 1u, guard);
 				const auto post_test = PostTestLoopMaximum(value);
 				if (post_test != UINT32_MAX) return post_test;
-				if (m_native_cfg.irreducible || !m_native_cfg.back_edges.empty() ||
-				    inst->NumArgs() == 0u || (inst->Parent() != nullptr && InCycle(inst->Parent())))
+				if (m_program.cyclic || inst->NumArgs() == 0u ||
+				    (inst->Parent() != nullptr && InCycle(inst->Parent())))
 					return UINT32_MAX;
 				uint32_t result = 0u;
 				for (uint32_t arm = 0; arm < inst->NumArgs(); ++arm) {
@@ -3967,6 +3974,8 @@ private:
 	}
 
 	void PlanIndirectDescriptors() {
+		// Earlier proofs predate rewrites and erasures; planning only adds instructions.
+		m_loop_proofs.clear();
 		for (auto* block: m_program.blocks) {
 			for (auto& inst: *block) {
 				if ((ImageOpcodeInfoOf(inst.GetOpcode()).access == ImageAccess::None &&
@@ -4101,6 +4110,7 @@ private:
 			    image.dimension == memory.image_dimension && image.mip_mode == mip &&
 			    image.depth_compare == depth && image.r128 == memory.image_r128 &&
 			    image.atomic64 == atomic64) {
+				image.cube |= memory.image_cube;
 				Merge(image, op, pc);
 				return i;
 			}
@@ -4116,6 +4126,7 @@ private:
 		image.mip_mode       = mip;
 		image.depth_compare  = depth;
 		image.r128           = memory.image_r128;
+		image.cube           = memory.image_cube;
 		image.atomic64       = atomic64;
 		Merge(image, op, pc);
 		m_info.images.push_back(image);
@@ -4368,6 +4379,7 @@ private:
 	std::vector<MemoryPatch>                   m_memory_patches;
 	std::vector<IndirectDescriptorPlan>             m_indirect_descriptors;
 	std::map<const Inst*, Value>              m_descriptor_values;
+	mutable std::unordered_map<const Inst*, bool>   m_loop_proofs; // By loop-bound comparison.
 	bool                                       m_shader_writes = false;
 };
 

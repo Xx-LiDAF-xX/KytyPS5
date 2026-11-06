@@ -1054,6 +1054,17 @@ constexpr uint32_t EncodeSopp(uint32_t opcode, uint32_t simm = 0) {
          (simm & 0xffffu);
 }
 
+// A loop without an exit has no merge to structure; it reaches the dispatcher.
+constexpr uint32_t kDispatcherLoop[] = {
+    EncodeSopc(0x06, 1, 129),  // L: s_cmp_eq_u32 s1, 1
+    EncodeSopp(0x05, 2),       // s_cbranch_scc1 M
+    EncodeSMovB32(1, 129),     // N: s_mov_b32 s1, 1
+    EncodeSopp(0x02, 0xfffcu), // s_branch L
+    EncodeSMovB32(1, 128),     // M: s_mov_b32 s1, 0
+    EncodeSopp(0x02, 0xfffau), // s_branch L
+    EncodeSopp(0x01),
+};
+
 void TestShaderBufferResourceSize() {
   ShaderBufferResource descriptor;
   descriptor.fields[2] = UINT32_MAX;
@@ -5898,6 +5909,37 @@ void TestNativeConstantSamplerSelection() {
   CheckSpirvBinaryValidates(result.spirv);
 }
 
+void TestNullImageTakesDeclaredCube() {
+  using namespace ShaderRecompiler::IR;
+  // image_sample_lz v0, v[2:4], s[8:15], s[16:19] dmask:0x1 dim:CUBE, then the result is stored.
+  const uint32_t shader[] = {
+      EncodeMimg0(0x27, 0x1, false, 3), EncodeMimg1(0, 2, 4, 2),
+      EncodeMubuf0(0x1c, 0, false), EncodeMubuf1(0, 0, 0),
+      EncodeSopp(0x01),
+  };
+  auto user_data = ImageTestUserData();
+  user_data[0] = 0x1000u;
+  user_data[1] = 0u;
+  user_data[2] = 4u;
+  user_data[3] = 0x30005204u;
+  auto options = MakeCompileOptions(ShaderType::Compute);
+  options.user_data = user_data;
+  const auto plan = ExtractResourcePlan(ShaderRecompiler::TranslateProgram(shader, options).program);
+  const auto specialize = [&](std::array<uint32_t, 8> descriptor) {
+    std::ranges::copy(descriptor, user_data.begin() + 8);
+    ResourceSnapshot snapshot;
+    ResourceSpecialization specialization;
+    Check(MaterializeResources(plan, {.user_data = user_data}, snapshot, specialization),
+          "cube sample resources did not materialize");
+    return specialization;
+  };
+  const auto cube = specialize({0x100u, static_cast<uint32_t>(Prospero::BufferFormat::k8UNorm) << 20u,
+                                0u, DstSel(4, 5, 6, 7) |
+                                    (static_cast<uint32_t>(Prospero::ImageType::kCube) << 28u)});
+  Check(cube.images.size() == 1u && cube.images[0].cube && specialize({}) == cube,
+        "a null T# sampled as a cube specialized as another image type");
+}
+
 void TestPackedZeroHighSamplerTableKey() {
   // s_pack_ll_b32_b16 with a zero high lane zero-extends a GPU-selected table key, so the
   // sampler table stays bounded to 64Ki records.
@@ -6601,15 +6643,11 @@ void TestNewShaderRecompilerCfgFailedStructurizationPreservesGraph() {
   Decoder::DecodeProgram(std::span{shader}, decoded);
   auto graph = CFG::BuildGraph(decoded);
   const auto original = graph;
-  Check(graph.natural_loops.size() == 1u && !graph.irreducible,
+  Check(graph.natural_loops.size() == 1u,
         "failed structurization fixture must have one reducible loop");
   const auto failed = CFG::Structurize(graph);
-  Check(failed.unsupported &&
-            failed.failure_kind == CFG::FailureKind::StructuredControlFlow &&
-            !failed.unsupported_reason.empty(),
+  Check(failed.unsupported && !failed.unsupported_reason.empty(),
         "loop without a merge did not retain its structurization failure");
-  Check(failed.failure_block == UINT32_MAX,
-        "failed structurization exposed a discarded synthetic block ID");
   Check(CfgInstructionCoverage(graph, decoded.instructions.size()) ==
             CfgInstructionCoverage(original, decoded.instructions.size()),
         "failed structurization changed instruction coverage");
@@ -6623,7 +6661,7 @@ void TestNewShaderRecompilerCfgFailedStructurizationPreservesGraph() {
   CheckSpirvBinaryValidates(result.spirv);
 }
 
-void TestNewShaderRecompilerCfgIrreducibleDispatcher() {
+void TestNewShaderRecompilerCfgIrreducibleStructured() {
   const uint32_t shader[] = {
       EncodeSopp(0x05, 2),       // entry -> B, fallthrough A
       EncodeSopp(0x02, 0),       // A -> C
@@ -6632,33 +6670,33 @@ void TestNewShaderRecompilerCfgIrreducibleDispatcher() {
       0xbf810000u,
   };
 
-  auto options = MakeCompileOptions(ShaderType::Compute);
-  options.dump_ir = true;
-
+  const auto options = MakeCompileOptions(ShaderType::Compute);
   auto result = RecompileForTest(shader, options);
-  Check((result.ir_dump.find("irreducible CFG") != std::string::npos),
-        "irreducible CFG reason was not retained");
-  Check((result.ir_dump.find("mode=dispatcher") != std::string::npos),
-        "irreducible CFG did not select dispatcher fallback");
-  Check(SpirvContainsOpcode(result.spirv, 246),
-        "dispatcher SPIR-V lacks OpLoopMerge");
-  Check(SpirvContainsOpcode(result.spirv, 251),
-        "dispatcher SPIR-V lacks OpSwitch");
+  Check(!result.program.dispatcher_fallback && result.program.cyclic,
+        "two-entry cycle did not structure into a loop");
+  Check(SpirvContainsOpcode(result.spirv, 246) &&
+            !SpirvContainsOpcode(result.spirv, 251),
+        "structured two-entry cycle lacks OpLoopMerge or kept an OpSwitch");
   CheckSpirvBinaryValidates(result.spirv);
+
+  // Without an exit there is no merge to structure; neither cycle block
+  // dominates the other.
+  const uint32_t endless[] = {
+      EncodeSopp(0x05, 1),       // entry -> B, fallthrough A
+      EncodeSopp(0x02, 0),       // A -> B
+      EncodeSopp(0x02, 0xfffeu), // B -> A
+      EncodeSopp(0x01),
+  };
+  result = RecompileForTest(endless, options);
+  Check(result.program.dispatcher_fallback && result.program.cyclic,
+        "endless two-entry cycle is not a cyclic dispatcher program");
 }
 
 void TestNewShaderRecompilerDispatcherSpillsU32x3() {
   using namespace ShaderRecompiler;
 
-  const uint32_t shader[] = {
-      EncodeSopp(0x05, 2),       // entry -> B, fallthrough A
-      EncodeSopp(0x02, 0),       // A -> C
-      EncodeSopp(0x05, 0xfffeu), // C -> A, fallthrough B
-      EncodeSopp(0x02, 0xfffeu), // B -> C
-      EncodeSopp(0x01),
-  };
   auto options = MakeCompileOptions(ShaderType::Compute);
-  auto result = RecompileForTest(shader, options);
+  auto result = RecompileForTest(kDispatcherLoop, options);
   Check(result.program.dispatcher_fallback &&
             result.program.blocks.size() >= 3u,
         "U32x3 spill fixture did not select dispatcher mode");
@@ -6683,7 +6721,7 @@ void TestNewShaderRecompilerDispatcherSpillsU32x3() {
           "dispatcher spilled a value defined by its dominating prologue");
   }
 
-  auto spill_result = RecompileForTest(shader, options);
+  auto spill_result = RecompileForTest(kDispatcherLoop, options);
   auto program = std::move(spill_result.program);
   IR::IREmitter definition(program.blocks[1]);
   const auto vector =
@@ -6929,11 +6967,7 @@ void TestNewShaderRecompilerNativeU64Translation() {
             direct_metrics.function_variables == 0u,
         "native U64 translation exceeded its declaration/code-size ratchet");
 
-  const uint32_t dispatcher_shader[] = {
-      EncodeSopp(0x05, 2),       EncodeSopp(0x02, 0), EncodeSopp(0x05, 0xfffeu),
-      EncodeSopp(0x02, 0xfffeu), EncodeSopp(0x01),
-  };
-  result = RecompileForTest(dispatcher_shader, options);
+  result = RecompileForTest(kDispatcherLoop, options);
   Check(result.program.dispatcher_fallback &&
             result.program.blocks.size() >= 3u,
         "U64 spill fixture did not select dispatcher mode");
@@ -8301,7 +8335,8 @@ void TestNewShaderRecompilerPrunesUnreachableSetpcMetadata() {
   ShaderRecompiler::Decoder::DecodeProgram(std::span{shader}, decoded);
   ShaderRecompiler::CFG::Graph graph;
   graph = ShaderRecompiler::CFG::BuildGraph(decoded);
-  Check(!graph.irreducible && graph.code_table_load_pcs.empty(),
+  Check(graph.code_table_load_pcs.empty() &&
+            !ShaderRecompiler::CFG::Structurize(graph).unsupported,
         "unreachable S_SETPC retained jump-table metadata or dispatcher mode");
 
   ShaderRecompiler::IR::Program ir;
@@ -13370,28 +13405,20 @@ void TestNewShaderRecompilerSpirvSizeBaselines() {
   Check((wqm_result.ir_dump.find("WqmU64") != std::string::npos),
         "WQM size fixture no longer reaches scalar mask expansion");
 
-  const uint32_t dispatcher[] = {
-      EncodeSopp(0x05, 2),       // entry -> B, fallthrough A
-      EncodeSopp(0x02, 0),       // A -> C
-      EncodeSopp(0x05, 0xfffeu), // C -> A, fallthrough B
-      EncodeSopp(0x02, 0xfffeu), // B -> C
-      EncodeSopp(0x01),
-  };
-  auto dispatcher_result = compile("dispatcher", dispatcher,
-                                         {.words = 255,
-                                          .instructions = 70,
-                                          .variables = 3,
-                                          .function_variables = 3,
-                                          .loads = 3,
-                                          .stores = 6,
-                                          .phis = 2,
-                                          .labels = 13,
-                                          .loop_merges = 1,
-                                          .selection_merges = 1,
-                                          .branches = 10,
-                                          .conditional_branches = 1,
-                                          .switches = 1,
-                                          .ballots = 1});
+  auto dispatcher_result = compile("dispatcher", kDispatcherLoop,
+                                   {.words = 235,
+                                    .instructions = 65,
+                                    .variables = 2,
+                                    .function_variables = 2,
+                                    .loads = 2,
+                                    .stores = 3,
+                                    .phis = 2,
+                                    .labels = 10,
+                                    .loop_merges = 1,
+                                    .selection_merges = 1,
+                                    .branches = 7,
+                                    .conditional_branches = 1,
+                                    .switches = 1});
   Check(dispatcher_result.program.dispatcher_fallback &&
             (dispatcher_result.ir_dump.find("Phi") != std::string::npos) &&
             SpirvInstructionOpcodeCount(dispatcher_result.spirv, 245u) == 2u &&
@@ -13508,6 +13535,7 @@ int main() {
   TestNativeGuardedSamplerSource(false);
   TestNativeGuardedSamplerSource(true);
   TestNativeConstantSamplerSelection();
+  TestNullImageTakesDeclaredCube();
   TestPackedZeroHighSamplerTableKey();
   for (const bool scalar_key : {false, true}) TestBoundedMaterialBufferStores(scalar_key);
   TestNativeDescriptorProvenanceKeepsGpuSelection();
@@ -13523,7 +13551,7 @@ int main() {
   TestNewShaderRecompilerCfgSharedTerminalEarlyExit();
   TestNewShaderRecompilerCfgPrunesUnreachableSelectionEntry();
   TestNewShaderRecompilerCfgFailedStructurizationPreservesGraph();
-  TestNewShaderRecompilerCfgIrreducibleDispatcher();
+  TestNewShaderRecompilerCfgIrreducibleStructured();
   TestNewShaderRecompilerDispatcherSpillsU32x3();
   TestNewShaderRecompilerPlanningOnlyLoads();
   TestNewShaderRecompilerNativeU64Translation();

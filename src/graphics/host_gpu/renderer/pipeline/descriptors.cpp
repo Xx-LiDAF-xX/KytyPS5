@@ -89,9 +89,11 @@ static Prospero::ImageType TextureType(const ShaderTextureResource& descriptor) 
 	return type == Prospero::ImageType::kCube ? Prospero::ImageType::kColor2DArray : type;
 }
 
+// 1D textures are 2D images one texel high, so they share 2D surfaces at their address.
 static Prospero::ImageType TextureBaseType(Prospero::ImageType type) {
 	switch (type) {
-		case Prospero::ImageType::kColor1DArray: return Prospero::ImageType::kColor1D;
+		case Prospero::ImageType::kColor1D:
+		case Prospero::ImageType::kColor1DArray:
 		case Prospero::ImageType::kColor2DArray:
 		case Prospero::ImageType::kColor2DMsaa:
 		case Prospero::ImageType::kColor2DMsaaArray: return Prospero::ImageType::kColor2D;
@@ -169,11 +171,13 @@ bool IsSupportedDepthTextureEncoding(const ShaderTextureResource& descriptor, bo
 	if (descriptor.MsaaDepth() && !IsMultisampledTexture(descriptor.Type())) {
 		return false;
 	}
-	const auto metadata_control = descriptor.fields[6] & 0x00ffffffu;
-	if (metadata_control == 0) {
+	// META_PIPE_ALIGNED only affects metadata addressing, which a clear COMPRESSION_EN disables.
+	const auto         metadata_control = descriptor.fields[6] & 0x00ffffffu;
+	constexpr uint32_t pipe_aligned     = 1u << 19u;
+	if ((metadata_control & ~pipe_aligned) == 0) {
 		return true;
 	}
-	constexpr uint32_t htile_control = 0x00280000u;
+	constexpr uint32_t htile_control = pipe_aligned | 1u << 21u;
 	const uint32_t expected_control  = htile_control | (descriptor.MsaaDepth() ? (1u << 10u) : 0u);
 	const auto     metadata_addr     = descriptor.MetaAddr() << 8u;
 	return metadata_control == expected_control && GuestRange {metadata_addr, 1}.Valid() &&
@@ -380,27 +384,12 @@ static ImageViewInfo TextureViewInfo(const ShaderRecompiler::IR::ImageResource& 
 	        ? vk::ComponentMapping {}
 	        : TextureGetComponentMapping(descriptor.DstSelXYZW(), surface_format.host_to_storage);
 	switch (resource.dimension) {
-		case ShaderRecompiler::Decoder::ImageDimension::Dim1D:
-			view.type       = vk::ImageViewType::e1D;
-			view.base_layer = descriptor.BaseArray5();
-			if (view.base_layer >= image_layers) {
-				EXIT("texture base layer is out of bounds\n");
-			}
-			view.layer_count = 1;
-			break;
-		case ShaderRecompiler::Decoder::ImageDimension::Dim1DArray:
-			view.type       = vk::ImageViewType::e1DArray;
-			view.base_layer = descriptor.BaseArray5();
-			if (view.base_layer >= image_layers) {
-				EXIT("texture array base layer is out of bounds\n");
-			}
-			view.layer_count = image_layers - view.base_layer;
-			break;
 		case ShaderRecompiler::Decoder::ImageDimension::Dim3D:
 			view.type        = vk::ImageViewType::e3D;
 			view.base_layer  = 0;
 			view.layer_count = 1;
 			break;
+		case ShaderRecompiler::Decoder::ImageDimension::Dim1DArray:
 		case ShaderRecompiler::Decoder::ImageDimension::Dim2DArray:
 		case ShaderRecompiler::Decoder::ImageDimension::Dim2DMsaaArray:
 			view.type       = vk::ImageViewType::e2DArray;
@@ -410,6 +399,7 @@ static ImageViewInfo TextureViewInfo(const ShaderRecompiler::IR::ImageResource& 
 			}
 			view.layer_count = image_layers - view.base_layer;
 			break;
+		case ShaderRecompiler::Decoder::ImageDimension::Dim1D:
 		case ShaderRecompiler::Decoder::ImageDimension::Dim2D:
 		case ShaderRecompiler::Decoder::ImageDimension::Dim2DMsaa:
 			view.type       = vk::ImageViewType::e2D;
