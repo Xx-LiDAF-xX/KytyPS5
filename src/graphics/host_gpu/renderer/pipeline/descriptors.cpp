@@ -825,34 +825,16 @@ void RenderExecutor::RebindBuffers(PreparedBindings& prepared) {
 		prepared.shader_data[layout.MemorySizeDword() + index] =
 		    static_cast<uint32_t>(prepared.buffer_sources[index].size + buffer_offset);
 	}
-	const auto current_tick = m_context.GetCommandScheduler().CurrentTick();
-	auto&      stream       = m_context.GetBufferCache().GetUtilityBuffer(MemoryUsage::Stream);
-	if (layout.descriptor_counts[static_cast<size_t>(BindingKind::FlattenedSrt)] != 0) {
-		const auto srt_span = std::span<const uint32_t>(snapshot.flattened_srt);
-		if (prepared.cached_srt_tick == current_tick &&
-		    prepared.cached_srt_info.buffer == stream.Handle() &&
-		    std::ranges::equal(prepared.cached_srt_words, srt_span)) {
-			prepared.flattened_srt = prepared.cached_srt_info;
-		} else {
-			prepared.flattened_srt = NativeUpload(m_context, srt_span);
-			prepared.cached_srt_tick = m_context.GetCommandScheduler().CurrentTick();
-			prepared.cached_srt_words.assign(srt_span.begin(), srt_span.end());
-			prepared.cached_srt_info = prepared.flattened_srt;
-		}
-	}
-	if (layout.descriptor_counts[static_cast<size_t>(BindingKind::ShaderData)] != 0) {
-		const auto data_span = std::span<const uint32_t>(prepared.shader_data);
-		if (prepared.cached_shader_data_tick == current_tick &&
-		    prepared.cached_shader_data_info.buffer == stream.Handle() &&
-		    std::ranges::equal(prepared.cached_shader_data_words, data_span)) {
-			prepared.shader_data_buffer = prepared.cached_shader_data_info;
-		} else {
-			prepared.shader_data_buffer = NativeUpload(m_context, data_span);
-			prepared.cached_shader_data_tick = m_context.GetCommandScheduler().CurrentTick();
-			prepared.cached_shader_data_words.assign(data_span.begin(), data_span.end());
-			prepared.cached_shader_data_info = prepared.shader_data_buffer;
-		}
-	}
+	auto&      stream    = m_context.GetBufferCache().GetUtilityBuffer(MemoryUsage::Stream);
+	const bool need_srt  = layout.descriptor_counts[static_cast<size_t>(BindingKind::FlattenedSrt)] != 0;
+	const bool need_data = layout.descriptor_counts[static_cast<size_t>(BindingKind::ShaderData)] != 0;
+	ResolveStageStreamUploads(
+	    stream.Handle(), need_srt, std::span<const uint32_t>(snapshot.flattened_srt),
+	    prepared.cached_srt, prepared.flattened_srt, need_data,
+	    std::span<const uint32_t>(prepared.shader_data), prepared.cached_shader_data,
+	    prepared.shader_data_buffer,
+	    [this]() noexcept { return m_context.GetCommandScheduler().CurrentTick(); },
+	    [this](std::span<const uint32_t> words) { return NativeUpload(m_context, words); });
 }
 
 void RenderExecutor::RebindImages(PreparedBindings& prepared) {
@@ -894,7 +876,8 @@ void RenderExecutor::RebindImages(PreparedBindings& prepared) {
 }
 
 void RenderExecutor::PrepareGraphicsBindings(std::span<PreparedBindings* const> stages,
-                                             std::span<RenderColorInfo> colors) {
+                                             std::span<RenderColorInfo>         colors,
+                                             bool                               rebind_buffers) {
 	bool uses_dma        = false;
 	bool uses_image_heap = false;
 	FindBuffers(stages);
@@ -925,8 +908,16 @@ void RenderExecutor::PrepareGraphicsBindings(std::span<PreparedBindings* const> 
 	}
 	// Discovery can read back PS5 metadata and submit the scheduler. Reserve draw buffers only
 	// after image identities are final; attachment layout transitions follow buffer alias copies.
-	for (auto* stage: stages) {
-		RebindBuffers(*stage);
+	if (rebind_buffers) {
+		for (;;) {
+			const uint64_t tick = m_context.GetCommandScheduler().CurrentTick();
+			for (auto* stage: stages) {
+				RebindBuffers(*stage);
+			}
+			if (m_context.GetCommandScheduler().CurrentTick() == tick) {
+				break;
+			}
+		}
 	}
 }
 
@@ -935,7 +926,6 @@ void RenderExecutor::CommitBindings(CommandBuffer&                     buffer,
                                     const PipelineCache::Pipeline&     pipeline,
                                     std::span<PreparedBindings* const> prepared_bindings) {
 	KYTY_PROFILER_FUNCTION();
-	auto                           vk_buffer              = buffer.Handle();
 	size_t                         image_descriptor_count = 0;
 	ShaderRecompiler::IR::PushData push_data;
 	bool                           has_push_data = false;
@@ -954,6 +944,7 @@ void RenderExecutor::CommitBindings(CommandBuffer&                     buffer,
 	if (pipeline.uses_image_heap) {
 		m_context.GetImageHeap().Commit(buffer, pipeline_bind_point, pipeline.pipeline_layout);
 	}
+	auto vk_buffer = buffer.Handle();
 	m_descriptor_images.resize(image_descriptor_count);
 	m_descriptor_writes.clear();
 	size_t image_cursor = 0;

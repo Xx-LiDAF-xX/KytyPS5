@@ -2,6 +2,7 @@
 #include "graphics/host_gpu/renderer/dynamicState.h"
 #include "graphics/host_gpu/renderer/mdiBatcher.h"
 
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 
@@ -191,6 +192,106 @@ void TestDynamicStateHasPendingCommit() {
 	state.dirty_state.depth_compare_op = false;
 	CHECK(!state.HasPendingCommit(gfx));
 }
+
+void TestPerCommandBufferStateIsolationAndHelperInvalidation() {
+	// Reproduces Critical #1 & #2: two independent command buffers (render vs present_scheduler)
+	// must maintain isolated BoundGraphicsState and MdiBatcher instances, and an internal helper
+	// graphics pass (like BlitHelper::ReinterpretColorAsMsDepth) must invalidate BoundGraphicsState
+	// so the next guest draw rebinds its pipeline.
+	BoundGraphicsState render_state {};
+	BoundGraphicsState present_state {};
+	MdiBatcher         render_batcher {};
+	MdiBatcher         present_batcher {};
+
+	const vk::Pipeline guest_pipe {reinterpret_cast<VkPipeline>(0x7001)};
+	const vk::Buffer   guest_ib {reinterpret_cast<VkBuffer>(0x8001)};
+	CHECK(render_state.ShouldBindPipeline(guest_pipe));
+	CHECK(!render_state.ShouldBindPipeline(guest_pipe));
+	CHECK(render_state.ShouldBindIndexBuffer(guest_ib, 0, vk::IndexType::eUint16));
+	CHECK(!render_state.ShouldBindIndexBuffer(guest_ib, 0, vk::IndexType::eUint16));
+
+	MdiBatchKey key {.pipeline = static_cast<VkPipeline>(guest_pipe)};
+	render_batcher.BeginBatch(key, true);
+	render_batcher.AppendIndexed({.indexCount = 12, .instanceCount = 1});
+
+	// Resetting present_scheduler's state & checking its empty batcher leaves render untouched.
+	present_state.Reset();
+	CHECK(present_batcher.IsEmpty());
+	CHECK(!render_batcher.IsEmpty());
+	CHECK(render_batcher.Count() == 1);
+	CHECK(!render_state.ShouldBindPipeline(guest_pipe));
+
+	// Internal helper pass (e.g. BlitHelper::ReinterpretColorAsMsDepth) invalidates render_state:
+	// the very next guest draw with the same guest_pipe MUST rebind it.
+	render_state.Reset();
+	CHECK(render_state.ShouldBindPipeline(guest_pipe));
+	CHECK(render_state.ShouldBindIndexBuffer(guest_ib, 0, vk::IndexType::eUint16));
+}
+
+void TestStreamSliceCacheWraparoundInvalidation() {
+	// Reproduces Critical #3: if FlattenedSrt hits cache on tick T (e.g. offset 0) and uploading
+	// ShaderData wraps StreamBuffer (advancing tick T -> T + 1 and overwriting offset 0),
+	// ResolveStageStreamUploads must re-upload FlattenedSrt on tick T + 1 as well.
+	StreamSliceCache          srt_cache {};
+	StreamSliceCache          data_cache {};
+	const vk::Buffer          stream_buf {reinterpret_cast<VkBuffer>(0x9000)};
+	uint64_t                  tick         = 10;
+	uint64_t                  next_offset  = 0;
+	uint32_t                  upload_calls = 0;
+	bool                      wrap_on_next = false;
+	const std::array<uint32_t, 2> srt_words {0x11u, 0x22u};
+	const std::array<uint32_t, 2> data_v1 {0x33u, 0x44u};
+	const std::array<uint32_t, 2> data_v2 {0x55u, 0x66u};
+
+	auto current_tick = [&]() noexcept { return tick; };
+	auto upload       = [&](std::span<const uint32_t> words) -> vk::DescriptorBufferInfo {
+		++upload_calls;
+		if (wrap_on_next) {
+			wrap_on_next = false;
+			++tick;
+			next_offset = 0;
+		}
+		const uint64_t off = next_offset;
+		next_offset += 256;
+		return {stream_buf, off, words.size_bytes()};
+	};
+
+	vk::DescriptorBufferInfo srt_out {};
+	vk::DescriptorBufferInfo data_out {};
+	ResolveStageStreamUploads(stream_buf, true, srt_words, srt_cache, srt_out, true, data_v1,
+	                          data_cache, data_out, current_tick, upload);
+	CHECK(upload_calls == 2);
+	CHECK(srt_out.offset == 0);
+	CHECK(data_out.offset == 256);
+
+	// Identical payloads on same tick reuse both slices (0 uploads).
+	ResolveStageStreamUploads(stream_buf, true, srt_words, srt_cache, srt_out, true, data_v1,
+	                          data_cache, data_out, current_tick, upload);
+	CHECK(upload_calls == 2);
+
+	// Now ShaderData changes to data_v2 AND wraps StreamBuffer (advancing tick 10 -> 11 at off=0).
+	// FlattenedSrt MUST NOT keep its retired tick-10 slice at off=0 (which data_v2 just overwrote)!
+	wrap_on_next = true;
+	ResolveStageStreamUploads(stream_buf, true, srt_words, srt_cache, srt_out, true, data_v2,
+	                          data_cache, data_out, current_tick, upload);
+	CHECK(tick == 11);
+	CHECK(upload_calls == 4);
+	CHECK(data_out.offset == 0);
+	CHECK(srt_out.offset == 256);
+	CHECK(srt_cache.tick == 11);
+	CHECK(data_cache.tick == 11);
+}
+
+void TestReleaseMemInterruptFlushPolicy() {
+	// Reproduces Important #5: when a guest Equeue listener is registered, ANY ReleaseMem
+	// interrupt selector (including selector 2 = kAfterWriteConfirm) that queues a
+	// DeferPriorityOperation must mark the CommandProcessor for flush so m_submitted_tick advances.
+	CHECK(!ShouldFlushReleaseMemInterrupt(/*has_listener=*/false, /*selector=*/1));
+	CHECK(!ShouldFlushReleaseMemInterrupt(/*has_listener=*/false, /*selector=*/2));
+	CHECK(ShouldFlushReleaseMemInterrupt(/*has_listener=*/true, /*selector=*/1));
+	CHECK(ShouldFlushReleaseMemInterrupt(/*has_listener=*/true, /*selector=*/2));
+	CHECK(ShouldFlushReleaseMemInterrupt(/*has_listener=*/true, /*selector=*/4));
+}
 } // namespace
 
 int main() {
@@ -198,6 +299,9 @@ int main() {
 	TestDirectNonIndexedBatching();
 	TestHardwareVariableBatchCapAndTakeBatch();
 	TestDynamicStateHasPendingCommit();
+	TestPerCommandBufferStateIsolationAndHelperInvalidation();
+	TestStreamSliceCacheWraparoundInvalidation();
+	TestReleaseMemInterruptFlushPolicy();
 	std::printf("MdiBatcher tests passed\n");
 	return 0;
 }

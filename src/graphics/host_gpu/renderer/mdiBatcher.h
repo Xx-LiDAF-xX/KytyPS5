@@ -4,6 +4,8 @@
 #include "common/common.h"
 #include "graphics/host_gpu/vulkanCommon.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -23,6 +25,111 @@ struct MdiBatchKey {
 	[[nodiscard]] bool operator==(const MdiBatchKey& other) const noexcept = default;
 };
 
+struct BoundGraphicsState {
+	static constexpr uint32_t MaxVertexBuffers = 32;
+
+	vk::Pipeline                                     pipeline     = nullptr;
+	vk::Buffer                                       index_buffer = nullptr;
+	vk::DeviceSize                                   index_offset = 0;
+	vk::IndexType                                    index_type   = {};
+	bool                                             has_index    = false;
+	uint32_t                                         vertex_count = 0;
+	std::array<vk::Buffer, MaxVertexBuffers>         vertex_buffers {};
+	std::array<vk::DeviceSize, MaxVertexBuffers>     vertex_offsets {};
+	std::array<vk::DeviceSize, MaxVertexBuffers>     vertex_sizes {};
+
+	void Reset() noexcept { *this = BoundGraphicsState {}; }
+
+	[[nodiscard]] bool ShouldBindPipeline(vk::Pipeline next) noexcept {
+		if (pipeline == next) {
+			return false;
+		}
+		pipeline = next;
+		return true;
+	}
+
+	[[nodiscard]] bool ShouldBindIndexBuffer(vk::Buffer buf, vk::DeviceSize off,
+	                                         vk::IndexType type) noexcept {
+		if (has_index && index_buffer == buf && index_offset == off && index_type == type) {
+			return false;
+		}
+		index_buffer = buf;
+		index_offset = off;
+		index_type   = type;
+		has_index    = true;
+		return true;
+	}
+
+	[[nodiscard]] bool ShouldBindVertexBuffers(uint32_t                        count,
+	                                           std::span<const vk::Buffer>     bufs,
+	                                           std::span<const vk::DeviceSize> offs,
+	                                           std::span<const vk::DeviceSize> szs) noexcept {
+		bool same = vertex_count >= count;
+		for (uint32_t i = 0; same && i < count; ++i) {
+			same = vertex_buffers[i] == bufs[i] && vertex_offsets[i] == offs[i] &&
+			       vertex_sizes[i] == szs[i];
+		}
+		if (same) {
+			return false;
+		}
+		for (uint32_t i = 0; i < count; ++i) {
+			vertex_buffers[i] = bufs[i];
+			vertex_offsets[i] = offs[i];
+			vertex_sizes[i]   = szs[i];
+		}
+		vertex_count = std::max(vertex_count, count);
+		return true;
+	}
+};
+
+struct StreamSliceCache {
+	uint64_t                 tick = 0;
+	std::vector<uint32_t>    words;
+	vk::DescriptorBufferInfo info {};
+
+	template <typename TickFn, typename UploadFn>
+	[[nodiscard]] vk::DescriptorBufferInfo Resolve(vk::Buffer                stream_handle,
+	                                               std::span<const uint32_t> payload,
+	                                               TickFn&&                  current_tick,
+	                                               UploadFn&&                upload) {
+		const uint64_t now = current_tick();
+		if (tick == now && info.buffer == stream_handle && std::ranges::equal(words, payload)) {
+			return info;
+		}
+		info = upload(payload);
+		tick = current_tick();
+		words.assign(payload.begin(), payload.end());
+		return info;
+	}
+};
+
+template <typename TickFn, typename UploadFn>
+inline void ResolveStageStreamUploads(vk::Buffer stream_handle, bool need_srt,
+                                      std::span<const uint32_t> srt_payload,
+                                      StreamSliceCache& srt_cache, vk::DescriptorBufferInfo& srt_out,
+                                      bool need_data, std::span<const uint32_t> data_payload,
+                                      StreamSliceCache&         data_cache,
+                                      vk::DescriptorBufferInfo& data_out, TickFn&& current_tick,
+                                      UploadFn&& upload) {
+	if (need_srt) {
+		srt_out = srt_cache.Resolve(stream_handle, srt_payload, current_tick, upload);
+	}
+	if (need_data) {
+		data_out = data_cache.Resolve(stream_handle, data_payload, current_tick, upload);
+	}
+	// If uploading ShaderData wrapped StreamBuffer and retired the tick FlattenedSrt came from,
+	// re-upload FlattenedSrt onto the active tick so both slices stay valid simultaneously.
+	if (need_srt && need_data && srt_cache.tick != current_tick()) {
+		srt_out = srt_cache.Resolve(stream_handle, srt_payload, current_tick, upload);
+	}
+}
+
+[[nodiscard]] constexpr bool ShouldFlushReleaseMemInterrupt(bool     has_listener,
+                                                            uint32_t interrupt_selector) noexcept {
+	(void)interrupt_selector;
+	return has_listener;
+}
+
 class MdiBatcher {
 public:
 	static constexpr uint32_t MaxBatchCommands = 1024;
@@ -32,10 +139,10 @@ public:
 
 	KYTY_CLASS_NO_COPY(MdiBatcher);
 
-	[[nodiscard]] bool IsEmpty() const noexcept { return m_count == 0; }
-	[[nodiscard]] uint32_t Count() const noexcept { return m_count; }
-	[[nodiscard]] bool IsIndexed() const noexcept { return m_is_indexed; }
-	[[nodiscard]] bool IsActive() const noexcept { return m_active; }
+	[[nodiscard]] bool               IsEmpty() const noexcept { return m_count == 0; }
+	[[nodiscard]] uint32_t           Count() const noexcept { return m_count; }
+	[[nodiscard]] bool               IsIndexed() const noexcept { return m_is_indexed; }
+	[[nodiscard]] bool               IsActive() const noexcept { return m_active; }
 	[[nodiscard]] const MdiBatchKey& CurrentKey() const noexcept { return m_current_key; }
 
 	[[nodiscard]] bool CanBatch(const MdiBatchKey& key,

@@ -1126,17 +1126,20 @@ uint32_t RenderExecutor::MaxMdiCommands() noexcept {
 }
 
 void RenderExecutor::FlushMdi(CommandBuffer& buffer) {
-	bool is_indexed = false;
-	if (!m_mdi_batcher.TakeBatch(m_mdi_indexed_scratch, m_mdi_direct_scratch, is_indexed)) {
+	const std::vector<vk::DrawIndexedIndirectCommand>* indexed_cmds = nullptr;
+	const std::vector<vk::DrawIndirectCommand>*        direct_cmds  = nullptr;
+	bool                                               is_indexed   = false;
+	if (!buffer.TakeMdiBatch(indexed_cmds, direct_cmds, is_indexed)) {
 		return;
 	}
 	EXIT_IF(buffer.IsInvalid());
 	auto vk_buffer = buffer.Handle();
 
 	if (is_indexed) {
-		const auto count = static_cast<uint32_t>(m_mdi_indexed_scratch.size());
+		const auto& scratch = *indexed_cmds;
+		const auto  count   = static_cast<uint32_t>(scratch.size());
 		if (count == 1) {
-			const auto& c = m_mdi_indexed_scratch[0];
+			const auto& c = scratch[0];
 			vk_buffer.drawIndexed(c.indexCount, c.instanceCount, c.firstIndex, c.vertexOffset,
 			                      c.firstInstance);
 			return;
@@ -1145,13 +1148,13 @@ void RenderExecutor::FlushMdi(CommandBuffer& buffer) {
 		auto&          stream = m_context.GetBufferCache().GetUtilityBuffer(MemoryUsage::Stream);
 		const auto [mapped, offset] = stream.Map(bytes, 4, /*allow_wait=*/false);
 		if (mapped != nullptr) {
-			std::memcpy(mapped, m_mdi_indexed_scratch.data(), static_cast<size_t>(bytes));
+			std::memcpy(mapped, scratch.data(), static_cast<size_t>(bytes));
 			stream.Commit();
 			vk_buffer.drawIndexedIndirect(stream.Handle(), offset, count,
 			                              sizeof(vk::DrawIndexedIndirectCommand));
 			Common::DebugCounters::Add(Common::DebugCounters::Counter::IndirectDraws, count);
 		} else {
-			for (const auto& c: m_mdi_indexed_scratch) {
+			for (const auto& c: scratch) {
 				vk_buffer.drawIndexed(c.indexCount, c.instanceCount, c.firstIndex, c.vertexOffset,
 				                      c.firstInstance);
 			}
@@ -1159,9 +1162,10 @@ void RenderExecutor::FlushMdi(CommandBuffer& buffer) {
 		return;
 	}
 
-	const auto count = static_cast<uint32_t>(m_mdi_direct_scratch.size());
+	const auto& scratch = *direct_cmds;
+	const auto  count   = static_cast<uint32_t>(scratch.size());
 	if (count == 1) {
-		const auto& c = m_mdi_direct_scratch[0];
+		const auto& c = scratch[0];
 		vk_buffer.draw(c.vertexCount, c.instanceCount, c.firstVertex, c.firstInstance);
 		return;
 	}
@@ -1169,12 +1173,12 @@ void RenderExecutor::FlushMdi(CommandBuffer& buffer) {
 	auto&          stream       = m_context.GetBufferCache().GetUtilityBuffer(MemoryUsage::Stream);
 	const auto [mapped, offset] = stream.Map(bytes, 4, /*allow_wait=*/false);
 	if (mapped != nullptr) {
-		std::memcpy(mapped, m_mdi_direct_scratch.data(), static_cast<size_t>(bytes));
+		std::memcpy(mapped, scratch.data(), static_cast<size_t>(bytes));
 		stream.Commit();
 		vk_buffer.drawIndirect(stream.Handle(), offset, count, sizeof(vk::DrawIndirectCommand));
 		Common::DebugCounters::Add(Common::DebugCounters::Counter::IndirectDraws, count);
 	} else {
-		for (const auto& c: m_mdi_direct_scratch) {
+		for (const auto& c: scratch) {
 			vk_buffer.draw(c.vertexCount, c.instanceCount, c.firstVertex, c.firstInstance);
 		}
 	}
@@ -1338,12 +1342,15 @@ void RenderExecutor::ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallIn
 		descriptor_stages[stage_count++] = &bindings.pixel;
 	}
 	const auto stages = std::span {descriptor_stages.data(), stage_count};
-	PrepareGraphicsBindings(stages, std::span {state.color_info, state.color_count});
+	PrepareGraphicsBindings(stages, std::span {state.color_info, state.color_count},
+	                        /*rebind_buffers=*/false);
 	PreparedVertexBuffers vertex_bindings;
 	PreparedIndexBuffer   index_binding;
 	if (!mesh_active) {
 		vertex_bindings = AcquireVertexBuffers(buffer, state.vertex_info[0]);
-		index_binding   = PrepareIndexBuffer(buffer, index_source);
+		if (index_source.host_data == nullptr) {
+			index_binding = PrepareIndexBuffer(buffer, index_source);
+		}
 	}
 	std::pair<Buffer*, uint64_t> args_buffer {};
 	if (emit.indirect.address != 0) {
@@ -1353,28 +1360,43 @@ void RenderExecutor::ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallIn
 		args_buffer = m_context.GetBufferCache().ObtainBuffer(emit.indirect.address, size, false);
 		EXIT_IF((args_buffer.second & 3u) != 0);
 	}
-	auto& pipeline = m_context.GetPipelineCache().GetGraphicsPipeline(buffer, state);
+	auto&             pipeline    = m_context.GetPipelineCache().GetGraphicsPipeline(buffer, state);
+	vk::DeviceAddress task_params = 0;
+	for (;;) {
+		const uint64_t prep_tick = m_context.GetCommandScheduler().CurrentTick();
+		if (!mesh_active && index_source.host_data != nullptr) {
+			index_binding = PrepareIndexBuffer(buffer, index_source);
+		}
+		if (pipeline.uses_image_heap) {
+			m_context.GetImageHeap().UploadDirtySlots(buffer);
+		}
+		for (auto* stage: stages) {
+			RebindBuffers(*stage);
+		}
+		if (mesh_task) {
+			const MeshTaskParams params {
+			    .records        = args_buffer.first->BufferDeviceAddress() + args_buffer.second,
+			    .index_address  = index_source.address,
+			    .stride         = emit.indirect.stride,
+			    .index_size     = index_source.guest_element_size,
+			    .index_limit    = draw.index_count,
+			    .primitive_size = mesh.InputPrimitiveSize(),
+			    .group_step     = mesh.primitives_per_group * mesh.InputPrimitiveStep(),
+			    .max_groups     = limits.maxMeshWorkGroupCount[0],
+			    .max_instances  = limits.maxMeshWorkGroupCount[1],
+			    .max_total      = limits.maxMeshWorkGroupTotalCount,
+			};
+			auto& stream = m_context.GetBufferCache().GetUtilityBuffer(MemoryUsage::Stream);
+			task_params  = stream.BufferDeviceAddress() + stream.Copy(&params, sizeof(params), 8);
+		}
+		if (m_context.GetCommandScheduler().CurrentTick() == prep_tick) {
+			break;
+		}
+	}
 	vk::ImageAspectFlags feedback_aspects;
 	const auto rendering =
 	    AcquireRenderTargets(buffer, state.color_info, state.color_count, state.depth_info,
 	                         feedback_aspects, stages);
-	vk::DeviceAddress task_params = 0;
-	if (mesh_task) {
-		const MeshTaskParams params {
-		    .records        = args_buffer.first->BufferDeviceAddress() + args_buffer.second,
-		    .index_address  = index_source.address,
-		    .stride         = emit.indirect.stride,
-		    .index_size     = index_source.guest_element_size,
-		    .index_limit    = draw.index_count,
-		    .primitive_size = mesh.InputPrimitiveSize(),
-		    .group_step     = mesh.primitives_per_group * mesh.InputPrimitiveStep(),
-		    .max_groups     = limits.maxMeshWorkGroupCount[0],
-		    .max_instances  = limits.maxMeshWorkGroupCount[1],
-		    .max_total      = limits.maxMeshWorkGroupTotalCount,
-		};
-		auto& stream = m_context.GetBufferCache().GetUtilityBuffer(MemoryUsage::Stream);
-		task_params  = stream.BufferDeviceAddress() + stream.Copy(&params, sizeof(params), 8);
-	}
 
 	// Normalize submesh index byte offsets into firstIndex so submeshes in the same VkBuffer
 	// share a single index-buffer binding at offset 0 and coalesce into Multi-Draw Indirect.
@@ -1440,15 +1462,16 @@ void RenderExecutor::ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallIn
 		}
 	}
 
+	auto& mdi_batcher = buffer.GetMdiBatcher();
 	if (can_fast_append && !dynamic_state_dirty && buffer.IsRenderingWith(rendering) &&
 	    (!pipeline.uses_image_heap || !m_context.GetImageHeap().NeedsCommit()) &&
-	    m_mdi_batcher.IsIndexed() == draw.indexed &&
-	    m_mdi_batcher.CanBatch(batch_key, max_mdi_commands)) {
+	    mdi_batcher.IsIndexed() == draw.indexed &&
+	    mdi_batcher.CanBatch(batch_key, max_mdi_commands)) {
 		if (pipeline.uses_image_heap) {
 			m_context.GetImageHeap().ClearActive();
 		}
 		if (draw.indexed) {
-			m_mdi_batcher.AppendIndexed({
+			mdi_batcher.AppendIndexed({
 			    .indexCount    = draw.index_count,
 			    .instanceCount = draw.instance_count,
 			    .firstIndex    = first_index,
@@ -1456,7 +1479,7 @@ void RenderExecutor::ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallIn
 			    .firstInstance = emit.first_instance,
 			});
 		} else {
-			m_mdi_batcher.AppendDirect({
+			mdi_batcher.AppendDirect({
 			    .vertexCount   = draw.index_count,
 			    .instanceCount = draw.instance_count,
 			    .firstVertex   = static_cast<uint32_t>(emit.vertex_offset),
@@ -1476,37 +1499,18 @@ void RenderExecutor::ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallIn
 	// Resource preparation above may synchronously finish and restart the scheduler. From this
 	// point onward, every operation targets the current command buffer and cannot touch guest
 	// memory.
-	auto vk_buffer = buffer.Handle();
-	if (!mesh_active && vertex_bindings.count != 0) {
-		bool same_vb = m_bound_graphics_state.vertex_count >= vertex_bindings.count;
-		for (uint32_t i = 0; same_vb && i < vertex_bindings.count; ++i) {
-			same_vb = m_bound_graphics_state.vertex_buffers[i] == vertex_bindings.buffers[i] &&
-			          m_bound_graphics_state.vertex_offsets[i] == vertex_bindings.offsets[i] &&
-			          m_bound_graphics_state.vertex_sizes[i] == vertex_bindings.sizes[i];
-		}
-		if (!same_vb) {
-			CommitVertexBuffers(vk_buffer, vertex_bindings);
-			for (uint32_t i = 0; i < vertex_bindings.count; ++i) {
-				m_bound_graphics_state.vertex_buffers[i] = vertex_bindings.buffers[i];
-				m_bound_graphics_state.vertex_offsets[i] = vertex_bindings.offsets[i];
-				m_bound_graphics_state.vertex_sizes[i]   = vertex_bindings.sizes[i];
-			}
-			m_bound_graphics_state.vertex_count =
-			    std::max(m_bound_graphics_state.vertex_count, vertex_bindings.count);
-		}
+	auto& gfx_state = buffer.GraphicsState();
+	auto  vk_buffer = buffer.Handle();
+	if (!mesh_active && vertex_bindings.count != 0 &&
+	    gfx_state.ShouldBindVertexBuffers(vertex_bindings.count, vertex_bindings.buffers,
+	                                      vertex_bindings.offsets, vertex_bindings.sizes)) {
+		CommitVertexBuffers(vk_buffer, vertex_bindings);
 	}
 	CommitBindings(buffer, vk::PipelineBindPoint::eGraphics, pipeline, stages);
-	if (!mesh_active && index_binding.buffer != nullptr) {
-		if (!m_bound_graphics_state.has_index ||
-		    m_bound_graphics_state.index_buffer != index_binding.buffer ||
-		    m_bound_graphics_state.index_offset != index_binding.offset ||
-		    m_bound_graphics_state.index_type != index_binding.type) {
-			CommitIndexBuffer(vk_buffer, index_binding);
-			m_bound_graphics_state.index_buffer = index_binding.buffer;
-			m_bound_graphics_state.index_offset = index_binding.offset;
-			m_bound_graphics_state.index_type   = index_binding.type;
-			m_bound_graphics_state.has_index    = true;
-		}
+	if (!mesh_active && index_binding.buffer != nullptr &&
+	    gfx_state.ShouldBindIndexBuffer(index_binding.buffer, index_binding.offset,
+	                                    index_binding.type)) {
+		CommitIndexBuffer(vk_buffer, index_binding);
 	}
 	using ShaderRecompiler::IR::PushData;
 	const auto draw_dwords =
@@ -1543,15 +1547,14 @@ void RenderExecutor::ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallIn
 		ShaderWriteHazardBarrier(vk_buffer, shader_write_stages);
 	}
 	buffer.BeginRendering(rendering);
-	if (m_bound_graphics_state.pipeline != pipeline.pipeline) {
+	if (gfx_state.ShouldBindPipeline(pipeline.pipeline)) {
 		vk_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.pipeline);
-		m_bound_graphics_state.pipeline = pipeline.pipeline;
 	}
 
 	if (can_begin_mdi) {
-		m_mdi_batcher.BeginBatch(batch_key, draw.indexed);
+		mdi_batcher.BeginBatch(batch_key, draw.indexed);
 		if (draw.indexed) {
-			m_mdi_batcher.AppendIndexed({
+			mdi_batcher.AppendIndexed({
 			    .indexCount    = draw.index_count,
 			    .instanceCount = draw.instance_count,
 			    .firstIndex    = first_index,
@@ -1559,7 +1562,7 @@ void RenderExecutor::ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallIn
 			    .firstInstance = emit.first_instance,
 			});
 		} else {
-			m_mdi_batcher.AppendDirect({
+			mdi_batcher.AppendDirect({
 			    .vertexCount   = draw.index_count,
 			    .instanceCount = draw.instance_count,
 			    .firstVertex   = static_cast<uint32_t>(emit.vertex_offset),

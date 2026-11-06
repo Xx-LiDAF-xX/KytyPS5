@@ -432,7 +432,7 @@ void CommandScheduler::RecordParallel(
 	}
 
 	m_command.Handle().executeCommands(static_cast<uint32_t>(secondaries.size()), secondaries.data());
-	m_context.GetRenderExecutor().InvalidateGraphicsState();
+	m_command.InvalidateGraphicsState();
 	m_dynamic_state.Invalidate();
 }
 

@@ -92,6 +92,8 @@ struct SubmitInfo {
 
 class CommandBuffer {
 public:
+	static_assert(BoundGraphicsState::MaxVertexBuffers == ShaderVertexInputInfo::RES_MAX);
+
 	~CommandBuffer() = default;
 
 	KYTY_CLASS_NO_COPY(CommandBuffer);
@@ -103,6 +105,23 @@ public:
 
 	void BeginRendering(const RenderState& state) const;
 	void EndRendering() const;
+	void InvalidateGraphicsState() const noexcept { m_bound_graphics_state.Reset(); }
+
+	[[nodiscard]] BoundGraphicsState& GraphicsState() const noexcept {
+		return m_bound_graphics_state;
+	}
+	[[nodiscard]] MdiBatcher& GetMdiBatcher() const noexcept { return m_mdi_batcher; }
+	[[nodiscard]] bool TakeMdiBatch(
+	    const std::vector<vk::DrawIndexedIndirectCommand>*& out_indexed,
+	    const std::vector<vk::DrawIndirectCommand>*&        out_direct,
+	    bool&                                               out_is_indexed) const noexcept {
+		if (!m_mdi_batcher.TakeBatch(m_mdi_indexed_scratch, m_mdi_direct_scratch, out_is_indexed)) {
+			return false;
+		}
+		out_indexed = &m_mdi_indexed_scratch;
+		out_direct  = &m_mdi_direct_scratch;
+		return true;
+	}
 
 	[[nodiscard]] vk::CommandBuffer Handle() const noexcept { return m_buffer; }
 	[[nodiscard]] GraphicContext&   GetGraphics() const noexcept { return m_graphics; }
@@ -122,14 +141,18 @@ private:
 	void Begin();
 	void End() const;
 
-	RenderContext&      m_context;
-	GraphicContext&     m_graphics;
-	vk::CommandBuffer   m_buffer = nullptr;
-	mutable RenderState m_render_state;
-	mutable bool        m_rendering   = false;
-	HW::Context*        m_registers   = nullptr;
-	HW::UserConfig*     m_user_config = nullptr;
-	HW::Shader*         m_shaders     = nullptr;
+	RenderContext&                                      m_context;
+	GraphicContext&                                     m_graphics;
+	vk::CommandBuffer                                   m_buffer = nullptr;
+	mutable RenderState                                 m_render_state;
+	mutable bool                                        m_rendering = false;
+	mutable BoundGraphicsState                          m_bound_graphics_state {};
+	mutable MdiBatcher                                  m_mdi_batcher;
+	mutable std::vector<vk::DrawIndexedIndirectCommand> m_mdi_indexed_scratch;
+	mutable std::vector<vk::DrawIndirectCommand>        m_mdi_direct_scratch;
+	HW::Context*                                        m_registers   = nullptr;
+	HW::UserConfig*                                     m_user_config = nullptr;
+	HW::Shader*                                         m_shaders     = nullptr;
 
 	friend class CommandScheduler;
 };
@@ -151,18 +174,16 @@ public:
 	void ProcessPssr(CommandBuffer& buffer, const Pssr::Request& request);
 
 	void PrepareBindings(const ShaderStageRuntime& runtime, PreparedBindings& prepared);
-	void                           FindBuffers(std::span<PreparedBindings* const> stages);
-	void                           RebindBuffers(PreparedBindings& bindings);
-	void                           RebindImages(PreparedBindings& bindings);
+	void FindBuffers(std::span<PreparedBindings* const> stages);
+	void RebindBuffers(PreparedBindings& bindings);
+	void RebindImages(PreparedBindings& bindings);
 	void CommitBindings(CommandBuffer& buffer, vk::PipelineBindPoint pipeline_bind_point,
 	                    const PipelineCache::Pipeline&     pipeline,
 	                    std::span<PreparedBindings* const> bindings);
 	[[nodiscard]] TextureBinding ResolveTexture(const ShaderRecompiler::IR::ImageResource&   resource,
 	                                            const ShaderRecompiler::IR::DescriptorValue& value);
 
-	void               FlushMdi(CommandBuffer& buffer);
-	[[nodiscard]] bool HasPendingMdi() const noexcept;
-	void               InvalidateGraphicsState() noexcept;
+	void FlushMdi(CommandBuffer& buffer);
 
 private:
 	// False, with nothing drawn, when the draw's indirect records need CPU counts.
@@ -174,29 +195,18 @@ private:
 		PreparedBindings                pixel;
 	};
 
-	struct BoundGraphicsState {
-		vk::Pipeline                                                  pipeline     = nullptr;
-		vk::Buffer                                                    index_buffer = nullptr;
-		vk::DeviceSize                                                index_offset = 0;
-		vk::IndexType                                                 index_type   = {};
-		bool                                                          has_index    = false;
-		uint32_t                                                      vertex_count = 0;
-		std::array<vk::Buffer, ShaderVertexInputInfo::RES_MAX>        vertex_buffers {};
-		std::array<vk::DeviceSize, ShaderVertexInputInfo::RES_MAX>    vertex_offsets {};
-		std::array<vk::DeviceSize, ShaderVertexInputInfo::RES_MAX>    vertex_sizes {};
-	};
-
 	[[nodiscard]] uint32_t MaxMdiCommands() noexcept;
 
 	void PrepareGraphicsBindings(std::span<PreparedBindings* const> stages,
-	                             std::span<RenderColorInfo> colors);
+	                             std::span<RenderColorInfo>         colors,
+	                             bool                               rebind_buffers = true);
 	void ResolveRenderColorTarget(CommandBuffer& buffer, RenderColorInfo& target,
 	                              uint32_t render_target_slot, bool ignore_target_mask = false,
 	                              bool exact_format = false);
 	void ResolveRenderDepthTarget(CommandBuffer& buffer, RenderDepthInfo& target);
 	[[nodiscard]] bool DepthStencilCopy(CommandBuffer& buffer);
 	[[nodiscard]] bool CopyDepthToColor(CommandBuffer& buffer, const DrawCallInfo& draw,
-	                                   const DrawEmitInfo& emit, DrawRenderState& state);
+	                                    const DrawEmitInfo& emit, DrawRenderState& state);
 	[[nodiscard]] bool PrepareDrawRenderState(CommandBuffer& buffer, const DrawCallInfo& draw,
 	                                          DrawRenderState& state);
 	void                      ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallInfo& draw,
@@ -204,7 +214,7 @@ private:
 	                                              const DrawIndexBufferSource& index_source);
 	[[nodiscard]] RenderState AcquireRenderTargets(CommandBuffer& buffer, RenderColorInfo* colors,
 	                                               uint32_t color_count, RenderDepthInfo& depth,
-	                                               vk::ImageAspectFlags& feedback_aspects,
+	                                               vk::ImageAspectFlags&              feedback_aspects,
 	                                               std::span<PreparedBindings* const> stages = {});
 	[[nodiscard]] bool        ResolveColorTargets(CommandBuffer& buffer);
 	[[nodiscard]] bool        ConsumeMetadataColorOperation(CommandBuffer& buffer);
@@ -214,8 +224,8 @@ private:
 	[[nodiscard]] bool        TryConsumeComputeMetaClear(const ShaderComputeInputInfo& input,
 	                                                     const CommandBuffer&          buffer);
 	[[nodiscard]] bool TryConsumeComputeFill(const ShaderComputeInputInfo& input,
-	                                        CommandBuffer& command, uint32_t group_x,
-	                                        uint32_t group_y, uint32_t group_z, uint32_t mode);
+	                                         CommandBuffer& command, uint32_t group_x,
+	                                         uint32_t group_y, uint32_t group_z, uint32_t mode);
 
 	// GET_LOD_STATS counters since their last reset. With --lod-stats a bound T# with counting
 	// enabled counts as sampled at its BASE_LEVEL, clamped when its MIN_LOD lies above that level.
@@ -225,37 +235,28 @@ private:
 		bool    unclamped    = false;
 	};
 
-	RenderContext&                               m_context;
-	bool                                         m_lod_stats = Config::LodStatsEnabled();
-	GraphicsBindings                             m_graphics_bindings;
-	PreparedBindings                             m_compute_bindings;
-	std::vector<ImageId>                         m_bound_images;
-	std::vector<vk::DescriptorImageInfo>         m_descriptor_images;
-	std::vector<vk::WriteDescriptorSet>          m_descriptor_writes;
-	vk::DescriptorSetLayout                      m_pssr_descriptor_layout = nullptr;
-	vk::PipelineLayout                           m_pssr_pipeline_layout   = nullptr;
-	vk::Pipeline                                 m_pssr_pipeline          = nullptr;
-	std::array<MipStatsCounter, 256>             m_mip_stats {};
-	MdiBatcher                                   m_mdi_batcher;
-	std::vector<vk::DrawIndexedIndirectCommand>  m_mdi_indexed_scratch;
-	std::vector<vk::DrawIndirectCommand>         m_mdi_direct_scratch;
-	BoundGraphicsState                           m_bound_graphics_state {};
-	uint32_t                                     m_max_mdi_commands = 0;
+	RenderContext&                       m_context;
+	bool                                 m_lod_stats = Config::LodStatsEnabled();
+	GraphicsBindings                     m_graphics_bindings;
+	PreparedBindings                     m_compute_bindings;
+	std::vector<ImageId>                 m_bound_images;
+	std::vector<vk::DescriptorImageInfo> m_descriptor_images;
+	std::vector<vk::WriteDescriptorSet>  m_descriptor_writes;
+	vk::DescriptorSetLayout              m_pssr_descriptor_layout = nullptr;
+	vk::PipelineLayout                   m_pssr_pipeline_layout   = nullptr;
+	vk::Pipeline                         m_pssr_pipeline          = nullptr;
+	std::array<MipStatsCounter, 256>     m_mip_stats {};
+	uint32_t                             m_max_mdi_commands = 0;
 
 	friend class CommandProcessor;
+	friend class ImageHeap;
 	friend struct RenderExecutorTestAccess;
 };
 
-inline bool RenderExecutor::HasPendingMdi() const noexcept {
-	return !m_mdi_batcher.IsEmpty();
-}
-
-inline void RenderExecutor::InvalidateGraphicsState() noexcept {
-	m_bound_graphics_state.pipeline     = nullptr;
-	m_bound_graphics_state.index_buffer = nullptr;
-	m_bound_graphics_state.has_index    = false;
-	m_bound_graphics_state.vertex_count = 0;
-}
+// Reinterpret raw bits in src as an ImageView of dst_format via a shader when the host lacks
+// VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT. Leave it to the caller if supported natively.
+// Implemented in renderCompute.cpp.
+[[nodiscard]] bool CanTranscodeBlockToUncompressedOnCompute();
 
 [[nodiscard]] bool ResolveComputeBufferFill(const ShaderComputeInputInfo& input, uint32_t group_x,
                                             uint32_t group_y, uint32_t group_z, uint32_t mode,
@@ -264,4 +265,4 @@ inline void RenderExecutor::InvalidateGraphicsState() noexcept {
 
 } // namespace Libs::Graphics
 
-#endif /* EMULATOR_INCLUDE_EMULATOR_GRAPHICS_GRAPHICSRENDER_H_ */
+#endif // EMULATOR_INCLUDE_EMULATOR_GRAPHICS_GRAPHICSRENDER_H_

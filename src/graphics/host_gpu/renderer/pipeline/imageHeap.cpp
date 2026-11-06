@@ -568,10 +568,7 @@ bool ImageHeap::NeedsCommit() const noexcept {
 	return false;
 }
 
-void ImageHeap::Commit(CommandBuffer& buffer, vk::PipelineBindPoint bind_point,
-                       vk::PipelineLayout layout) {
-	KYTY_PROFILER_FUNCTION();
-	const auto epoch = Image::heap_epoch.load(std::memory_order_relaxed);
+void ImageHeap::UploadDirtySlots(CommandBuffer& buffer) {
 	for (auto* view: m_active) {
 		if (view->dirty_begin != view->dirty_end) {
 			const auto slots = std::span(view->slots).subspan(view->dirty_begin,
@@ -582,6 +579,15 @@ void ImageHeap::Commit(CommandBuffer& buffer, vk::PipelineBindPoint bind_point,
 			                       slots.size_bytes());
 			view->dirty_begin = view->dirty_end = 0;
 		}
+	}
+}
+
+void ImageHeap::Commit(CommandBuffer& buffer, vk::PipelineBindPoint bind_point,
+                       vk::PipelineLayout layout) {
+	KYTY_PROFILER_FUNCTION();
+	UploadDirtySlots(buffer);
+	const auto epoch = Image::heap_epoch.load(std::memory_order_relaxed);
+	for (auto* view: m_active) {
 		Retire(*view);
 		if (view->layout_epoch != epoch) {
 			view->layout_epoch = epoch;

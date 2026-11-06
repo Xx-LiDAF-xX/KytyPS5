@@ -21,7 +21,8 @@ CommandBuffer::CommandBuffer(CommandScheduler& scheduler)
 
 void CommandBuffer::Begin() {
 	EXIT_IF(m_rendering || IsInvalid());
-	m_context.GetRenderExecutor().InvalidateGraphicsState();
+	m_bound_graphics_state.Reset();
+	m_mdi_batcher.Reset();
 	auto buffer = Handle();
 
 	vk::CommandBufferBeginInfo begin_info {};
@@ -33,9 +34,11 @@ void CommandBuffer::Begin() {
 }
 
 void CommandBuffer::End() const {
-	m_context.GetRenderExecutor().FlushMdi(const_cast<CommandBuffer&>(*this));
+	if (!m_mdi_batcher.IsEmpty()) {
+		m_context.GetRenderExecutor().FlushMdi(const_cast<CommandBuffer&>(*this));
+	}
 	EndRendering();
-	m_context.GetRenderExecutor().InvalidateGraphicsState();
+	m_bound_graphics_state.Reset();
 	auto buffer = Handle();
 
 	auto result = buffer.end();
@@ -94,7 +97,9 @@ void CommandBuffer::EndRendering() const {
 	if (!m_rendering) {
 		return;
 	}
-	m_context.GetRenderExecutor().FlushMdi(const_cast<CommandBuffer&>(*this));
+	if (!m_mdi_batcher.IsEmpty()) {
+		m_context.GetRenderExecutor().FlushMdi(const_cast<CommandBuffer&>(*this));
+	}
 	Handle().endRendering();
 	m_rendering = false;
 }

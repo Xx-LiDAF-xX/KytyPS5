@@ -209,6 +209,8 @@ void CommandProcessor::BufferInit() {
 }
 
 void CommandProcessor::BufferFlush() {
+	m_needs_flush    = false;
+	m_draws_in_batch = 0;
 	if (!GetScheduler().Active()) {
 		return;
 	}
@@ -219,11 +221,11 @@ void CommandProcessor::BufferFlush() {
 	GetScheduler().Flush();
 	// Harvest completed occlusion dumps without stalling intermediate flushes.
 	m_renderer.GetOcclusionQueries().Publish(false);
-	m_needs_flush    = false;
-	m_draws_in_batch = 0;
 }
 
 void CommandProcessor::BufferWait() {
+	m_needs_flush    = false;
+	m_draws_in_batch = 0;
 	BufferInit();
 	m_renderer.GetRenderExecutor().FlushMdi(CurrentBuffer());
 	GetScheduler().Finish();
@@ -404,6 +406,28 @@ void GuestGpu::ThreadRun(void* data) {
 	KYTY_PROFILER_THREAD("Thread_Gpu");
 	g_gpu_state = gpu;
 
+	const auto has_unflushed_work = [gpu]() noexcept {
+		if (gpu->m_gfx_cp && gpu->m_gfx_cp->HasWork()) {
+			return true;
+		}
+		for (const auto& cp: gpu->m_compute_cp) {
+			if (cp && cp->HasWork()) {
+				return true;
+			}
+		}
+		return false;
+	};
+	const auto flush_all_pending = [gpu]() {
+		if (gpu->m_gfx_cp && gpu->m_gfx_cp->HasWork()) {
+			gpu->m_gfx_cp->BufferFlush();
+		}
+		for (auto& cp: gpu->m_compute_cp) {
+			if (cp && cp->HasWork()) {
+				cp->BufferFlush();
+			}
+		}
+	};
+
 	for (;;) {
 		Submission                   submission;
 		Common::UniqueFunction<void> command;
@@ -411,22 +435,20 @@ void GuestGpu::ThreadRun(void* data) {
 		{
 			Common::LockGuard lock(gpu->m_queue_mutex);
 			while (gpu->m_commands.empty() && gpu->m_submission_count == 0 && !gpu->m_stopping) {
+				if (has_unflushed_work()) {
+					gpu->m_processing = true;
+					gpu->m_queue_mutex.Unlock();
+					flush_all_pending();
+					gpu->m_queue_mutex.Lock();
+					continue;
+				}
 				gpu->m_processing = false;
-				gpu->m_idle.Signal();
-				if (gpu->m_gfx_cp && gpu->m_gfx_cp->HasWork()) {
-					gpu->m_gfx_cp->BufferFlush();
-				}
-				for (auto& cp: gpu->m_compute_cp) {
-					if (cp && cp->HasWork()) {
-						cp->BufferFlush();
-					}
-				}
+				gpu->m_idle.SignalAll();
 				gpu->m_work_available.Wait(&gpu->m_queue_mutex);
 			}
 			if (gpu->m_stopping && gpu->m_commands.empty() && gpu->m_submission_count == 0) {
-				gpu->m_processing = false;
-				gpu->m_idle.SignalAll();
-				should_stop = true;
+				gpu->m_processing = true;
+				should_stop       = true;
 			} else if (!gpu->m_commands.empty()) {
 				command = std::move(gpu->m_commands.front());
 				gpu->m_commands.pop_front();
@@ -442,6 +464,12 @@ void GuestGpu::ThreadRun(void* data) {
 					}
 				}
 				if (selected_queue < 0) {
+					if (has_unflushed_work()) {
+						gpu->m_processing = true;
+						gpu->m_queue_mutex.Unlock();
+						flush_all_pending();
+						gpu->m_queue_mutex.Lock();
+					}
 					gpu->m_processing = false;
 					gpu->m_work_available.WaitFor(&gpu->m_queue_mutex, 100);
 					for (auto& queue: gpu->m_queues) {
@@ -460,7 +488,13 @@ void GuestGpu::ThreadRun(void* data) {
 			}
 		}
 		if (should_stop) {
+			flush_all_pending();
 			gpu->m_gfx_cp->BufferWait();
+			{
+				Common::LockGuard lock(gpu->m_queue_mutex);
+				gpu->m_processing = false;
+				gpu->m_idle.SignalAll();
+			}
 			g_gpu_state = nullptr;
 			return;
 		}
@@ -473,8 +507,8 @@ void GuestGpu::ThreadRun(void* data) {
 			}
 
 			Common::LockGuard lock(gpu->m_queue_mutex);
-			gpu->m_processing = false;
-			if (gpu->m_commands.empty() && gpu->m_submission_count == 0) {
+			if (gpu->m_commands.empty() && gpu->m_submission_count == 0 && !has_unflushed_work()) {
+				gpu->m_processing = false;
 				gpu->m_idle.SignalAll();
 			}
 			continue;
@@ -515,15 +549,18 @@ void GuestGpu::ThreadRun(void* data) {
 					}
 				}
 			}
-
-			gpu->m_processing = false;
-			if (gpu->m_commands.empty() && gpu->m_submission_count == 0) {
-				gpu->m_idle.SignalAll();
-			}
 		}
 
 		if (submission.type == SubmissionType::Commands && needs_flush) {
 			gpu->GetProcessor(submission.queue_id).BufferFlush();
+		}
+
+		{
+			Common::LockGuard lock(gpu->m_queue_mutex);
+			if (gpu->m_commands.empty() && gpu->m_submission_count == 0 && !has_unflushed_work()) {
+				gpu->m_processing = false;
+				gpu->m_idle.SignalAll();
+			}
 		}
 	}
 }
@@ -991,7 +1028,7 @@ void CommandProcessor::ReleaseMem(uint32_t data_sel, uint32_t interrupt_selector
 		    [&renderer = m_renderer, event_id = m_interrupt_event_id, interrupt_context_id] {
 			    renderer.TriggerInterrupt(event_id, interrupt_context_id);
 		    });
-		if (interrupt_selector == 1 || interrupt_selector == 4) {
+		if (ShouldFlushReleaseMemInterrupt(has_listener, interrupt_selector)) {
 			m_needs_flush = true;
 		}
 	}

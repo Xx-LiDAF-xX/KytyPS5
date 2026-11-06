@@ -42,6 +42,8 @@ public:
 	             ShaderRecompiler::IR::ImageHeapView&          result) override;
 	// Image discovery: resolves new elements and rediscovers changed images.
 	void Rebind(RenderExecutor& executor);
+	// Uploads dirty slot ranges via StreamBuffer prior to latching the draw's VkCommandBuffer.
+	void UploadDirtySlots(CommandBuffer& buffer);
 	// Recording: uploads slots, moves resident images to their read layout and binds the array.
 	void Commit(CommandBuffer& buffer, vk::PipelineBindPoint bind_point, vk::PipelineLayout layout);
 	[[nodiscard]] bool NeedsCommit() const noexcept;

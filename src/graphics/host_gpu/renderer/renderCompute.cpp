@@ -371,11 +371,20 @@ void RenderExecutor::DispatchDirect(CommandBuffer& buffer, uint32_t thread_group
 	}
 	RebindImages(bindings);
 	BindSharedMemory(m_context, input_info, bindings);
-	RebindBuffers(bindings);
+	for (;;) {
+		const uint64_t prep_tick = m_context.GetCommandScheduler().CurrentTick();
+		if (program.info.uses_image_heap) {
+			m_context.GetImageHeap().UploadDirtySlots(buffer);
+		}
+		RebindBuffers(bindings);
+		if (m_context.GetCommandScheduler().CurrentTick() == prep_tick) {
+			break;
+		}
+	}
 
-	const auto vk_buffer = buffer.Handle();
 	CommitBindings(buffer, vk::PipelineBindPoint::eCompute, pipeline,
 	               std::span {&descriptor_stage, 1u});
+	const auto vk_buffer = buffer.Handle();
 	if (HasStorageWrites(input_info, bindings)) {
 		// A host fence used to serialize every dispatch. Preserve its read-before-write ordering
 		// while allowing the queue to execute asynchronously.
@@ -513,7 +522,16 @@ void RenderExecutor::DispatchIndirect(CommandBuffer& buffer, uint64_t args_addr,
 	const auto [args_buffer, args_offset] = m_context.GetBufferCache().ObtainBuffer(
 	    args_addr, sizeof(vk::DispatchIndirectCommand), false);
 	EXIT_IF((args_offset & 3u) != 0);
-	RebindBuffers(bindings);
+	for (;;) {
+		const uint64_t prep_tick = m_context.GetCommandScheduler().CurrentTick();
+		if (program.info.uses_image_heap) {
+			m_context.GetImageHeap().UploadDirtySlots(buffer);
+		}
+		RebindBuffers(bindings);
+		if (m_context.GetCommandScheduler().CurrentTick() == prep_tick) {
+			break;
+		}
+	}
 	CommitBindings(buffer, vk::PipelineBindPoint::eCompute, pipeline,
 	               std::span {&descriptor_stage, 1u});
 	const auto vk_buffer = buffer.Handle();
