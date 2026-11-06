@@ -791,7 +791,7 @@ void RenderExecutor::FindBuffers(std::span<PreparedBindings* const> stages) {
 			if (descriptor.NumRecords() == UINT32_MAX && id != NULL_BUFFER_ID &&
 			    !program.info.buffers[resource].written) {
 				const auto& found_buffer = cache.GetBuffer(id);
-				if (found_buffer.Size() <= 64 * 1024) {
+				if (found_buffer.Size() <= BufferCache::MaxStreamBufferSize) {
 					size = std::min(size, found_buffer.Size());
 				}
 			}

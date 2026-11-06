@@ -368,7 +368,7 @@ void BufferCache::InvalidateMemory(uint64_t vaddr, uint64_t size) {
 			} else {
 				uint64_t safe_start = page_start;
 				uint64_t safe_end   = page_start + TRACKER_PAGE_SIZE;
-				const auto forward_limit = std::min(page_start + 64 * 1024, cluster_end);
+				const auto forward_limit = std::min(page_start + MaxStreamBufferSize, cluster_end);
 				if (forward_limit > safe_end &&
 				    !m_memory_tracker.IsRegionGpuModified(safe_end, forward_limit - safe_end)) {
 					safe_end = forward_limit;
@@ -392,7 +392,6 @@ void BufferCache::InvalidateMemory(uint64_t vaddr, uint64_t size) {
 	m_memory_tracker.InvalidateRegion(inv_vaddr, inv_size,
 	                                  [this, inv_vaddr, inv_size] { ReadMemory(inv_vaddr, inv_size, true); });
 
-	constexpr uint64_t MaxStreamBufferSize = 64 * 1024;
 	const bool can_stream_owner =
 	    has_owner && buffer != nullptr && buffer->Size() <= MaxStreamBufferSize &&
 	    !m_texture_cache.FindImageFromRange(buffer->CpuAddress(), buffer->Size());
@@ -614,7 +613,6 @@ std::pair<Buffer*, uint64_t> BufferCache::ObtainBuffer(uint64_t vaddr, uint64_t 
                                                        BufferId id) {
 	EXIT_IF(!(GuestRange {vaddr, size}.Valid()));
 
-	constexpr uint64_t MaxStreamBufferSize = 64 * 1024;
 	const bool can_stream = !is_written &&
 	                        (!is_texel_buffer || !m_texture_cache.FindImageFromRange(vaddr, size)) &&
 	                        size <= MaxStreamBufferSize &&
