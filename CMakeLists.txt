@@ -563,6 +563,8 @@ target_include_directories(occlusion_queries_tests PRIVATE ${inc_headers})
 
 add_executable(mdi_batcher_tests EXCLUDE_FROM_ALL
 	"${KYTY_TESTS_DIR}/MdiBatcherTests.cpp"
+	"${KYTY_SOURCE_DIR}/graphics/host_gpu/vulkanCommon.cpp"
+	"${KYTY_SOURCE_DIR}/graphics/host_gpu/renderer/dynamicState.cpp"
 	"${KYTY_SOURCE_DIR}/graphics/host_gpu/renderer/mdiBatcher.cpp")
 target_link_libraries(mdi_batcher_tests common fmt::fmt Vulkan::Headers)
 target_include_directories(mdi_batcher_tests PRIVATE ${inc_headers})

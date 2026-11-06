@@ -97,6 +97,9 @@ struct DynamicState {
 	/// Commits the dynamic state to the provided command buffer.
 	void Commit(const GraphicContext& graphics, vk::CommandBuffer cmdbuf);
 
+	/// True if Commit() would emit at least one Vulkan dynamic-state command.
+	[[nodiscard]] bool HasPendingCommit(const GraphicContext& graphics) const noexcept;
+
 	/// Invalidates all dynamic state to be flushed into the next command buffer.
 	void Invalidate() { std::memset(&dirty_state, 0xFF, sizeof(dirty_state)); }
 

@@ -44,6 +44,8 @@ public:
 	void Rebind(RenderExecutor& executor);
 	// Recording: uploads slots, moves resident images to their read layout and binds the array.
 	void Commit(CommandBuffer& buffer, vk::PipelineBindPoint bind_point, vk::PipelineLayout layout);
+	[[nodiscard]] bool NeedsCommit() const noexcept;
+	void               ClearActive() noexcept { m_active.clear(); }
 	// CPU write fault, on any thread.
 	void InvalidateMemory(uint64_t address, uint64_t size);
 	void UnmapMemory(uint64_t address, uint64_t size);

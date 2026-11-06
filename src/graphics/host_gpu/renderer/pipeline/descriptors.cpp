@@ -825,11 +825,33 @@ void RenderExecutor::RebindBuffers(PreparedBindings& prepared) {
 		prepared.shader_data[layout.MemorySizeDword() + index] =
 		    static_cast<uint32_t>(prepared.buffer_sources[index].size + buffer_offset);
 	}
+	const auto current_tick = m_context.GetCommandScheduler().CurrentTick();
+	auto&      stream       = m_context.GetBufferCache().GetUtilityBuffer(MemoryUsage::Stream);
 	if (layout.descriptor_counts[static_cast<size_t>(BindingKind::FlattenedSrt)] != 0) {
-		prepared.flattened_srt = NativeUpload(m_context, snapshot.flattened_srt);
+		const auto srt_span = std::span<const uint32_t>(snapshot.flattened_srt);
+		if (prepared.cached_srt_tick == current_tick &&
+		    prepared.cached_srt_info.buffer == stream.Handle() &&
+		    std::ranges::equal(prepared.cached_srt_words, srt_span)) {
+			prepared.flattened_srt = prepared.cached_srt_info;
+		} else {
+			prepared.flattened_srt = NativeUpload(m_context, srt_span);
+			prepared.cached_srt_tick = m_context.GetCommandScheduler().CurrentTick();
+			prepared.cached_srt_words.assign(srt_span.begin(), srt_span.end());
+			prepared.cached_srt_info = prepared.flattened_srt;
+		}
 	}
 	if (layout.descriptor_counts[static_cast<size_t>(BindingKind::ShaderData)] != 0) {
-		prepared.shader_data_buffer = NativeUpload(m_context, prepared.shader_data);
+		const auto data_span = std::span<const uint32_t>(prepared.shader_data);
+		if (prepared.cached_shader_data_tick == current_tick &&
+		    prepared.cached_shader_data_info.buffer == stream.Handle() &&
+		    std::ranges::equal(prepared.cached_shader_data_words, data_span)) {
+			prepared.shader_data_buffer = prepared.cached_shader_data_info;
+		} else {
+			prepared.shader_data_buffer = NativeUpload(m_context, data_span);
+			prepared.cached_shader_data_tick = m_context.GetCommandScheduler().CurrentTick();
+			prepared.cached_shader_data_words.assign(data_span.begin(), data_span.end());
+			prepared.cached_shader_data_info = prepared.shader_data_buffer;
+		}
 	}
 }
 

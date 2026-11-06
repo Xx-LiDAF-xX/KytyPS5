@@ -11,23 +11,22 @@
 namespace Libs::Graphics {
 
 struct MdiBatchKey {
-	VkPipeline pipeline            = nullptr;
-	uint64_t   index_address       = 0;
-	uint32_t   index_type_and_size = 0;
-	uint32_t   topology            = 0;
-	uint64_t   render_targets_hash = 0;
+	VkPipeline  pipeline           = nullptr;
+	VkBuffer    index_buffer       = nullptr;
+	uint64_t    index_offset       = 0;
+	VkIndexType index_type         = {};
+	uint32_t    topology           = 0;
+	uint32_t    object_id          = 0;
+	uint64_t    vertex_buffer_hash = 0;
+	uint64_t    bindings_hash      = 0;
 
-	[[nodiscard]] bool operator==(const MdiBatchKey& other) const noexcept {
-		return pipeline == other.pipeline &&
-		       index_address == other.index_address &&
-		       index_type_and_size == other.index_type_and_size &&
-		       topology == other.topology &&
-		       render_targets_hash == other.render_targets_hash;
-	}
+	[[nodiscard]] bool operator==(const MdiBatchKey& other) const noexcept = default;
 };
 
 class MdiBatcher {
 public:
+	static constexpr uint32_t MaxBatchCommands = 1024;
+
 	MdiBatcher()  = default;
 	~MdiBatcher() = default;
 
@@ -39,8 +38,10 @@ public:
 	[[nodiscard]] bool IsActive() const noexcept { return m_active; }
 	[[nodiscard]] const MdiBatchKey& CurrentKey() const noexcept { return m_current_key; }
 
-	[[nodiscard]] bool CanBatch(const MdiBatchKey& key) const noexcept {
-		if (!m_active) {
+	[[nodiscard]] bool CanBatch(const MdiBatchKey& key,
+	                            uint32_t           max_commands = MaxBatchCommands) const noexcept {
+		const uint32_t limit = max_commands < MaxBatchCommands ? max_commands : MaxBatchCommands;
+		if (!m_active || m_count >= limit) {
 			return false;
 		}
 		return m_current_key == key;
@@ -48,6 +49,11 @@ public:
 
 	void BeginBatch(const MdiBatchKey& key, bool indexed = true) {
 		Reset();
+		if (indexed && m_indexed_commands.capacity() < 256) {
+			m_indexed_commands.reserve(256);
+		} else if (!indexed && m_direct_commands.capacity() < 256) {
+			m_direct_commands.reserve(256);
+		}
 		m_current_key = key;
 		m_is_indexed  = indexed;
 		m_active      = true;
@@ -63,7 +69,26 @@ public:
 		m_count++;
 	}
 
-	void Reset() {
+	[[nodiscard]] bool TakeBatch(std::vector<vk::DrawIndexedIndirectCommand>& out_indexed,
+	                             std::vector<vk::DrawIndirectCommand>&        out_direct,
+	                             bool&                                        out_is_indexed) noexcept {
+		if (m_count == 0) {
+			Reset();
+			return false;
+		}
+		out_is_indexed = m_is_indexed;
+		out_indexed.clear();
+		out_direct.clear();
+		if (m_is_indexed) {
+			out_indexed.swap(m_indexed_commands);
+		} else {
+			out_direct.swap(m_direct_commands);
+		}
+		Reset();
+		return true;
+	}
+
+	void Reset() noexcept {
 		m_indexed_commands.clear();
 		m_direct_commands.clear();
 		m_count       = 0;
@@ -81,12 +106,12 @@ public:
 	}
 
 private:
-	MdiBatchKey                                  m_current_key {};
+	MdiBatchKey                                 m_current_key {};
 	std::vector<vk::DrawIndexedIndirectCommand> m_indexed_commands;
 	std::vector<vk::DrawIndirectCommand>        m_direct_commands;
-	uint32_t                                     m_count      = 0;
-	bool                                         m_is_indexed = false;
-	bool                                         m_active     = false;
+	uint32_t                                    m_count      = 0;
+	bool                                        m_is_indexed = false;
+	bool                                        m_active     = false;
 };
 
 } // namespace Libs::Graphics

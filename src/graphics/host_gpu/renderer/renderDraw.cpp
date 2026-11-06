@@ -577,6 +577,7 @@ bool RenderExecutor::ConsumeMetadataColorOperation(CommandBuffer& buffer) {
 	const auto& ctx  = buffer.GetRegisters();
 	const auto  mode = ctx.GetColorControl().mode;
 	if (mode == static_cast<uint8_t>(CbColorMode::EliminateFastClear)) {
+		FlushMdi(buffer);
 		// FCE can precede any ordinary draw. Discover the target to materialize its native
 		// clear metadata before the expanded image is sampled.
 		RenderColorInfo target {};
@@ -941,8 +942,247 @@ static void LogDrawStateIfNeeded(const CommandBuffer& buffer, const DrawCallInfo
 	                  draw.index_count, index_addr);
 }
 
+[[nodiscard]] static uint64_t Mix64(uint64_t h, uint64_t k) noexcept {
+	k ^= k >> 33u;
+	k *= 0xff51afd7ed558ccdULL;
+	k ^= k >> 33u;
+	k *= 0xc4ceb9fe1a85ec53ULL;
+	k ^= k >> 33u;
+	h ^= k;
+	h = (h << 27u) | (h >> 37u);
+	return h * 5ULL + 0x52dce729ULL;
+}
+
+[[nodiscard]] static uint64_t HashVertexBuffers(const PreparedVertexBuffers& vb) noexcept {
+	uint64_t hash = Mix64(0x9e3779b97f4a7c15ULL, vb.count);
+	for (uint32_t i = 0; i < vb.count; ++i) {
+		hash = Mix64(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(vb.buffers[i])));
+		hash = Mix64(hash, vb.offsets[i]);
+		hash = Mix64(hash, vb.sizes[i]);
+	}
+	return hash;
+}
+
+[[nodiscard]] static bool IsImageReadyForFastMdi(const Image&         image,
+                                                 const ImageViewInfo& view) noexcept {
+	const auto expected_layout = image.ReadLayout();
+	constexpr auto expected_access = vk::AccessFlagBits2::eShaderRead;
+	if (image.backing.subresource_states.empty()) {
+		return image.backing.state.layout == expected_layout &&
+		       image.backing.state.access_mask == expected_access;
+	}
+	const uint32_t layers = image.info.resources.layers;
+	for (uint32_t level = view.base_level; level < view.base_level + view.level_count; ++level) {
+		for (uint32_t layer = view.base_layer; layer < view.base_layer + view.layer_count;
+		     ++layer) {
+			const auto index = level * layers + layer;
+			if (index >= image.backing.subresource_states.size()) {
+				return false;
+			}
+			const auto& sub = image.backing.subresource_states[index];
+			if (sub.layout != expected_layout || sub.access_mask != expected_access) {
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+[[nodiscard]] static uint64_t InspectAndHashBindings(
+    RenderContext& context, std::span<PreparedBindings* const> stages,
+    const ShaderVertexInputInfo& last_vs_stage, const CommandBuffer& buffer,
+    bool& out_can_begin_mdi, bool& out_can_fast_append) noexcept {
+	using BindingKind = ShaderRecompiler::IR::DescriptorBindingKind;
+	uint64_t hash     = Mix64(0x517cc1b727220a95ULL, stages.size());
+	out_can_begin_mdi   = true;
+	out_can_fast_append = true;
+
+	auto& texture_cache = context.GetTextureCache();
+	auto& buffer_cache  = context.GetBufferCache();
+
+	for (const auto* prepared: stages) {
+		const auto& program = prepared->runtime->module->info;
+		hash = Mix64(hash, program.shader_hash);
+		hash = Mix64(hash, program.bindings.descriptor_mask);
+
+		if (prepared->gds.buffer != nullptr) {
+			out_can_begin_mdi   = false;
+			out_can_fast_append = false;
+		}
+
+		hash = Mix64(hash, prepared->buffers.size());
+		for (const auto& buf: prepared->buffers) {
+			hash = Mix64(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(buf.buffer)));
+			hash = Mix64(hash, buf.offset);
+			hash = Mix64(hash, buf.range);
+		}
+
+		const auto mix_buf_info = [&](const vk::DescriptorBufferInfo& info) {
+			hash = Mix64(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(info.buffer)));
+			hash = Mix64(hash, info.offset);
+			hash = Mix64(hash, info.range);
+		};
+		mix_buf_info(prepared->flattened_srt);
+		mix_buf_info(prepared->shader_data_buffer);
+		mix_buf_info(prepared->shared_memory);
+
+		if (program.bindings.descriptor_counts[static_cast<size_t>(BindingKind::BdaPagetable)] != 0) {
+			const auto* bda = buffer_cache.GetBdaPageTableBuffer();
+			hash = Mix64(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(bda->Handle())));
+			hash = Mix64(hash, bda->Size());
+		}
+		if (program.bindings.descriptor_counts[static_cast<size_t>(BindingKind::FaultBuffer)] != 0) {
+			const auto* fault = buffer_cache.GetFaultBuffer();
+			hash = Mix64(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(fault->Handle())));
+			hash = Mix64(hash, fault->Size());
+		}
+
+		const auto& sdata = prepared->shader_data;
+		hash              = Mix64(hash, sdata.size());
+		size_t d          = 0;
+		for (; d + 1 < sdata.size(); d += 2) {
+			hash = Mix64(hash, uint64_t {sdata[d]} | (uint64_t {sdata[d + 1]} << 32u));
+		}
+		if (d < sdata.size()) {
+			hash = Mix64(hash, sdata[d]);
+		}
+
+		hash = Mix64(hash, prepared->samplers.size());
+		for (const auto sampler: prepared->samplers) {
+			hash = Mix64(hash, reinterpret_cast<uintptr_t>(static_cast<VkSampler>(sampler)));
+		}
+
+		hash = Mix64(hash, program.info.images.size());
+		for (uint32_t i = 0; i < program.info.images.size(); ++i) {
+			if (program.info.images[i].heap) {
+				continue;
+			}
+			const auto& tex = prepared->images[i];
+			hash = Mix64(hash, tex.image_id.index);
+			hash = Mix64(hash, reinterpret_cast<uintptr_t>(static_cast<VkImageView>(tex.image_view)));
+			hash = Mix64(hash, tex.mip_views.size());
+			for (const auto mv: tex.mip_views) {
+				hash = Mix64(hash, reinterpret_cast<uintptr_t>(static_cast<VkImageView>(mv)));
+			}
+			if (!tex.image_id) {
+				continue;
+			}
+			if (tex.desc.type == TextureCache::BindingType::Storage) {
+				out_can_begin_mdi   = false;
+				out_can_fast_append = false;
+				continue;
+			}
+			const auto& img = texture_cache.GetImage(tex.image_id);
+			if (img.binding.is_target || img.binding.shader_write ||
+			    (img.binding.force_general && !img.info.IsDepth())) {
+				out_can_begin_mdi   = false;
+				out_can_fast_append = false;
+			} else if (out_can_fast_append && !IsImageReadyForFastMdi(img, tex.desc.view_info)) {
+				out_can_fast_append = false;
+			}
+		}
+	}
+
+	const auto planes = last_vs_stage.user_clip_planes;
+	hash              = Mix64(hash, planes);
+	if (planes != 0) {
+		const auto&    clip_data = buffer.GetRegisters().GetUserClipPlanes();
+		const uint32_t dword_cnt = std::bit_width(planes) * 4u;
+		const auto*    bytes     = reinterpret_cast<const uint8_t*>(clip_data.data());
+		for (uint32_t d = 0; d < dword_cnt; d += 2) {
+			uint64_t qword = 0;
+			std::memcpy(&qword, bytes + static_cast<size_t>(d) * sizeof(uint32_t), sizeof(uint64_t));
+			hash = Mix64(hash, qword);
+		}
+	}
+
+	return hash;
+}
+
+uint32_t RenderExecutor::MaxMdiCommands() noexcept {
+	if (m_max_mdi_commands != 0) {
+		return m_max_mdi_commands;
+	}
+	const auto&    graphics = m_context.GetGraphics();
+	const uint32_t hw_limit = graphics.physical_device_properties.limits.maxDrawIndirectCount;
+	if (hw_limit <= 1u) {
+		m_max_mdi_commands = 1u;
+		return m_max_mdi_commands;
+	}
+	uint64_t    device_local_bytes = 0;
+	const auto& mem                = graphics.physical_device_memory_properties;
+	for (uint32_t i = 0; i < mem.memoryHeapCount; ++i) {
+		if (mem.memoryHeaps[i].flags & vk::MemoryHeapFlagBits::eDeviceLocal) {
+			device_local_bytes = std::max<uint64_t>(device_local_bytes, mem.memoryHeaps[i].size);
+		}
+	}
+	constexpr uint64_t FourGiB   = 4ull * 1024 * 1024 * 1024;
+	constexpr uint64_t EightGiB  = 8ull * 1024 * 1024 * 1024;
+	const uint32_t     vram_cap  = device_local_bytes >= EightGiB ? 1024u
+	                             : device_local_bytes >= FourGiB  ? 512u
+	                                                              : 256u;
+	m_max_mdi_commands = std::min({hw_limit, vram_cap, MdiBatcher::MaxBatchCommands});
+	return m_max_mdi_commands;
+}
+
+void RenderExecutor::FlushMdi(CommandBuffer& buffer) {
+	bool is_indexed = false;
+	if (!m_mdi_batcher.TakeBatch(m_mdi_indexed_scratch, m_mdi_direct_scratch, is_indexed)) {
+		return;
+	}
+	EXIT_IF(buffer.IsInvalid());
+	auto vk_buffer = buffer.Handle();
+
+	if (is_indexed) {
+		const auto count = static_cast<uint32_t>(m_mdi_indexed_scratch.size());
+		if (count == 1) {
+			const auto& c = m_mdi_indexed_scratch[0];
+			vk_buffer.drawIndexed(c.indexCount, c.instanceCount, c.firstIndex, c.vertexOffset,
+			                      c.firstInstance);
+			return;
+		}
+		const uint64_t bytes  = static_cast<uint64_t>(count) * sizeof(vk::DrawIndexedIndirectCommand);
+		auto&          stream = m_context.GetBufferCache().GetUtilityBuffer(MemoryUsage::Stream);
+		const auto [mapped, offset] = stream.Map(bytes, 4, /*allow_wait=*/false);
+		if (mapped != nullptr) {
+			std::memcpy(mapped, m_mdi_indexed_scratch.data(), static_cast<size_t>(bytes));
+			stream.Commit();
+			vk_buffer.drawIndexedIndirect(stream.Handle(), offset, count,
+			                              sizeof(vk::DrawIndexedIndirectCommand));
+			Common::DebugCounters::Add(Common::DebugCounters::Counter::IndirectDraws, count);
+		} else {
+			for (const auto& c: m_mdi_indexed_scratch) {
+				vk_buffer.drawIndexed(c.indexCount, c.instanceCount, c.firstIndex, c.vertexOffset,
+				                      c.firstInstance);
+			}
+		}
+		return;
+	}
+
+	const auto count = static_cast<uint32_t>(m_mdi_direct_scratch.size());
+	if (count == 1) {
+		const auto& c = m_mdi_direct_scratch[0];
+		vk_buffer.draw(c.vertexCount, c.instanceCount, c.firstVertex, c.firstInstance);
+		return;
+	}
+	const uint64_t bytes        = static_cast<uint64_t>(count) * sizeof(vk::DrawIndirectCommand);
+	auto&          stream       = m_context.GetBufferCache().GetUtilityBuffer(MemoryUsage::Stream);
+	const auto [mapped, offset] = stream.Map(bytes, 4, /*allow_wait=*/false);
+	if (mapped != nullptr) {
+		std::memcpy(mapped, m_mdi_direct_scratch.data(), static_cast<size_t>(bytes));
+		stream.Commit();
+		vk_buffer.drawIndirect(stream.Handle(), offset, count, sizeof(vk::DrawIndirectCommand));
+		Common::DebugCounters::Add(Common::DebugCounters::Counter::IndirectDraws, count);
+	} else {
+		for (const auto& c: m_mdi_direct_scratch) {
+			vk_buffer.draw(c.vertexCount, c.instanceCount, c.firstVertex, c.firstInstance);
+		}
+	}
+}
+
 static void EmitDrawPrimitives(const HW::UserConfig& ucfg, vk::CommandBuffer vk_buffer,
-                               const DrawCallInfo& draw, const DrawEmitInfo& emit) {
+                               const DrawCallInfo& draw, const DrawEmitInfo& emit,
+                               uint32_t first_index = 0) {
 	switch (ucfg.GetPrimType()) {
 		case Prospero::PrimitiveType::kPointList:
 		case Prospero::PrimitiveType::kLineList:
@@ -955,8 +1195,8 @@ static void EmitDrawPrimitives(const HW::UserConfig& ucfg, vk::CommandBuffer vk_
 		case Prospero::PrimitiveType::kRectListLegacy:
 		case Prospero::PrimitiveType::kPatch:
 			if (draw.indexed) {
-				vk_buffer.drawIndexed(draw.index_count, draw.instance_count, 0, emit.vertex_offset,
-				                      emit.first_instance);
+				vk_buffer.drawIndexed(draw.index_count, draw.instance_count, first_index,
+				                      emit.vertex_offset, emit.first_instance);
 			} else {
 				vk_buffer.draw(draw.index_count, draw.instance_count,
 				               static_cast<uint32_t>(emit.vertex_offset), emit.first_instance);
@@ -984,6 +1224,7 @@ bool RenderExecutor::CopyDepthToColor(CommandBuffer& buffer, const DrawCallInfo&
 	if (!buffer.GetRegisters().GetRenderControl().copy_depth_to_color) {
 		return false;
 	}
+	FlushMdi(buffer);
 	auto& ucfg = buffer.GetUserConfig();
 	const auto& hw = buffer.GetRegisters();
 	auto& depth = state.depth_info;
@@ -1135,16 +1376,137 @@ void RenderExecutor::ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallIn
 		task_params  = stream.BufferDeviceAddress() + stream.Copy(&params, sizeof(params), 8);
 	}
 
+	// Normalize submesh index byte offsets into firstIndex so submeshes in the same VkBuffer
+	// share a single index-buffer binding at offset 0 and coalesce into Multi-Draw Indirect.
+	uint32_t first_index = 0;
+	const auto prim_type = ucfg.GetPrimType();
+	if (!mesh_active && draw.indexed && args_buffer.first == nullptr &&
+	    prim_type != Prospero::PrimitiveType::kQuadListLegacy &&
+	    index_binding.buffer != nullptr) {
+		const uint32_t elem_size = index_binding.type == vk::IndexType::eUint32 ? 4u : 2u;
+		if ((index_binding.offset % elem_size) == 0) {
+			const uint64_t elem_offset = index_binding.offset / elem_size;
+			if (elem_offset <= UINT32_MAX - draw.index_count) {
+				first_index          = static_cast<uint32_t>(elem_offset);
+				index_binding.offset = 0;
+			}
+		}
+	}
+
+	vk::PipelineStageFlags shader_write_stages = {};
+	for (const auto& stage: vertex_stages) {
+		if (HasShaderBufferWrites(stage.stage)) {
+			shader_write_stages |= ShaderPipelineStages(NativeShaderStage(stage.logical_stage));
+		}
+	}
+	if (state.ps_active && HasShaderBufferWrites(state.ps_input_info.stage)) {
+		shader_write_stages |= vk::PipelineStageFlagBits::eFragmentShader;
+	}
+
+	auto& dynamic_state = m_context.GetCommandScheduler().GetDynamicState();
+	UpdateGraphicsDynamicState(buffer, dynamic_state, vertex_stages.back(), state.depth_info,
+	                           rendering);
+	dynamic_state.SetAttachmentFeedbackLoopAspects(feedback_aspects);
+	const bool dynamic_state_dirty = dynamic_state.HasPendingCommit(m_context.GetGraphics());
+
+	auto&          occlusion_queries = m_context.GetOcclusionQueries();
+	const uint32_t max_mdi_commands  = MaxMdiCommands();
+	const bool     mdi_eligible_shape =
+	    max_mdi_commands > 1u && !mesh_active && !mesh_task && args_buffer.first == nullptr &&
+	    prim_type != Prospero::PrimitiveType::kQuadListLegacy && !shader_write_stages &&
+	    !occlusion_queries.IsOpen() && !graphics_debug_dump_enabled();
+
+	MdiBatchKey batch_key {};
+	bool        can_begin_mdi   = false;
+	bool        can_fast_append = false;
+	if (mdi_eligible_shape) {
+		const uint64_t bindings_hash =
+		    InspectAndHashBindings(m_context, stages, vertex_stages.back(), buffer,
+		                           can_begin_mdi, can_fast_append);
+		if (can_begin_mdi) {
+			const uint32_t object_id =
+			    state.ps_input_info.object_primitive_id ? ucfg.GetObjectId() : 0u;
+			batch_key = {
+			    .pipeline     = static_cast<VkPipeline>(pipeline.pipeline),
+			    .index_buffer = draw.indexed ? static_cast<VkBuffer>(index_binding.buffer) : nullptr,
+			    .index_offset = draw.indexed ? index_binding.offset : 0u,
+			    .index_type   = draw.indexed ? static_cast<VkIndexType>(index_binding.type)
+			                                 : VK_INDEX_TYPE_UINT16,
+			    .topology           = static_cast<uint32_t>(prim_type),
+			    .object_id          = object_id,
+			    .vertex_buffer_hash = HashVertexBuffers(vertex_bindings),
+			    .bindings_hash      = bindings_hash,
+			};
+		}
+	}
+
+	if (can_fast_append && !dynamic_state_dirty && buffer.IsRenderingWith(rendering) &&
+	    (!pipeline.uses_image_heap || !m_context.GetImageHeap().NeedsCommit()) &&
+	    m_mdi_batcher.IsIndexed() == draw.indexed &&
+	    m_mdi_batcher.CanBatch(batch_key, max_mdi_commands)) {
+		if (pipeline.uses_image_heap) {
+			m_context.GetImageHeap().ClearActive();
+		}
+		if (draw.indexed) {
+			m_mdi_batcher.AppendIndexed({
+			    .indexCount    = draw.index_count,
+			    .instanceCount = draw.instance_count,
+			    .firstIndex    = first_index,
+			    .vertexOffset  = emit.vertex_offset,
+			    .firstInstance = emit.first_instance,
+			});
+		} else {
+			m_mdi_batcher.AppendDirect({
+			    .vertexCount   = draw.index_count,
+			    .instanceCount = draw.instance_count,
+			    .firstVertex   = static_cast<uint32_t>(emit.vertex_offset),
+			    .firstInstance = emit.first_instance,
+			});
+		}
+		Common::DebugCounters::Add(Common::DebugCounters::Counter::Draws);
+		Common::DebugCounters::Add(Common::DebugCounters::Counter::DrawInstances,
+		                           draw.instance_count);
+		return;
+	}
+
+	// Flush any pending MDI batch before mutating bound buffers, descriptors, push constants,
+	// or dynamic state for the incoming draw.
+	FlushMdi(buffer);
+
 	// Resource preparation above may synchronously finish and restart the scheduler. From this
 	// point onward, every operation targets the current command buffer and cannot touch guest
 	// memory.
 	auto vk_buffer = buffer.Handle();
-	if (!mesh_active) {
-		CommitVertexBuffers(vk_buffer, vertex_bindings);
+	if (!mesh_active && vertex_bindings.count != 0) {
+		bool same_vb = m_bound_graphics_state.vertex_count >= vertex_bindings.count;
+		for (uint32_t i = 0; same_vb && i < vertex_bindings.count; ++i) {
+			same_vb = m_bound_graphics_state.vertex_buffers[i] == vertex_bindings.buffers[i] &&
+			          m_bound_graphics_state.vertex_offsets[i] == vertex_bindings.offsets[i] &&
+			          m_bound_graphics_state.vertex_sizes[i] == vertex_bindings.sizes[i];
+		}
+		if (!same_vb) {
+			CommitVertexBuffers(vk_buffer, vertex_bindings);
+			for (uint32_t i = 0; i < vertex_bindings.count; ++i) {
+				m_bound_graphics_state.vertex_buffers[i] = vertex_bindings.buffers[i];
+				m_bound_graphics_state.vertex_offsets[i] = vertex_bindings.offsets[i];
+				m_bound_graphics_state.vertex_sizes[i]   = vertex_bindings.sizes[i];
+			}
+			m_bound_graphics_state.vertex_count =
+			    std::max(m_bound_graphics_state.vertex_count, vertex_bindings.count);
+		}
 	}
 	CommitBindings(buffer, vk::PipelineBindPoint::eGraphics, pipeline, stages);
-	if (!mesh_active) {
-		CommitIndexBuffer(vk_buffer, index_binding);
+	if (!mesh_active && index_binding.buffer != nullptr) {
+		if (!m_bound_graphics_state.has_index ||
+		    m_bound_graphics_state.index_buffer != index_binding.buffer ||
+		    m_bound_graphics_state.index_offset != index_binding.offset ||
+		    m_bound_graphics_state.index_type != index_binding.type) {
+			CommitIndexBuffer(vk_buffer, index_binding);
+			m_bound_graphics_state.index_buffer = index_binding.buffer;
+			m_bound_graphics_state.index_offset = index_binding.offset;
+			m_bound_graphics_state.index_type   = index_binding.type;
+			m_bound_graphics_state.has_index    = true;
+		}
 	}
 	using ShaderRecompiler::IR::PushData;
 	const auto draw_dwords =
@@ -1173,36 +1535,50 @@ void RenderExecutor::ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallIn
 		                        buffer.GetRegisters().GetUserClipPlanes().data());
 	}
 
-	auto& dynamic_state = m_context.GetCommandScheduler().GetDynamicState();
-	UpdateGraphicsDynamicState(buffer, dynamic_state, vertex_stages.back(), state.depth_info,
-	                           rendering);
-	dynamic_state.SetAttachmentFeedbackLoopAspects(feedback_aspects);
 	dynamic_state.Commit(m_context.GetGraphics(), vk_buffer);
 
-	vk::PipelineStageFlags shader_write_stages = {};
-	for (const auto& stage: vertex_stages) {
-		if (HasShaderBufferWrites(stage.stage)) {
-			shader_write_stages |= ShaderPipelineStages(NativeShaderStage(stage.logical_stage));
-		}
-	}
-	if (state.ps_active && HasShaderBufferWrites(state.ps_input_info.stage)) {
-		shader_write_stages |= vk::PipelineStageFlagBits::eFragmentShader;
-	}
 	if (shader_write_stages) {
 		// As for dispatches, buffer writes wait for earlier accesses to the memory.
 		buffer.EndRendering();
 		ShaderWriteHazardBarrier(vk_buffer, shader_write_stages);
 	}
 	buffer.BeginRendering(rendering);
-	vk_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.pipeline);
-	auto&         occlusion_queries = m_context.GetOcclusionQueries();
-	const int32_t occlusion_query   = occlusion_queries.Begin(vk_buffer);
+	if (m_bound_graphics_state.pipeline != pipeline.pipeline) {
+		vk_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.pipeline);
+		m_bound_graphics_state.pipeline = pipeline.pipeline;
+	}
+
+	if (can_begin_mdi) {
+		m_mdi_batcher.BeginBatch(batch_key, draw.indexed);
+		if (draw.indexed) {
+			m_mdi_batcher.AppendIndexed({
+			    .indexCount    = draw.index_count,
+			    .instanceCount = draw.instance_count,
+			    .firstIndex    = first_index,
+			    .vertexOffset  = emit.vertex_offset,
+			    .firstInstance = emit.first_instance,
+			});
+		} else {
+			m_mdi_batcher.AppendDirect({
+			    .vertexCount   = draw.index_count,
+			    .instanceCount = draw.instance_count,
+			    .firstVertex   = static_cast<uint32_t>(emit.vertex_offset),
+			    .firstInstance = emit.first_instance,
+			});
+		}
+		Common::DebugCounters::Add(Common::DebugCounters::Counter::Draws);
+		Common::DebugCounters::Add(Common::DebugCounters::Counter::DrawInstances,
+		                           draw.instance_count);
+		return;
+	}
+
+	const int32_t occlusion_query = occlusion_queries.Begin(vk_buffer);
 	if (mesh_task) {
 		vk_buffer.drawMeshTasksEXT(emit.indirect.count, 1, 1);
 	} else if (mesh_active) {
 		vk_buffer.drawMeshTasksEXT(mesh_groups, draw.instance_count, 1);
 	} else if (args_buffer.first == nullptr) {
-		EmitDrawPrimitives(ucfg, vk_buffer, draw, emit);
+		EmitDrawPrimitives(ucfg, vk_buffer, draw, emit, first_index);
 	} else if (draw.indexed) {
 		vk_buffer.drawIndexedIndirect(args_buffer.first->Handle(), args_buffer.second,
 		                              emit.indirect.count, emit.indirect.stride);
@@ -1435,6 +1811,7 @@ bool RenderExecutor::ResolveColorTargets(CommandBuffer& buffer) {
 	if (src_rt.base.addr == 0 || dst_rt.base.addr == 0) {
 		return false;
 	}
+	FlushMdi(buffer);
 
 	RenderColorInfo src {};
 	RenderColorInfo dst {};

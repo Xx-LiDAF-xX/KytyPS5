@@ -549,6 +549,25 @@ void ImageHeap::WriteDescriptors() {
 	m_writes.clear();
 }
 
+bool ImageHeap::NeedsCommit() const noexcept {
+	const auto epoch = Image::heap_epoch.load(std::memory_order_relaxed);
+	for (const auto* view: m_active) {
+		if (view->dirty_begin != view->dirty_end || !view->released.empty() ||
+		    view->layout_epoch != epoch) {
+			return true;
+		}
+		for (const uint32_t index: view->away) {
+			const auto& element = m_elements[index];
+			const auto* image   = ImageOf(element);
+			if (element.refs != 0u && image != nullptr && !image->binding.is_target &&
+			    !image->binding.shader_write && !image->binding.force_general) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 void ImageHeap::Commit(CommandBuffer& buffer, vk::PipelineBindPoint bind_point,
                        vk::PipelineLayout layout) {
 	KYTY_PROFILER_FUNCTION();

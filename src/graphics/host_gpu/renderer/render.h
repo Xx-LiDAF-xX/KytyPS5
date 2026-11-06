@@ -4,6 +4,7 @@
 #include "common/abi.h"
 #include "common/assert.h"
 #include "common/common.h"
+#include "graphics/host_gpu/renderer/mdiBatcher.h"
 #include "graphics/host_gpu/renderer/pipeline/descriptors.h"
 #include "graphics/host_gpu/renderer/pipeline/pipelineCache.h"
 #include "graphics/host_gpu/renderer/renderTarget.h"
@@ -96,6 +97,9 @@ public:
 	KYTY_CLASS_NO_COPY(CommandBuffer);
 
 	[[nodiscard]] bool IsInvalid() const noexcept { return m_buffer == nullptr; }
+	[[nodiscard]] bool IsRenderingWith(const RenderState& state) const noexcept {
+		return m_rendering && m_render_state == state;
+	}
 
 	void BeginRendering(const RenderState& state) const;
 	void EndRendering() const;
@@ -156,6 +160,10 @@ public:
 	[[nodiscard]] TextureBinding ResolveTexture(const ShaderRecompiler::IR::ImageResource&   resource,
 	                                            const ShaderRecompiler::IR::DescriptorValue& value);
 
+	void               FlushMdi(CommandBuffer& buffer);
+	[[nodiscard]] bool HasPendingMdi() const noexcept;
+	void               InvalidateGraphicsState() noexcept;
+
 private:
 	// False, with nothing drawn, when the draw's indirect records need CPU counts.
 	bool DrawIndex(CommandBuffer& buffer, const DrawIndexArgs& args);
@@ -165,6 +173,20 @@ private:
 		std::array<PreparedBindings, 3> vertex;
 		PreparedBindings                pixel;
 	};
+
+	struct BoundGraphicsState {
+		vk::Pipeline                                                  pipeline     = nullptr;
+		vk::Buffer                                                    index_buffer = nullptr;
+		vk::DeviceSize                                                index_offset = 0;
+		vk::IndexType                                                 index_type   = {};
+		bool                                                          has_index    = false;
+		uint32_t                                                      vertex_count = 0;
+		std::array<vk::Buffer, ShaderVertexInputInfo::RES_MAX>        vertex_buffers {};
+		std::array<vk::DeviceSize, ShaderVertexInputInfo::RES_MAX>    vertex_offsets {};
+		std::array<vk::DeviceSize, ShaderVertexInputInfo::RES_MAX>    vertex_sizes {};
+	};
+
+	[[nodiscard]] uint32_t MaxMdiCommands() noexcept;
 
 	void PrepareGraphicsBindings(std::span<PreparedBindings* const> stages,
 	                             std::span<RenderColorInfo> colors);
@@ -203,21 +225,37 @@ private:
 		bool    unclamped    = false;
 	};
 
-	RenderContext&                        m_context;
-	bool                                  m_lod_stats = Config::LodStatsEnabled();
-	GraphicsBindings                     m_graphics_bindings;
-	PreparedBindings                     m_compute_bindings;
-	std::vector<ImageId>                  m_bound_images;
-	std::vector<vk::DescriptorImageInfo>  m_descriptor_images;
-	std::vector<vk::WriteDescriptorSet>   m_descriptor_writes;
-	vk::DescriptorSetLayout               m_pssr_descriptor_layout = nullptr;
-	vk::PipelineLayout                    m_pssr_pipeline_layout   = nullptr;
-	vk::Pipeline                          m_pssr_pipeline          = nullptr;
-	std::array<MipStatsCounter, 256>      m_mip_stats {};
+	RenderContext&                               m_context;
+	bool                                         m_lod_stats = Config::LodStatsEnabled();
+	GraphicsBindings                             m_graphics_bindings;
+	PreparedBindings                             m_compute_bindings;
+	std::vector<ImageId>                         m_bound_images;
+	std::vector<vk::DescriptorImageInfo>         m_descriptor_images;
+	std::vector<vk::WriteDescriptorSet>          m_descriptor_writes;
+	vk::DescriptorSetLayout                      m_pssr_descriptor_layout = nullptr;
+	vk::PipelineLayout                           m_pssr_pipeline_layout   = nullptr;
+	vk::Pipeline                                 m_pssr_pipeline          = nullptr;
+	std::array<MipStatsCounter, 256>             m_mip_stats {};
+	MdiBatcher                                   m_mdi_batcher;
+	std::vector<vk::DrawIndexedIndirectCommand>  m_mdi_indexed_scratch;
+	std::vector<vk::DrawIndirectCommand>         m_mdi_direct_scratch;
+	BoundGraphicsState                           m_bound_graphics_state {};
+	uint32_t                                     m_max_mdi_commands = 0;
 
 	friend class CommandProcessor;
 	friend struct RenderExecutorTestAccess;
 };
+
+inline bool RenderExecutor::HasPendingMdi() const noexcept {
+	return !m_mdi_batcher.IsEmpty();
+}
+
+inline void RenderExecutor::InvalidateGraphicsState() noexcept {
+	m_bound_graphics_state.pipeline     = nullptr;
+	m_bound_graphics_state.index_buffer = nullptr;
+	m_bound_graphics_state.has_index    = false;
+	m_bound_graphics_state.vertex_count = 0;
+}
 
 [[nodiscard]] bool ResolveComputeBufferFill(const ShaderComputeInputInfo& input, uint32_t group_x,
                                             uint32_t group_y, uint32_t group_z, uint32_t mode,

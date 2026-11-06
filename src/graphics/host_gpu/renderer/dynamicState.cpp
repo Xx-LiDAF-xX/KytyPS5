@@ -4,6 +4,25 @@
 
 namespace Libs::Graphics {
 
+bool DynamicState::HasPendingCommit(const GraphicContext& graphics) const noexcept {
+	return dirty_state.viewports || dirty_state.scissors || dirty_state.depth_test_enabled ||
+	       dirty_state.depth_write_enabled || (depth_test_enabled && dirty_state.depth_compare_op) ||
+#if !defined(__APPLE__)
+	       dirty_state.depth_bounds_test_enabled ||
+	       (depth_bounds_test_enabled && dirty_state.depth_bounds) ||
+#endif
+	       dirty_state.depth_bias_enabled || (depth_bias_enabled && dirty_state.depth_bias) ||
+	       dirty_state.stencil_test_enabled ||
+	       (stencil_test_enabled &&
+	        (dirty_state.stencil_front_ops || dirty_state.stencil_back_ops ||
+	         dirty_state.stencil_front_reference || dirty_state.stencil_back_reference ||
+	         dirty_state.stencil_front_write_mask || dirty_state.stencil_back_write_mask ||
+	         dirty_state.stencil_front_compare_mask || dirty_state.stencil_back_compare_mask)) ||
+	       dirty_state.cull_mode || dirty_state.front_face || dirty_state.blend_constants ||
+	       dirty_state.line_width ||
+	       (graphics.attachment_feedback_loop_enabled && dirty_state.feedback_loop_aspects);
+}
+
 void DynamicState::Commit(const GraphicContext& graphics, vk::CommandBuffer cmdbuf) {
 	if (dirty_state.viewports) {
 		dirty_state.viewports = false;

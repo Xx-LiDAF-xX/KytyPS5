@@ -46,6 +46,15 @@ struct PreparedBindings {
 	vk::DescriptorBufferInfo              shader_data_buffer;
 	vk::DescriptorBufferInfo              shared_memory;
 	std::vector<uint32_t>                 shader_data;
+
+	// Per-tick stream upload deduplication so identical SRT/shader_data payloads reuse their
+	// existing StreamBuffer slice and preserve binding identity across MDI batches.
+	uint64_t                 cached_srt_tick = 0;
+	std::vector<uint32_t>    cached_srt_words;
+	vk::DescriptorBufferInfo cached_srt_info;
+	uint64_t                 cached_shader_data_tick = 0;
+	std::vector<uint32_t>    cached_shader_data_words;
+	vk::DescriptorBufferInfo cached_shader_data_info;
 };
 
 [[nodiscard]] vk::DescriptorType
