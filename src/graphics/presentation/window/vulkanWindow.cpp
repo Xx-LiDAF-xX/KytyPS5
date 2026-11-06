@@ -385,8 +385,21 @@ static vk::Device VulkanCreateDevice(GraphicContext&          graphics,
 		return available;
 	};
 	// Optional feature structs stay in the query only with their extension.
+	vk::PhysicalDeviceProperties initial_device_props {};
+	physical_device.getProperties(&initial_device_props);
+#if defined(VK_API_VERSION_1_4)
+	const bool can_use_vulkan_1_4 =
+	    graphics.negotiated_api_version >= VK_API_VERSION_1_4 &&
+	    initial_device_props.apiVersion >= VK_API_VERSION_1_4;
+#else
+	const bool can_use_vulkan_1_4 = false;
+#endif
 	vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan12Features,
-	                   vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceRobustness2FeaturesEXT,
+	                   vk::PhysicalDeviceVulkan13Features,
+#if defined(VK_API_VERSION_1_4)
+	                   vk::PhysicalDeviceVulkan14Features,
+#endif
+	                   vk::PhysicalDeviceRobustness2FeaturesEXT,
 	                   vk::PhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR,
 	                   vk::PhysicalDeviceMeshShaderFeaturesEXT,
 	                   vk::PhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT,
@@ -400,10 +413,19 @@ static vk::Device VulkanCreateDevice(GraphicContext&          graphics,
 	                   vk::PhysicalDeviceGraphicsPipelineLibraryFeaturesEXT,
 	                   vk::PhysicalDeviceDescriptorBufferFeaturesEXT>
 	    supported;
-	auto& [supported2, supported12, supported13, robustness2, workgroup_layout, mesh,
+	auto& [supported2, supported12, supported13,
+#if defined(VK_API_VERSION_1_4)
+	       supported14,
+#endif
+	       robustness2, workgroup_layout, mesh,
 	       feedback_layout, feedback_dynamic, provoking_vertex, maintenance8, shader_clock,
 	       image_atomic_int64, conditional_rendering, barycentric, pipeline_library,
 	       descriptor_buffer] = supported;
+#if defined(VK_API_VERSION_1_4)
+	if (!can_use_vulkan_1_4) {
+		supported.unlink<vk::PhysicalDeviceVulkan14Features>();
+	}
+#endif
 	graphics.memory_budget_ext_enabled = add(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
 	add(VK_EXT_DEPTH_RANGE_UNRESTRICTED_EXTENSION_NAME);
 	const bool extended_dynamic_state = add(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME);
@@ -609,6 +631,24 @@ static vk::Device VulkanCreateDevice(GraphicContext&          graphics,
 	auto features13                = WindowContext::RequiredVulkan13Features();
 	features13.robustImageAccess   = supported13.robustImageAccess;
 	features13.subgroupSizeControl = graphics.compute_subgroup_size_control_enabled;
+#if defined(VK_API_VERSION_1_4)
+	vk::PhysicalDeviceVulkan14Features features14 {};
+	if (can_use_vulkan_1_4) {
+		graphics.vulkan_1_4_enabled                   = true;
+		graphics.maintenance5_enabled                 = supported14.maintenance5 == VK_TRUE;
+		graphics.maintenance6_enabled                 = supported14.maintenance6 == VK_TRUE;
+		graphics.dynamic_rendering_local_read_enabled = supported14.dynamicRenderingLocalRead == VK_TRUE;
+		features14.maintenance5                       = supported14.maintenance5;
+		features14.maintenance6                       = supported14.maintenance6;
+		features14.pushDescriptor                     = supported14.pushDescriptor;
+		features14.dynamicRenderingLocalRead          = supported14.dynamicRenderingLocalRead;
+	}
+	LOGF("Vulkan 1.4 core path: %s (maintenance5=%s maintenance6=%s localRead=%s)\n",
+	     graphics.vulkan_1_4_enabled ? "enabled" : "fallback-1.3",
+	     graphics.maintenance5_enabled ? "true" : "false",
+	     graphics.maintenance6_enabled ? "true" : "false",
+	     graphics.dynamic_rendering_local_read_enabled ? "true" : "false");
+#endif
 
 	LOGF("Vulkan robustness: robustImageAccess=%s robustImageAccess2=%s buffer bounds=%s\n",
 	     features13.robustImageAccess == VK_TRUE ? "true" : "false",
@@ -628,7 +668,11 @@ static vk::Device VulkanCreateDevice(GraphicContext&          graphics,
 	image_atomic_int64.sparseImageInt64Atomics                 = VK_FALSE;
 	// Robustness2 enables what the device has; selection requires nullDescriptor.
 	vk::StructureChain create {
-	    create_info, WindowContext::RequiredVulkan11Features(), features12, features13, robustness2,
+	    create_info, WindowContext::RequiredVulkan11Features(), features12, features13,
+#if defined(VK_API_VERSION_1_4)
+	    features14,
+#endif
+	    robustness2,
 	    vk::PhysicalDeviceDepthClipControlFeaturesEXT {.depthClipControl = VK_TRUE},
 	    vk::PhysicalDeviceImageViewMinLodFeaturesEXT {.minLod = VK_TRUE},
 	    vk::PhysicalDeviceDepthClipEnableFeaturesEXT {.depthClipEnable = VK_TRUE},
@@ -680,6 +724,11 @@ static vk::Device VulkanCreateDevice(GraphicContext&          graphics,
 	if (!graphics.graphics_pipeline_library_enabled) {
 		create.unlink<vk::PhysicalDeviceGraphicsPipelineLibraryFeaturesEXT>();
 	}
+#if defined(VK_API_VERSION_1_4)
+	if (!graphics.vulkan_1_4_enabled) {
+		create.unlink<vk::PhysicalDeviceVulkan14Features>();
+	}
+#endif
 
 	vk::Device device = nullptr;
 	auto       result = physical_device.createDevice(&create.get(), nullptr, &device);
@@ -890,6 +939,7 @@ void WindowContext::CreateVulkan() {
 	VulkanGetExtensions(r);
 	Vr::OpenXrAppendExtensions(r.required_extensions, r.available_extensions, false);
 	const uint32_t negotiated_api_version = VulkanCheckInstanceVersion();
+	graphic_ctx.negotiated_api_version    = negotiated_api_version;
 
 	const vk::ApplicationInfo app_info {.pApplicationName   = "Kyty",
 	                                    .applicationVersion = 1,

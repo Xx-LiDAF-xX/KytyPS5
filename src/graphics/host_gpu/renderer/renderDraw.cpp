@@ -942,23 +942,30 @@ static void LogDrawStateIfNeeded(const CommandBuffer& buffer, const DrawCallInfo
 	                  draw.index_count, index_addr);
 }
 
-[[nodiscard]] static uint64_t Mix64(uint64_t h, uint64_t k) noexcept {
-	k ^= k >> 33u;
-	k *= 0xff51afd7ed558ccdULL;
-	k ^= k >> 33u;
-	k *= 0xc4ceb9fe1a85ec53ULL;
-	k ^= k >> 33u;
-	h ^= k;
-	h = (h << 27u) | (h >> 37u);
-	return h * 5ULL + 0x52dce729ULL;
+static void Mix128(MdiHash128& h, uint64_t k) noexcept {
+	uint64_t a = k ^ (k >> 33u);
+	a *= 0xff51afd7ed558ccdULL;
+	a ^= a >> 33u;
+	a *= 0xc4ceb9fe1a85ec53ULL;
+	a ^= a >> 33u;
+	h.lo ^= a;
+	h.lo = ((h.lo << 27u) | (h.lo >> 37u)) * 5ULL + 0x52dce729ULL;
+
+	uint64_t b = (k + 0x9e3779b97f4a7c15ULL) ^ (h.lo >> 29u);
+	b = (b ^ (b >> 30u)) * 0xbf58476d1ce4e5b9ULL;
+	b = (b ^ (b >> 27u)) * 0x94d049bb133111ebULL;
+	b ^= b >> 31u;
+	h.hi ^= b;
+	h.hi = ((h.hi << 31u) | (h.hi >> 33u)) * 5ULL + 0x38495ab5ULL;
 }
 
-[[nodiscard]] static uint64_t HashVertexBuffers(const PreparedVertexBuffers& vb) noexcept {
-	uint64_t hash = Mix64(0x9e3779b97f4a7c15ULL, vb.count);
+[[nodiscard]] static MdiHash128 HashVertexBuffers(const PreparedVertexBuffers& vb) noexcept {
+	MdiHash128 hash {0x9e3779b97f4a7c15ULL, 0x6a09e667f3bcc908ULL};
+	Mix128(hash, vb.count);
 	for (uint32_t i = 0; i < vb.count; ++i) {
-		hash = Mix64(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(vb.buffers[i])));
-		hash = Mix64(hash, vb.offsets[i]);
-		hash = Mix64(hash, vb.sizes[i]);
+		Mix128(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(vb.buffers[i])));
+		Mix128(hash, vb.offsets[i]);
+		Mix128(hash, vb.sizes[i]);
 	}
 	return hash;
 }
@@ -988,12 +995,13 @@ static void LogDrawStateIfNeeded(const CommandBuffer& buffer, const DrawCallInfo
 	return true;
 }
 
-[[nodiscard]] static uint64_t InspectAndHashBindings(
+[[nodiscard]] static MdiHash128 InspectAndHashBindings(
     RenderContext& context, std::span<PreparedBindings* const> stages,
     const ShaderVertexInputInfo& last_vs_stage, const CommandBuffer& buffer,
     bool& out_can_begin_mdi, bool& out_can_fast_append) noexcept {
 	using BindingKind = ShaderRecompiler::IR::DescriptorBindingKind;
-	uint64_t hash     = Mix64(0x517cc1b727220a95ULL, stages.size());
+	MdiHash128 hash {0x517cc1b727220a95ULL, 0xbb67ae8584caa73bULL};
+	Mix128(hash, stages.size());
 	out_can_begin_mdi   = true;
 	out_can_fast_append = true;
 
@@ -1002,25 +1010,25 @@ static void LogDrawStateIfNeeded(const CommandBuffer& buffer, const DrawCallInfo
 
 	for (const auto* prepared: stages) {
 		const auto& program = prepared->runtime->module->info;
-		hash = Mix64(hash, program.shader_hash);
-		hash = Mix64(hash, program.bindings.descriptor_mask);
+		Mix128(hash, program.shader_hash);
+		Mix128(hash, program.bindings.descriptor_mask);
 
 		if (prepared->gds.buffer != nullptr) {
 			out_can_begin_mdi   = false;
 			out_can_fast_append = false;
 		}
 
-		hash = Mix64(hash, prepared->buffers.size());
+		Mix128(hash, prepared->buffers.size());
 		for (const auto& buf: prepared->buffers) {
-			hash = Mix64(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(buf.buffer)));
-			hash = Mix64(hash, buf.offset);
-			hash = Mix64(hash, buf.range);
+			Mix128(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(buf.buffer)));
+			Mix128(hash, buf.offset);
+			Mix128(hash, buf.range);
 		}
 
 		const auto mix_buf_info = [&](const vk::DescriptorBufferInfo& info) {
-			hash = Mix64(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(info.buffer)));
-			hash = Mix64(hash, info.offset);
-			hash = Mix64(hash, info.range);
+			Mix128(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(info.buffer)));
+			Mix128(hash, info.offset);
+			Mix128(hash, info.range);
 		};
 		mix_buf_info(prepared->flattened_srt);
 		mix_buf_info(prepared->shader_data_buffer);
@@ -1028,41 +1036,41 @@ static void LogDrawStateIfNeeded(const CommandBuffer& buffer, const DrawCallInfo
 
 		if (program.bindings.descriptor_counts[static_cast<size_t>(BindingKind::BdaPagetable)] != 0) {
 			const auto* bda = buffer_cache.GetBdaPageTableBuffer();
-			hash = Mix64(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(bda->Handle())));
-			hash = Mix64(hash, bda->Size());
+			Mix128(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(bda->Handle())));
+			Mix128(hash, bda->Size());
 		}
 		if (program.bindings.descriptor_counts[static_cast<size_t>(BindingKind::FaultBuffer)] != 0) {
 			const auto* fault = buffer_cache.GetFaultBuffer();
-			hash = Mix64(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(fault->Handle())));
-			hash = Mix64(hash, fault->Size());
+			Mix128(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(fault->Handle())));
+			Mix128(hash, fault->Size());
 		}
 
 		const auto& sdata = prepared->shader_data;
-		hash              = Mix64(hash, sdata.size());
-		size_t d          = 0;
+		Mix128(hash, sdata.size());
+		size_t d = 0;
 		for (; d + 1 < sdata.size(); d += 2) {
-			hash = Mix64(hash, uint64_t {sdata[d]} | (uint64_t {sdata[d + 1]} << 32u));
+			Mix128(hash, uint64_t {sdata[d]} | (uint64_t {sdata[d + 1]} << 32u));
 		}
 		if (d < sdata.size()) {
-			hash = Mix64(hash, sdata[d]);
+			Mix128(hash, sdata[d]);
 		}
 
-		hash = Mix64(hash, prepared->samplers.size());
+		Mix128(hash, prepared->samplers.size());
 		for (const auto sampler: prepared->samplers) {
-			hash = Mix64(hash, reinterpret_cast<uintptr_t>(static_cast<VkSampler>(sampler)));
+			Mix128(hash, reinterpret_cast<uintptr_t>(static_cast<VkSampler>(sampler)));
 		}
 
-		hash = Mix64(hash, program.info.images.size());
+		Mix128(hash, program.info.images.size());
 		for (uint32_t i = 0; i < program.info.images.size(); ++i) {
 			if (program.info.images[i].heap) {
 				continue;
 			}
 			const auto& tex = prepared->images[i];
-			hash = Mix64(hash, tex.image_id.index);
-			hash = Mix64(hash, reinterpret_cast<uintptr_t>(static_cast<VkImageView>(tex.image_view)));
-			hash = Mix64(hash, tex.mip_views.size());
+			Mix128(hash, tex.image_id.index);
+			Mix128(hash, reinterpret_cast<uintptr_t>(static_cast<VkImageView>(tex.image_view)));
+			Mix128(hash, tex.mip_views.size());
 			for (const auto mv: tex.mip_views) {
-				hash = Mix64(hash, reinterpret_cast<uintptr_t>(static_cast<VkImageView>(mv)));
+				Mix128(hash, reinterpret_cast<uintptr_t>(static_cast<VkImageView>(mv)));
 			}
 			if (!tex.image_id) {
 				continue;
@@ -1084,7 +1092,7 @@ static void LogDrawStateIfNeeded(const CommandBuffer& buffer, const DrawCallInfo
 	}
 
 	const auto planes = last_vs_stage.user_clip_planes;
-	hash              = Mix64(hash, planes);
+	Mix128(hash, planes);
 	if (planes != 0) {
 		const auto&    clip_data = buffer.GetRegisters().GetUserClipPlanes();
 		const uint32_t dword_cnt = std::bit_width(planes) * 4u;
@@ -1092,7 +1100,7 @@ static void LogDrawStateIfNeeded(const CommandBuffer& buffer, const DrawCallInfo
 		for (uint32_t d = 0; d < dword_cnt; d += 2) {
 			uint64_t qword = 0;
 			std::memcpy(&qword, bytes + static_cast<size_t>(d) * sizeof(uint32_t), sizeof(uint64_t));
-			hash = Mix64(hash, qword);
+			Mix128(hash, qword);
 		}
 	}
 
@@ -1442,7 +1450,7 @@ void RenderExecutor::ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallIn
 	bool        can_begin_mdi   = false;
 	bool        can_fast_append = false;
 	if (mdi_eligible_shape) {
-		const uint64_t bindings_hash =
+		const MdiHash128 bindings_hash =
 		    InspectAndHashBindings(m_context, stages, vertex_stages.back(), buffer,
 		                           can_begin_mdi, can_fast_append);
 		if (can_begin_mdi) {

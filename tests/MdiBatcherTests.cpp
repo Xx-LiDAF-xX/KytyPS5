@@ -29,8 +29,8 @@ void TestBatchAccumulationAndFlushing() {
 	    .index_type         = VK_INDEX_TYPE_UINT16,
 	    .topology           = 4,
 	    .object_id          = 1,
-	    .vertex_buffer_hash = 0x1234,
-	    .bindings_hash      = 0x5678,
+	    .vertex_buffer_hash = {0x1234ULL, 0x5678ULL},
+	    .bindings_hash      = {0x9abcULL, 0xdef0ULL},
 	};
 
 	CHECK(batcher.CanBatch(key1) == false);
@@ -69,10 +69,14 @@ void TestBatchAccumulationAndFlushing() {
 	key3.index_buffer = reinterpret_cast<VkBuffer>(0x3000);
 	CHECK(batcher.CanBatch(key3) == false);
 
-	// Incompatible key (different bindings)
-	MdiBatchKey key4   = key1;
-	key4.bindings_hash = 0x9999;
+	// Incompatible key (different bindings lo or hi lane)
+	MdiBatchKey key4      = key1;
+	key4.bindings_hash.lo = 0x9999ULL;
 	CHECK(batcher.CanBatch(key4) == false);
+
+	MdiBatchKey key5      = key1;
+	key5.bindings_hash.hi ^= 1ULL;
+	CHECK(batcher.CanBatch(key5) == false);
 
 	const auto commands = batcher.GetIndexedCommands();
 	CHECK(commands.size() == 2);
@@ -92,8 +96,8 @@ void TestDirectNonIndexedBatching() {
 	    .index_buffer       = nullptr,
 	    .topology           = 4,
 	    .object_id          = 2,
-	    .vertex_buffer_hash = 0xaaaa,
-	    .bindings_hash      = 0xbbbb,
+	    .vertex_buffer_hash = {0xaaaaULL, 0x1111ULL},
+	    .bindings_hash      = {0xbbbbULL, 0x2222ULL},
 	};
 
 	batcher.BeginBatch(key, /*indexed=*/false);
@@ -121,8 +125,8 @@ void TestHardwareVariableBatchCapAndTakeBatch() {
 	    .index_type         = VK_INDEX_TYPE_UINT32,
 	    .topology           = 4,
 	    .object_id          = 0,
-	    .vertex_buffer_hash = 0x1111,
-	    .bindings_hash      = 0x2222,
+	    .vertex_buffer_hash = {0x1111ULL, 0x3333ULL},
+	    .bindings_hash      = {0x2222ULL, 0x4444ULL},
 	};
 
 	batcher.BeginBatch(key, /*indexed=*/true);
@@ -283,13 +287,13 @@ void TestStreamSliceCacheWraparoundInvalidation() {
 }
 
 void TestReleaseMemInterruptFlushPolicy() {
-	// Reproduces Important #5: when a guest Equeue listener is registered, ANY ReleaseMem
-	// interrupt selector (including selector 2 = kAfterWriteConfirm) that queues a
-	// DeferPriorityOperation must mark the CommandProcessor for flush so m_submitted_tick advances.
+	// Explicit interrupt sync selectors (1 = kOnly, 4 = kSendIntCtx) flush immediately when a
+	// listener exists, whereas selector 2 (kAfterWriteConfirm) stays batched across PM4 slices
+	// until MaxDrawsInBatch(), queue drain (m_submission_count == 0), block, or queue switch.
 	CHECK(!ShouldFlushReleaseMemInterrupt(/*has_listener=*/false, /*selector=*/1));
 	CHECK(!ShouldFlushReleaseMemInterrupt(/*has_listener=*/false, /*selector=*/2));
 	CHECK(ShouldFlushReleaseMemInterrupt(/*has_listener=*/true, /*selector=*/1));
-	CHECK(ShouldFlushReleaseMemInterrupt(/*has_listener=*/true, /*selector=*/2));
+	CHECK(!ShouldFlushReleaseMemInterrupt(/*has_listener=*/true, /*selector=*/2));
 	CHECK(ShouldFlushReleaseMemInterrupt(/*has_listener=*/true, /*selector=*/4));
 }
 } // namespace

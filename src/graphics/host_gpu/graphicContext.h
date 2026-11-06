@@ -32,6 +32,11 @@ struct GraphicContext {
 	bool                               shader_image_int64_atomics_enabled    = false;
 	bool                               attachment_feedback_loop_enabled      = false;
 	bool                               provoking_vertex_last_enabled         = false;
+	uint32_t                           negotiated_api_version                = VULKAN_TARGET_API_VERSION;
+	bool                               vulkan_1_4_enabled                    = false;
+	bool                               maintenance5_enabled                  = false;
+	bool                               maintenance6_enabled                  = false;
+	bool                               dynamic_rendering_local_read_enabled  = false;
 	bool                               maintenance8_enabled                  = false;
 	bool                               robust_buffer_access_enabled          = false;
 	bool                               r8_srgb_views                         = false;

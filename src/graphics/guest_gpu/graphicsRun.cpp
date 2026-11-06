@@ -1116,6 +1116,8 @@ void CommandProcessor::Flip(int handle, int index, int flip_mode, int64_t flip_a
 	if (graphics_debug_dump_enabled()) {
 		LOGF("CommandProcessor::Flip()\n");
 	}
+	m_needs_flush    = false;
+	m_draws_in_batch = 0;
 	auto& command = CurrentBuffer();
 	m_renderer.GetRenderExecutor().FlushMdi(command);
 	m_renderer.GetOcclusionQueries().Publish(true);
@@ -1126,6 +1128,8 @@ void CommandProcessor::Flip(int handle, int index, int flip_mode, int64_t flip_a
 }
 
 void CommandProcessor::PrepareCpuFlip(uint64_t request_id) {
+	m_needs_flush    = false;
+	m_draws_in_batch = 0;
 	auto& command = CurrentBuffer();
 	m_renderer.GetRenderExecutor().FlushMdi(command);
 	m_renderer.GetVideoOut().PrepareFlip(request_id, command);

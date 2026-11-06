@@ -12,6 +12,13 @@
 
 namespace Libs::Graphics {
 
+struct MdiHash128 {
+	uint64_t lo = 0;
+	uint64_t hi = 0;
+
+	[[nodiscard]] bool operator==(const MdiHash128& other) const noexcept = default;
+};
+
 struct MdiBatchKey {
 	VkPipeline  pipeline           = nullptr;
 	VkBuffer    index_buffer       = nullptr;
@@ -19,8 +26,8 @@ struct MdiBatchKey {
 	VkIndexType index_type         = {};
 	uint32_t    topology           = 0;
 	uint32_t    object_id          = 0;
-	uint64_t    vertex_buffer_hash = 0;
-	uint64_t    bindings_hash      = 0;
+	MdiHash128  vertex_buffer_hash = {};
+	MdiHash128  bindings_hash      = {};
 
 	[[nodiscard]] bool operator==(const MdiBatchKey& other) const noexcept = default;
 };
@@ -124,10 +131,13 @@ inline void ResolveStageStreamUploads(vk::Buffer stream_handle, bool need_srt,
 	}
 }
 
+// Selector 2 (kAfterWriteConfirm) is emitted after tiny (~3-draw) bundles in games like GYLT;
+// keeping m_needs_flush false for selector 2 lets consecutive PM4 slices coalesce into MDI
+// batches up to MaxDrawsInBatch(), while GuestGpu::ThreadRun still flushes immediately whenever
+// the queue drains (m_submission_count == 0), blocks (!complete), or switches queues.
 [[nodiscard]] constexpr bool ShouldFlushReleaseMemInterrupt(bool     has_listener,
                                                             uint32_t interrupt_selector) noexcept {
-	(void)interrupt_selector;
-	return has_listener;
+	return has_listener && (interrupt_selector == 1u || interrupt_selector == 4u);
 }
 
 class MdiBatcher {
