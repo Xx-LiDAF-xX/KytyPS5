@@ -499,7 +499,7 @@ void GuestGpu::ThreadRun(void* data) {
 
 			needs_flush = !complete ||
 			              gpu->GetProcessor(submission.queue_id).NeedsFlush() ||
-			              gpu->m_renderer.GetCommandScheduler().HasUnsubmittedPriorityOperations();
+			              (gpu->m_submission_count == 0);
 			if (!needs_flush) {
 				for (uint32_t offset = 0; offset < QueueCount; offset++) {
 					const auto id = (gpu->m_next_queue + offset) % QueueCount;
@@ -987,7 +987,9 @@ void CommandProcessor::ReleaseMem(uint32_t data_sel, uint32_t interrupt_selector
 		    [&renderer = m_renderer, event_id = m_interrupt_event_id, interrupt_context_id] {
 			    renderer.TriggerInterrupt(event_id, interrupt_context_id);
 		    });
-		m_needs_flush = true;
+		if (interrupt_selector == 1 || interrupt_selector == 4) {
+			m_needs_flush = true;
+		}
 	}
 }
 
