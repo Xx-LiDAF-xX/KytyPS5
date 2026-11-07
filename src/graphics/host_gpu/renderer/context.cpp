@@ -22,6 +22,7 @@ CommandBuffer::CommandBuffer(CommandScheduler& scheduler)
 void CommandBuffer::Begin() {
 	EXIT_IF(m_rendering || IsInvalid());
 	m_bound_graphics_state.Reset();
+	ResetDynamicEpochCache();
 	m_mdi_batcher.Reset();
 	m_context.GetRenderExecutor().InvalidateRenderTargetCache();
 	auto buffer = Handle();
@@ -40,6 +41,7 @@ void CommandBuffer::End() const {
 	}
 	EndRendering();
 	m_bound_graphics_state.Reset();
+	ResetDynamicEpochCache();
 	auto buffer = Handle();
 
 	auto result = buffer.end();

@@ -6,8 +6,15 @@
 #include "graphics/guest_gpu/gpu_defs.h"
 
 #include <array>
+#include <atomic>
+#include <cstdint>
 
 namespace Libs::Graphics::HW {
+
+inline uint64_t NextContextEpoch() noexcept {
+	static std::atomic<uint64_t> s_epoch {1};
+	return s_epoch.fetch_add(1, std::memory_order_relaxed);
+}
 
 struct ColorBase {
 	uint64_t addr = 0;
@@ -585,37 +592,74 @@ public:
 
 	KYTY_CLASS_DEFAULT_COPY(Context);
 
-	void Reset() { *this = Context(); }
+	void Reset() {
+		*this             = Context();
+		m_rt_epoch        = NextContextEpoch();
+		m_pipeline_epoch  = NextContextEpoch();
+		m_dynamic_epoch   = NextContextEpoch();
+		m_sh_static_epoch = NextContextEpoch();
+	}
 
-	void SetColorBase(uint32_t slot, const ColorBase& base) { m_render_targets[slot].base = base; }
-	void SetColorView(uint32_t slot, const ColorView& view) { m_render_targets[slot].view = view; }
-	void SetColorInfo(uint32_t slot, const ColorInfo& info) { m_render_targets[slot].info = info; }
+	[[nodiscard]] uint64_t RtEpoch() const noexcept { return m_rt_epoch; }
+	[[nodiscard]] uint64_t PipelineEpoch() const noexcept { return m_pipeline_epoch; }
+	[[nodiscard]] uint64_t DynamicEpoch() const noexcept { return m_dynamic_epoch; }
+	[[nodiscard]] uint64_t ShStaticEpoch() const noexcept { return m_sh_static_epoch; }
+
+	void BumpRt() noexcept { m_rt_epoch = NextContextEpoch(); }
+	void BumpPipeline() noexcept { m_pipeline_epoch = NextContextEpoch(); }
+	void BumpDynamic() noexcept { m_dynamic_epoch = NextContextEpoch(); }
+	void BumpShStatic() noexcept { m_sh_static_epoch = NextContextEpoch(); }
+
+	void SetColorBase(uint32_t slot, const ColorBase& base) {
+		m_render_targets[slot].base = base;
+		BumpRt();
+		BumpShStatic();
+	}
+	void SetColorView(uint32_t slot, const ColorView& view) {
+		m_render_targets[slot].view = view;
+		BumpRt();
+	}
+	void SetColorInfo(uint32_t slot, const ColorInfo& info) {
+		m_render_targets[slot].info = info;
+		BumpRt();
+		BumpPipeline();
+		BumpShStatic();
+	}
 	void SetColorAttrib(uint32_t slot, const ColorAttrib& attrib) {
 		m_render_targets[slot].attrib = attrib;
+		BumpRt();
 	}
 	void SetColorAttrib2(uint32_t slot, const ColorAttrib2& attrib2) {
 		m_render_targets[slot].attrib2 = attrib2;
+		BumpRt();
 	}
 	void SetColorAttrib3(uint32_t slot, const ColorAttrib3& attrib3) {
 		m_render_targets[slot].attrib3 = attrib3;
+		BumpRt();
 	}
 	void SetColorDccControl(uint32_t slot, const ColorDccControl& dcc) {
 		m_render_targets[slot].dcc = dcc;
+		BumpRt();
 	}
 	void SetColorCmask(uint32_t slot, const ColorCmask& cmask) {
 		m_render_targets[slot].cmask = cmask;
+		BumpRt();
 	}
 	void SetColorFmask(uint32_t slot, const ColorFmask& fmask) {
 		m_render_targets[slot].fmask = fmask;
+		BumpRt();
 	}
 	void SetColorClearWord0(uint32_t slot, const ColorClearWord0& clear_word0) {
 		m_render_targets[slot].clear_word0 = clear_word0;
+		BumpRt();
 	}
 	void SetColorClearWord1(uint32_t slot, const ColorClearWord1& clear_word1) {
 		m_render_targets[slot].clear_word1 = clear_word1;
+		BumpRt();
 	}
 	void SetColorDccAddr(uint32_t slot, const ColorDccAddr& dcc_addr) {
 		m_render_targets[slot].dcc_addr = dcc_addr;
+		BumpRt();
 	}
 	[[nodiscard]] const RenderTarget& GetRenderTarget(uint32_t slot) const {
 		return m_render_targets[slot];
@@ -623,46 +667,87 @@ public:
 
 	void SetBlendControl(uint32_t slot, const BlendControl& control) {
 		m_blend_control[slot] = control;
+		BumpPipeline();
+		if (slot == 0) {
+			BumpShStatic();
+		}
 	}
 	[[nodiscard]] const BlendControl& GetBlendControl(uint32_t slot) const {
 		return m_blend_control[slot];
 	}
 
-	void                   SetRenderTargetMask(uint32_t mask) { m_render_target_mask = mask; }
+	void SetRenderTargetMask(uint32_t mask) {
+		m_render_target_mask = mask;
+		BumpRt();
+		BumpPipeline();
+		BumpShStatic();
+	}
 	[[nodiscard]] uint32_t GetRenderTargetMask() const { return m_render_target_mask; }
 	[[nodiscard]] bool HasObjectPrimitiveIdOutput() const {
 		return (m_sh_regs.m_vgtDrawPayloadCntl & 1u) != 0 &&
 		       (m_render_target_mask & 0xf0000000u) != 0;
 	}
 
-	void                   SetShaderStages(uint32_t flags) { m_shader_stages = flags; }
+	void SetShaderStages(uint32_t flags) {
+		m_shader_stages = flags;
+		BumpPipeline();
+		BumpShStatic();
+	}
 	[[nodiscard]] uint32_t GetShaderStages() const { return m_shader_stages; }
 
-	void SetDepthRenderTarget(const DepthRenderTarget& target) { m_depth_render_target = target; }
+	void SetDepthRenderTarget(const DepthRenderTarget& target) {
+		m_depth_render_target = target;
+		BumpRt();
+	}
 	[[nodiscard]] const DepthRenderTarget& GetDepthRenderTarget() const {
 		return m_depth_render_target;
 	}
-	void SetDepthZInfo(const DepthZInfo& info) { m_depth_render_target.z_info = info; }
+	void SetDepthZInfo(const DepthZInfo& info) {
+		m_depth_render_target.z_info = info;
+		BumpRt();
+	}
 	void SetDepthStencilInfo(const DepthStencilInfo& info) {
 		m_depth_render_target.stencil_info = info;
+		BumpRt();
 	}
-	void SetDepthZReadBase(uint64_t addr) { m_depth_render_target.z_read_base_addr = addr; }
+	void SetDepthZReadBase(uint64_t addr) {
+		m_depth_render_target.z_read_base_addr = addr;
+		BumpRt();
+	}
 	void SetDepthStencilReadBase(uint64_t addr) {
 		m_depth_render_target.stencil_read_base_addr = addr;
+		BumpRt();
 	}
-	void SetDepthZWriteBase(uint64_t addr) { m_depth_render_target.z_write_base_addr = addr; }
+	void SetDepthZWriteBase(uint64_t addr) {
+		m_depth_render_target.z_write_base_addr = addr;
+		BumpRt();
+	}
 	void SetDepthStencilWriteBase(uint64_t addr) {
 		m_depth_render_target.stencil_write_base_addr = addr;
+		BumpRt();
 	}
-	void SetDepthHTileDataBase(uint64_t addr) { m_depth_render_target.htile_data_base_addr = addr; }
-	void SetDepthDepthView(const DepthDepthView& view) { m_depth_render_target.depth_view = view; }
-	void SetDepthDepthSizeXY(const DepthDepthSizeXY& size) { m_depth_render_target.size = size; }
+	void SetDepthHTileDataBase(uint64_t addr) {
+		m_depth_render_target.htile_data_base_addr = addr;
+		BumpRt();
+	}
+	void SetDepthDepthView(const DepthDepthView& view) {
+		m_depth_render_target.depth_view = view;
+		BumpRt();
+	}
+	void SetDepthDepthSizeXY(const DepthDepthSizeXY& size) {
+		m_depth_render_target.size = size;
+		BumpRt();
+	}
 
 	void SetViewportZMin(uint32_t viewport_id, float zmin) {
 		m_screen_viewport.viewports[viewport_id].zmin = zmin;
+		BumpDynamic();
+		if (viewport_id == 0) BumpShStatic();
 	}
 	void SetViewportZMax(uint32_t viewport_id, float zmax) {
 		m_screen_viewport.viewports[viewport_id].zmax = zmax;
+		BumpDynamic();
+		if (viewport_id == 0) BumpShStatic();
 	}
 	void SetViewportScaleOffset(uint32_t viewport_id, float xscale, float xoffset, float yscale,
 	                            float yoffset, float zscale, float zoffset) {
@@ -672,43 +757,63 @@ public:
 		m_screen_viewport.viewports[viewport_id].yoffset = yoffset;
 		m_screen_viewport.viewports[viewport_id].zscale  = zscale;
 		m_screen_viewport.viewports[viewport_id].zoffset = zoffset;
+		BumpDynamic();
+		if (viewport_id == 0) BumpShStatic();
 	}
 	void SetViewportXScale(uint32_t viewport_id, float xscale) {
 		m_screen_viewport.viewports[viewport_id].xscale = xscale;
+		BumpDynamic();
+		if (viewport_id == 0) BumpShStatic();
 	}
 	void SetViewportXOffset(uint32_t viewport_id, float xoffset) {
 		m_screen_viewport.viewports[viewport_id].xoffset = xoffset;
+		BumpDynamic();
+		if (viewport_id == 0) BumpShStatic();
 	}
 	void SetViewportYScale(uint32_t viewport_id, float yscale) {
 		m_screen_viewport.viewports[viewport_id].yscale = yscale;
+		BumpDynamic();
+		if (viewport_id == 0) BumpShStatic();
 	}
 	void SetViewportYOffset(uint32_t viewport_id, float yoffset) {
 		m_screen_viewport.viewports[viewport_id].yoffset = yoffset;
+		BumpDynamic();
+		if (viewport_id == 0) BumpShStatic();
 	}
 	void SetViewportZScale(uint32_t viewport_id, float zscale) {
 		m_screen_viewport.viewports[viewport_id].zscale = zscale;
+		BumpDynamic();
+		if (viewport_id == 0) BumpShStatic();
 	}
 	void SetViewportZOffset(uint32_t viewport_id, float zoffset) {
 		m_screen_viewport.viewports[viewport_id].zoffset = zoffset;
+		BumpDynamic();
+		if (viewport_id == 0) BumpShStatic();
 	}
 	void SetViewportScissorTL(uint32_t viewport_id, int left, int top, bool window_offset_enable) {
 		m_screen_viewport.viewports[viewport_id].viewport_scissor_left = left;
 		m_screen_viewport.viewports[viewport_id].viewport_scissor_top  = top;
 		m_screen_viewport.viewports[viewport_id].viewport_scissor_window_offset_enable =
 		    window_offset_enable;
+		BumpDynamic();
+		if (viewport_id == 0) BumpShStatic();
 	}
 	void SetViewportScissorBR(uint32_t viewport_id, int right, int bottom) {
 		m_screen_viewport.viewports[viewport_id].viewport_scissor_right  = right;
 		m_screen_viewport.viewports[viewport_id].viewport_scissor_bottom = bottom;
+		BumpDynamic();
+		if (viewport_id == 0) BumpShStatic();
 	}
 	void SetViewportTransformControl(uint32_t control) {
 		m_screen_viewport.transform_control = control;
+		BumpDynamic();
 	}
 	void SetScreenScissor(int left, int top, int right, int bottom) {
 		m_screen_viewport.screen_scissor_left   = left;
 		m_screen_viewport.screen_scissor_top    = top;
 		m_screen_viewport.screen_scissor_right  = right;
 		m_screen_viewport.screen_scissor_bottom = bottom;
+		BumpDynamic();
 	}
 	void SetWindowScissor(int left, int top, int right, int bottom, bool window_offset_enable) {
 		m_screen_viewport.window_scissor_left                 = left;
@@ -716,6 +821,7 @@ public:
 		m_screen_viewport.window_scissor_right                = right;
 		m_screen_viewport.window_scissor_bottom               = bottom;
 		m_screen_viewport.window_scissor_window_offset_enable = window_offset_enable;
+		BumpDynamic();
 	}
 	void SetGenericScissor(int left, int top, int right, int bottom, bool window_offset_enable) {
 		m_screen_viewport.generic_scissor_left                 = left;
@@ -723,113 +829,242 @@ public:
 		m_screen_viewport.generic_scissor_right                = right;
 		m_screen_viewport.generic_scissor_bottom               = bottom;
 		m_screen_viewport.generic_scissor_window_offset_enable = window_offset_enable;
+		BumpDynamic();
 	}
 	void SetWindowOffset(int offset_x, int offset_y) {
 		m_screen_viewport.window_offset_x = offset_x;
 		m_screen_viewport.window_offset_y = offset_y;
+		BumpDynamic();
 	}
 	void SetHardwareScreenOffset(uint32_t offset_x, uint32_t offset_y) {
 		m_screen_viewport.hw_offset_x = offset_x;
 		m_screen_viewport.hw_offset_y = offset_y;
+		BumpDynamic();
 	}
 	void SetGuardBands(float horz_clip, float vert_clip, float horz_discard, float vert_discard) {
 		m_screen_viewport.guard_band_horz_clip    = horz_clip;
 		m_screen_viewport.guard_band_vert_clip    = vert_clip;
 		m_screen_viewport.guard_band_horz_discard = horz_discard;
 		m_screen_viewport.guard_band_vert_discard = vert_discard;
+		BumpDynamic();
 	}
-	void SetClipRectRule(uint16_t rule) { m_screen_viewport.clip_rect_rule = rule; }
+	void SetClipRectRule(uint16_t rule) {
+		m_screen_viewport.clip_rect_rule = rule;
+		BumpDynamic();
+	}
 	void SetClipRectTL(uint32_t rect_id, int left, int top, bool window_offset_enable) {
 		m_screen_viewport.clip_rect_left[rect_id]                 = left;
 		m_screen_viewport.clip_rect_top[rect_id]                  = top;
 		m_screen_viewport.clip_rect_window_offset_enable[rect_id] = window_offset_enable;
+		BumpDynamic();
 	}
 	void SetClipRectBR(uint32_t rect_id, int right, int bottom) {
 		m_screen_viewport.clip_rect_right[rect_id]  = right;
 		m_screen_viewport.clip_rect_bottom[rect_id] = bottom;
+		BumpDynamic();
 	}
 	[[nodiscard]] const ScreenViewport& GetScreenViewport() const { return m_screen_viewport; }
 
 	[[nodiscard]] const BlendColor& GetBlendColor() const { return m_blend_color; }
-	void SetBlendColor(const BlendColor& color) { m_blend_color = color; }
+	void SetBlendColor(const BlendColor& color) {
+		m_blend_color = color;
+		BumpDynamic();
+	}
 	[[nodiscard]] const ClipControl& GetClipControl() const { return m_clip_control; }
-	void SetClipControl(const ClipControl& control) { m_clip_control = control; }
+	void SetClipControl(const ClipControl& control) {
+		m_clip_control = control;
+		BumpDynamic();
+		BumpPipeline();
+		BumpShStatic();
+	}
 	// PA_CL_UCP_0_X..PA_CL_UCP_5_W as raw float bits, four per plane.
 	[[nodiscard]] const std::array<uint32_t, 24>& GetUserClipPlanes() const {
 		return m_user_clip_planes;
 	}
-	void SetUserClipPlane(uint32_t index, uint32_t value) { m_user_clip_planes[index] = value; }
+	void SetUserClipPlane(uint32_t index, uint32_t value) {
+		m_user_clip_planes[index] = value;
+		BumpPipeline();
+	}
 	[[nodiscard]] const RenderControl& GetRenderControl() const { return m_render_control; }
-	void SetRenderControl(const RenderControl& control) { m_render_control = control; }
+	void SetRenderControl(const RenderControl& control) {
+		m_render_control = control;
+		BumpRt();
+	}
 	[[nodiscard]] const DepthRenderOverride& GetDepthRenderOverride() const {
 		return m_depth_render_override;
 	}
 	void SetDepthRenderOverride(const DepthRenderOverride& control) {
 		m_depth_render_override = control;
+		BumpDynamic();
 	}
 	[[nodiscard]] const DepthControl& GetDepthControl() const { return m_depth_control; }
-	void SetDepthControl(const DepthControl& control) { m_depth_control = control; }
+	void SetDepthControl(const DepthControl& control) {
+		m_depth_control = control;
+		BumpRt();
+		BumpDynamic();
+	}
 	[[nodiscard]] const ModeControl& GetModeControl() const { return m_mode_control; }
-	void SetModeControl(const ModeControl& control) { m_mode_control = control; }
+	void SetModeControl(const ModeControl& control) {
+		m_mode_control = control;
+		BumpPipeline();
+		BumpDynamic();
+		BumpShStatic();
+	}
 	[[nodiscard]] const PolyOffset& GetPolyOffset() const { return m_poly_offset; }
-	void SetPolyOffset(const PolyOffset& offset) { m_poly_offset = offset; }
+	void SetPolyOffset(const PolyOffset& offset) {
+		m_poly_offset = offset;
+		BumpDynamic();
+	}
 	[[nodiscard]] const EqaaControl& GetEqaaControl() const { return m_eqaa_control; }
-	void SetEqaaControl(const EqaaControl& control) { m_eqaa_control = control; }
+	void SetEqaaControl(const EqaaControl& control) {
+		m_eqaa_control = control;
+		BumpRt();
+	}
 	[[nodiscard]] const StencilControl& GetStencilControl() const { return m_stencil_control; }
-	void SetStencilControl(const StencilControl& control) { m_stencil_control = control; }
+	void SetStencilControl(const StencilControl& control) {
+		m_stencil_control = control;
+		BumpRt();
+		BumpDynamic();
+	}
 	[[nodiscard]] const StencilMask& GetStencilMask() const { return m_stencil_mask; }
-	void SetStencilMask(const StencilMask& mask) { m_stencil_mask = mask; }
+	void SetStencilMask(const StencilMask& mask) {
+		m_stencil_mask = mask;
+		BumpRt();
+		BumpDynamic();
+	}
 	[[nodiscard]] const ColorControl& GetColorControl() const { return m_color_control; }
-	void SetColorControl(const ColorControl& control) { m_color_control = control; }
+	void SetColorControl(const ColorControl& control) {
+		m_color_control = control;
+		BumpRt();
+	}
 	[[nodiscard]] const ScanModeControl& GetScanModeControl() const { return m_scan_mode_control; }
-	void SetScanModeControl(const ScanModeControl& control) { m_scan_mode_control = control; }
+	void SetScanModeControl(const ScanModeControl& control) {
+		m_scan_mode_control = control;
+		BumpDynamic();
+	}
 	[[nodiscard]] const AaSampleControl& GetAaSampleControl() const { return m_aa_sample_control; }
-	void SetAaSampleControl(const AaSampleControl& control) { m_aa_sample_control = control; }
+	void SetAaSampleControl(const AaSampleControl& control) {
+		m_aa_sample_control = control;
+		BumpRt();
+	}
 	[[nodiscard]] const AaConfig& GetAaConfig() const { return m_aa_config; }
-	void                          SetAaConfig(const AaConfig& config) { m_aa_config = config; }
+	void SetAaConfig(const AaConfig& config) {
+		m_aa_config = config;
+		BumpRt();
+		BumpPipeline();
+	}
 
 	[[nodiscard]] float GetDepthClearValue() const { return m_depth_clear_value; }
-	void                SetDepthClearValue(float clear_value) { m_depth_clear_value = clear_value; }
+	void SetDepthClearValue(float clear_value) {
+		m_depth_clear_value = clear_value;
+		BumpRt();
+	}
 	[[nodiscard]] float GetDepthBoundsMin() const { return m_depth_bounds_min; }
 	[[nodiscard]] float GetDepthBoundsMax() const { return m_depth_bounds_max; }
-	void                SetDepthBoundsMin(float value) { m_depth_bounds_min = value; }
-	void                SetDepthBoundsMax(float value) { m_depth_bounds_max = value; }
+	void SetDepthBoundsMin(float value) {
+		m_depth_bounds_min = value;
+		BumpDynamic();
+	}
+	void SetDepthBoundsMax(float value) {
+		m_depth_bounds_max = value;
+		BumpDynamic();
+	}
 	[[nodiscard]] uint8_t GetStencilClearValue() const { return m_stencil_clear_value; }
-	void SetStencilClearValue(uint8_t clear_value) { m_stencil_clear_value = clear_value; }
+	void SetStencilClearValue(uint8_t clear_value) {
+		m_stencil_clear_value = clear_value;
+		BumpRt();
+	}
 
 	[[nodiscard]] float    GetLineWidth() const { return m_line_width; }
-	void                   SetLineWidth(float width) { m_line_width = width; }
+	void SetLineWidth(float width) {
+		m_line_width = width;
+		BumpDynamic();
+	}
 	[[nodiscard]] uint32_t GetPrimitiveResetIndex() const { return m_primitive_reset_index; }
-	void SetPrimitiveResetIndex(uint32_t index) { m_primitive_reset_index = index; }
+	void SetPrimitiveResetIndex(uint32_t index) {
+		m_primitive_reset_index = index;
+		BumpDynamic();
+	}
 
 	[[nodiscard]] const ShaderRegisters& GetShaderRegisters() const { return m_sh_regs; }
 
-	void SetClVsOutCntl(uint32_t value) { m_sh_regs.m_paClVsOutCntl = value; }
-	void SetNggSubgrpCntl(uint32_t value) { m_sh_regs.m_geNggSubgrpCntl = value; }
-	void SetMaxOutputPerSubgroup(uint32_t value) { m_sh_regs.m_geMaxOutputPerSubgroup = value; }
-	void SetGsMaxVertOut(uint32_t value) { m_sh_regs.m_vgtGsMaxVertOut = value; }
-	void SetGsOutPrimType(uint32_t value) { m_sh_regs.m_vgtGsOutPrimType = value; }
-	void SetDrawPayloadControl(uint32_t value) { m_sh_regs.m_vgtDrawPayloadCntl = value; }
-	void SetObjprimIdControl(uint32_t value) { m_sh_regs.m_paClObjprimIdCntl = value; }
-	void SetLsHsConfig(uint32_t value) { m_sh_regs.m_vgtLsHsConfig = value; }
-	void SetTfParam(uint32_t value) { m_sh_regs.m_vgtTfParam = value; }
+	void SetClVsOutCntl(uint32_t value) {
+		m_sh_regs.m_paClVsOutCntl = value;
+		BumpShStatic();
+	}
+	void SetNggSubgrpCntl(uint32_t value) {
+		m_sh_regs.m_geNggSubgrpCntl = value;
+		BumpShStatic();
+	}
+	void SetMaxOutputPerSubgroup(uint32_t value) {
+		m_sh_regs.m_geMaxOutputPerSubgroup = value;
+		BumpShStatic();
+	}
+	void SetGsMaxVertOut(uint32_t value) {
+		m_sh_regs.m_vgtGsMaxVertOut = value;
+		BumpShStatic();
+	}
+	void SetGsOutPrimType(uint32_t value) {
+		m_sh_regs.m_vgtGsOutPrimType = value;
+		BumpShStatic();
+	}
+	void SetDrawPayloadControl(uint32_t value) {
+		m_sh_regs.m_vgtDrawPayloadCntl = value;
+		BumpShStatic();
+	}
+	void SetObjprimIdControl(uint32_t value) {
+		m_sh_regs.m_paClObjprimIdCntl = value;
+		BumpShStatic();
+	}
+	void SetLsHsConfig(uint32_t value) {
+		m_sh_regs.m_vgtLsHsConfig = value;
+		BumpShStatic();
+	}
+	void SetTfParam(uint32_t value) {
+		m_sh_regs.m_vgtTfParam = value;
+		BumpShStatic();
+	}
 
 	void SetPsInputSettings(uint32_t id, uint32_t value) {
 		m_sh_regs.ps_interpolator_settings[id] = value;
+		BumpShStatic();
 	}
 
 	void SetTargetOutputMode(uint32_t slot, uint8_t value) {
 		m_sh_regs.target_output_mode[slot] = value;
+		BumpPipeline();
+		BumpShStatic();
 	}
-	void SetPsInputEna(uint32_t value) { m_sh_regs.ps_input_ena = value; }
-	void SetPsInputAddr(uint32_t value) { m_sh_regs.ps_input_addr = value; }
-	void SetPsInControl(uint32_t value) { m_sh_regs.ps_in_control = value; }
-	void SetBarycCntl(uint32_t value) { m_sh_regs.baryc_cntl = value; }
-	void SetShaderMask(uint32_t value) { m_sh_regs.m_cbShaderMask = value; }
+	void SetPsInputEna(uint32_t value) {
+		m_sh_regs.ps_input_ena = value;
+		BumpShStatic();
+	}
+	void SetPsInputAddr(uint32_t value) {
+		m_sh_regs.ps_input_addr = value;
+		BumpShStatic();
+	}
+	void SetPsInControl(uint32_t value) {
+		m_sh_regs.ps_in_control = value;
+		BumpShStatic();
+	}
+	void SetBarycCntl(uint32_t value) {
+		m_sh_regs.baryc_cntl = value;
+		BumpShStatic();
+	}
+	void SetShaderMask(uint32_t value) {
+		m_sh_regs.m_cbShaderMask = value;
+		BumpPipeline();
+		BumpShStatic();
+	}
 	void SetDepthShaderControl(const DepthShaderControl& value) {
 		m_sh_regs.db_shader_control = value;
+		BumpShStatic();
 	}
-	void SetAlphaToMaskEnable(bool value) { m_sh_regs.alpha_to_mask_enable = value; }
+	void SetAlphaToMaskEnable(bool value) {
+		m_sh_regs.alpha_to_mask_enable = value;
+		BumpPipeline();
+		BumpShStatic();
+	}
 
 private:
 	float    m_line_width            = 1.0f;
@@ -867,6 +1102,11 @@ private:
 	EqaaControl m_eqaa_control;
 
 	ShaderRegisters m_sh_regs;
+
+	uint64_t m_rt_epoch        = NextContextEpoch();
+	uint64_t m_pipeline_epoch  = NextContextEpoch();
+	uint64_t m_dynamic_epoch   = NextContextEpoch();
+	uint64_t m_sh_static_epoch = NextContextEpoch();
 };
 
 class UserConfig {
@@ -876,21 +1116,42 @@ public:
 
 	KYTY_CLASS_DEFAULT_COPY(UserConfig);
 
-	void Reset() { *this = UserConfig(); }
+	void Reset() {
+		*this          = UserConfig();
+		m_static_epoch = NextContextEpoch();
+	}
 
-	void SetPrimitiveType(Prospero::PrimitiveType prim_type) { m_prim_type = prim_type; }
+	[[nodiscard]] uint64_t StaticEpoch() const noexcept { return m_static_epoch; }
+
+	void SetPrimitiveType(Prospero::PrimitiveType prim_type) {
+		if (m_prim_type != prim_type) {
+			m_prim_type    = prim_type;
+			m_static_epoch = NextContextEpoch();
+		}
+	}
 	[[nodiscard]] Prospero::PrimitiveType GetPrimType() const { return m_prim_type; }
 	void                   SetIndexOffset(uint32_t index_offset) { m_index_offset = index_offset; }
 	[[nodiscard]] uint32_t GetIndexOffset() const { return m_index_offset; }
 	void                   SetObjectId(uint32_t object_id) { m_object_id = object_id; }
 	[[nodiscard]] uint32_t GetObjectId() const { return m_object_id; }
-	void SetPrimitiveResetControl(uint32_t control) { m_primitive_reset_control = control; }
+	void SetPrimitiveResetControl(uint32_t control) {
+		if (m_primitive_reset_control != control) {
+			m_primitive_reset_control = control;
+			m_static_epoch            = NextContextEpoch();
+		}
+	}
 	[[nodiscard]] uint32_t GetPrimitiveResetControl() const { return m_primitive_reset_control; }
 
 	[[nodiscard]] const GeControl& GetGeControl() const { return m_ge_cntl; }
-	void                           SetGeControl(const GeControl& control) { m_ge_cntl = control; }
+	void SetGeControl(const GeControl& control) {
+		m_ge_cntl      = control;
+		m_static_epoch = NextContextEpoch();
+	}
 	[[nodiscard]] const GeUserVgprEn& GetGeUserVgprEn() const { return m_ge_user_vgpr_en; }
-	void SetGeUserVgprEn(const GeUserVgprEn& en) { m_ge_user_vgpr_en = en; }
+	void SetGeUserVgprEn(const GeUserVgprEn& en) {
+		m_ge_user_vgpr_en = en;
+		m_static_epoch    = NextContextEpoch();
+	}
 
 private:
 	Prospero::PrimitiveType m_prim_type               = Prospero::PrimitiveType::kNone;
@@ -900,6 +1161,7 @@ private:
 
 	GeControl    m_ge_cntl;
 	GeUserVgprEn m_ge_user_vgpr_en;
+	uint64_t     m_static_epoch = NextContextEpoch();
 };
 
 class Shader {
@@ -909,34 +1171,110 @@ public:
 
 	KYTY_CLASS_DEFAULT_COPY(Shader);
 
-	void Reset() { *this = Shader(); }
+	void Reset() {
+		*this           = Shader();
+		m_vs_regs_epoch = NextContextEpoch();
+		m_vs_sgpr_epoch = NextContextEpoch();
+		m_ps_regs_epoch = NextContextEpoch();
+		m_ps_sgpr_epoch = NextContextEpoch();
+		m_cs_regs_epoch = NextContextEpoch();
+		m_cs_sgpr_epoch = NextContextEpoch();
+	}
 
-	void SetEsShaderBase(uint64_t addr) { m_vs.es_regs.data_addr = addr; }
-	void SetLsShaderBase(uint64_t addr) { m_vs.ls_regs.data_addr = addr; }
-	void SetHsShaderBase(uint64_t addr) { m_vs.hs_regs.data_addr = addr; }
+	[[nodiscard]] uint64_t VsRegsEpoch() const noexcept { return m_vs_regs_epoch; }
+	[[nodiscard]] uint64_t VsSgprEpoch() const noexcept { return m_vs_sgpr_epoch; }
+	[[nodiscard]] uint64_t PsRegsEpoch() const noexcept { return m_ps_regs_epoch; }
+	[[nodiscard]] uint64_t PsSgprEpoch() const noexcept { return m_ps_sgpr_epoch; }
+	[[nodiscard]] uint64_t CsRegsEpoch() const noexcept { return m_cs_regs_epoch; }
+	[[nodiscard]] uint64_t CsSgprEpoch() const noexcept { return m_cs_sgpr_epoch; }
+
+	void SetEsShaderBase(uint64_t addr) {
+		m_vs.es_regs.data_addr = addr;
+		m_vs_regs_epoch        = NextContextEpoch();
+	}
+	void SetLsShaderBase(uint64_t addr) {
+		m_vs.ls_regs.data_addr = addr;
+		m_vs_regs_epoch        = NextContextEpoch();
+	}
+	void SetHsShaderBase(uint64_t addr) {
+		m_vs.hs_regs.data_addr = addr;
+		m_vs_regs_epoch        = NextContextEpoch();
+	}
 	void SetHsUserDataAddress(uint32_t word, uint32_t value) {
 		SetUserDataAddressWord(m_vs.hs_regs.user_data_addr, word, value);
+		m_vs_regs_epoch = NextContextEpoch();
 	}
-	void SetHsShaderResource1(const HsShaderResource1& rsrc1) { m_vs.hs_regs.rsrc1 = rsrc1; }
-	void SetHsShaderResource2(const HsShaderResource2& rsrc2) { m_vs.hs_regs.rsrc2 = rsrc2; }
-	void SetGsShaderBase(uint64_t addr) { m_vs.gs_regs.data_addr = addr; }
+	void SetHsShaderResource1(const HsShaderResource1& rsrc1) {
+		m_vs.hs_regs.rsrc1 = rsrc1;
+		m_vs_regs_epoch    = NextContextEpoch();
+	}
+	void SetHsShaderResource2(const HsShaderResource2& rsrc2) {
+		m_vs.hs_regs.rsrc2 = rsrc2;
+		m_vs_regs_epoch    = NextContextEpoch();
+	}
+	void SetGsShaderBase(uint64_t addr) {
+		m_vs.gs_regs.data_addr = addr;
+		m_vs_regs_epoch        = NextContextEpoch();
+	}
 	void SetGsUserDataAddress(uint32_t word, uint32_t value) {
 		SetUserDataAddressWord(m_vs.gs_regs.user_data_addr, word, value);
+		m_vs_regs_epoch = NextContextEpoch();
 	}
-	void SetGsShaderResource1(const GsShaderResource1& rsrc1) { m_vs.gs_regs.rsrc1 = rsrc1; }
-	void SetGsShaderResource2(const GsShaderResource2& rsrc2) { m_vs.gs_regs.rsrc2 = rsrc2; }
+	void SetGsShaderResource1(const GsShaderResource1& rsrc1) {
+		m_vs.gs_regs.rsrc1 = rsrc1;
+		m_vs_regs_epoch    = NextContextEpoch();
+	}
+	void SetGsShaderResource2(const GsShaderResource2& rsrc2) {
+		m_vs.gs_regs.rsrc2 = rsrc2;
+		m_vs_regs_epoch    = NextContextEpoch();
+	}
 
-	void SetPsShaderBase(uint64_t addr) { m_ps.ps_regs.data_addr = addr; }
-	void SetPsShaderResource1(const PsShaderResource1& rsrc1) { m_ps.ps_regs.rsrc1 = rsrc1; }
-	void SetPsShaderResource2(const PsShaderResource2& rsrc2) { m_ps.ps_regs.rsrc2 = rsrc2; }
+	void SetPsShaderBase(uint64_t addr) {
+		m_ps.ps_regs.data_addr = addr;
+		m_ps_regs_epoch        = NextContextEpoch();
+	}
+	void SetPsShaderResource1(const PsShaderResource1& rsrc1) {
+		m_ps.ps_regs.rsrc1 = rsrc1;
+		m_ps_regs_epoch    = NextContextEpoch();
+	}
+	void SetPsShaderResource2(const PsShaderResource2& rsrc2) {
+		m_ps.ps_regs.rsrc2 = rsrc2;
+		m_ps_regs_epoch    = NextContextEpoch();
+	}
 
-	void SetCsShader(const CsStageRegisters& cs_regs) { m_cs.cs_regs = cs_regs; }
-	void SetCsWaveSize(uint8_t wave_size) { m_cs.cs_regs.wave_size = wave_size; }
+	void SetCsShader(const CsStageRegisters& cs_regs) {
+		m_cs.cs_regs    = cs_regs;
+		m_cs_regs_epoch = NextContextEpoch();
+	}
+	void SetCsWaveSize(uint8_t wave_size) {
+		m_cs.cs_regs.wave_size = wave_size;
+		m_cs_regs_epoch        = NextContextEpoch();
+	}
 
-	void SetPsUserSgpr(uint32_t id, uint32_t value) { m_ps.ps_user_sgpr.value[id] = value; }
-	void SetCsUserSgpr(uint32_t id, uint32_t value) { m_cs.cs_user_sgpr.value[id] = value; }
-	void SetHsUserSgpr(uint32_t id, uint32_t value) { m_vs.hs_user_sgpr.value[id] = value; }
-	void SetGsUserSgpr(uint32_t id, uint32_t value) { m_vs.gs_user_sgpr.value[id] = value; }
+	void SetPsUserSgpr(uint32_t id, uint32_t value) {
+		if (m_ps.ps_user_sgpr.value[id] != value) {
+			m_ps.ps_user_sgpr.value[id] = value;
+			m_ps_sgpr_epoch             = NextContextEpoch();
+		}
+	}
+	void SetCsUserSgpr(uint32_t id, uint32_t value) {
+		if (m_cs.cs_user_sgpr.value[id] != value) {
+			m_cs.cs_user_sgpr.value[id] = value;
+			m_cs_sgpr_epoch             = NextContextEpoch();
+		}
+	}
+	void SetHsUserSgpr(uint32_t id, uint32_t value) {
+		if (m_vs.hs_user_sgpr.value[id] != value) {
+			m_vs.hs_user_sgpr.value[id] = value;
+			m_vs_sgpr_epoch             = NextContextEpoch();
+		}
+	}
+	void SetGsUserSgpr(uint32_t id, uint32_t value) {
+		if (m_vs.gs_user_sgpr.value[id] != value) {
+			m_vs.gs_user_sgpr.value[id] = value;
+			m_vs_sgpr_epoch             = NextContextEpoch();
+		}
+	}
 
 	[[nodiscard]] const PixelShaderInfo&   GetPs() const { return m_ps; }
 	[[nodiscard]] const VertexShaderInfo&  GetVs() const { return m_vs; }
@@ -952,6 +1290,12 @@ private:
 	VertexShaderInfo  m_vs;
 	PixelShaderInfo   m_ps;
 	ComputeShaderInfo m_cs;
+	uint64_t          m_vs_regs_epoch = NextContextEpoch();
+	uint64_t          m_vs_sgpr_epoch = NextContextEpoch();
+	uint64_t          m_ps_regs_epoch = NextContextEpoch();
+	uint64_t          m_ps_sgpr_epoch = NextContextEpoch();
+	uint64_t          m_cs_regs_epoch = NextContextEpoch();
+	uint64_t          m_cs_sgpr_epoch = NextContextEpoch();
 };
 
 } // namespace Libs::Graphics::HW

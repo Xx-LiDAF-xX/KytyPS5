@@ -318,13 +318,29 @@ static void UpdateGraphicsDynamicState(const CommandBuffer& buffer, DynamicState
 	KYTY_PROFILER_FUNCTION();
 
 	const auto& ctx = buffer.GetRegisters();
-	const auto&        vp  = ctx.GetScreenViewport();
-	const vk::Extent2D framebuffer_extent {rendering.width, rendering.height};
 	const auto& outputs = vs_input_info.stage.module->info.info.outputs;
 	const bool  indexed_viewports =
 	    std::any_of(outputs.begin(), outputs.end(), [](const auto& output) {
 		    return output.kind == ShaderRecompiler::IR::StageOutputKind::ViewportIndex;
 	    });
+	const auto prim_type = buffer.GetUserConfig().GetPrimType();
+	if (buffer.m_last_dynamic_epoch == ctx.DynamicEpoch() &&
+	    buffer.m_last_render_width == rendering.width &&
+	    buffer.m_last_render_height == rendering.height &&
+	    buffer.m_last_depth_format == depth.desc.view_info.format &&
+	    buffer.m_last_indexed_viewports == indexed_viewports &&
+	    buffer.m_last_prim_type == prim_type) {
+		return;
+	}
+	buffer.m_last_dynamic_epoch     = ctx.DynamicEpoch();
+	buffer.m_last_render_width      = rendering.width;
+	buffer.m_last_render_height     = rendering.height;
+	buffer.m_last_depth_format      = depth.desc.view_info.format;
+	buffer.m_last_indexed_viewports = indexed_viewports;
+	buffer.m_last_prim_type         = prim_type;
+
+	const auto&        vp  = ctx.GetScreenViewport();
+	const vk::Extent2D framebuffer_extent {rendering.width, rendering.height};
 	constexpr uint32_t viewport_slots = std::size(HW::ScreenViewport {}.viewports);
 	std::array<vk::Viewport, viewport_slots> viewports {};
 	std::array<vk::Rect2D, viewport_slots>   scissors {};
@@ -976,68 +992,49 @@ bool RenderExecutor::PrepareDrawRenderState(CommandBuffer& buffer, const DrawCal
 	auto&       texture_cache = m_context.GetTextureCache();
 	const auto& hw            = buffer.GetRegisters();
 	if (m_rt_cache.valid && buffer.IsRendering() && !graphics_debug_dump_enabled() &&
+	    m_rt_cache.rt_epoch == hw.RtEpoch() &&
 	    m_rt_cache.resolve_epoch == texture_cache.ResolveEpoch() &&
-	    m_rt_cache.mrt_mask == state.mrt_mask &&
-	    m_rt_cache.render_target_mask == hw.GetRenderTargetMask() &&
-	    SameAaConfig(m_rt_cache.aa_config, hw.GetAaConfig()) &&
-	    SameDepthTargetRegs(m_rt_cache.depth_rt, hw.GetDepthRenderTarget()) &&
-	    SameRenderControl(m_rt_cache.render_control, hw.GetRenderControl()) &&
-	    SameDepthControl(m_rt_cache.depth_control, hw.GetDepthControl()) &&
-	    SameStencilControl(m_rt_cache.stencil_control, hw.GetStencilControl()) &&
-	    SameStencilMask(m_rt_cache.stencil_mask, hw.GetStencilMask()) &&
-	    std::bit_cast<uint32_t>(m_rt_cache.depth_clear_value) ==
-	        std::bit_cast<uint32_t>(hw.GetDepthClearValue()) &&
-	    m_rt_cache.stencil_clear_value == hw.GetStencilClearValue()) {
-		bool rt_match = true;
-		for (uint32_t slot = 0; slot < RENDER_COLOR_ATTACHMENTS_MAX; ++slot) {
-			if ((state.mrt_mask & (1u << slot)) != 0 &&
-			    !SameColorTargetRegs(m_rt_cache.rt_regs[slot], hw.GetRenderTarget(slot))) {
-				rt_match = false;
-				break;
+	    m_rt_cache.mrt_mask == state.mrt_mask) {
+		bool images_valid = false;
+		{
+			std::scoped_lock lock {texture_cache.m_lock};
+			if (m_rt_cache.resolve_epoch == texture_cache.ResolveEpoch()) {
+				images_valid = true;
+				for (uint32_t i = 0; i < m_rt_cache.color_count; ++i) {
+					const auto* img =
+					    texture_cache.m_slot_images.try_get(m_rt_cache.color_info[i].image_id);
+					if (img == nullptr || !img->registered || img->depth_id ||
+					    img->binding.needs_rebind) {
+						images_valid = false;
+						break;
+					}
+				}
+				if (images_valid && m_rt_cache.depth_info.image_id) {
+					const auto* img =
+					    texture_cache.m_slot_images.try_get(m_rt_cache.depth_info.image_id);
+					if (img == nullptr || !img->registered || img->depth_id ||
+					    img->binding.needs_rebind) {
+						images_valid = false;
+					}
+				}
 			}
 		}
-		if (rt_match) {
-			bool images_valid = false;
-			{
-				std::scoped_lock lock {texture_cache.m_lock};
-				if (m_rt_cache.resolve_epoch == texture_cache.ResolveEpoch()) {
-					images_valid = true;
-					for (uint32_t i = 0; i < m_rt_cache.color_count; ++i) {
-						const auto* img =
-						    texture_cache.m_slot_images.try_get(m_rt_cache.color_info[i].image_id);
-						if (img == nullptr || !img->registered || img->depth_id ||
-						    img->binding.needs_rebind) {
-							images_valid = false;
-							break;
-						}
-					}
-					if (images_valid && m_rt_cache.depth_info.image_id) {
-						const auto* img =
-						    texture_cache.m_slot_images.try_get(m_rt_cache.depth_info.image_id);
-						if (img == nullptr || !img->registered || img->depth_id ||
-						    img->binding.needs_rebind) {
-							images_valid = false;
-						}
-					}
-				}
+		if (images_valid) {
+			state.color_count = m_rt_cache.color_count;
+			for (uint32_t i = 0; i < state.color_count; ++i) {
+				state.color_info[i] = m_rt_cache.color_info[i];
+				BindRenderTarget(state.color_info[i].image_id);
 			}
-			if (images_valid) {
-				state.color_count = m_rt_cache.color_count;
-				for (uint32_t i = 0; i < state.color_count; ++i) {
-					state.color_info[i] = m_rt_cache.color_info[i];
-					BindRenderTarget(state.color_info[i].image_id);
-				}
-				state.depth_info = m_rt_cache.depth_info;
-				if (state.depth_info.image_id) {
-					BindRenderTarget(state.depth_info.image_id);
-				}
-				if (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {
-					LogFramebufferSkip(draw.Name(), state.color_info[0], state.depth_info, buffer,
-					                   draw.index_count, 0);
-					return false;
-				}
-				return true;
+			state.depth_info = m_rt_cache.depth_info;
+			if (state.depth_info.image_id) {
+				BindRenderTarget(state.depth_info.image_id);
 			}
+			if (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {
+				LogFramebufferSkip(draw.Name(), state.color_info[0], state.depth_info, buffer,
+				                   draw.index_count, 0);
+				return false;
+			}
+			return true;
 		}
 	}
 
@@ -1082,6 +1079,7 @@ bool RenderExecutor::PrepareDrawRenderState(CommandBuffer& buffer, const DrawCal
 
 	if (!graphics_debug_dump_enabled() && (state.color_count != 0 || state.depth_info.image_id)) {
 		m_rt_cache.valid               = true;
+		m_rt_cache.rt_epoch            = hw.RtEpoch();
 		m_rt_cache.resolve_epoch       = texture_cache.ResolveEpoch();
 		m_rt_cache.mrt_mask            = state.mrt_mask;
 		m_rt_cache.render_target_mask  = hw.GetRenderTargetMask();
@@ -1392,9 +1390,16 @@ void RenderExecutor::ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallIn
 	if (mesh_active && draw.indexed) {
 		// Register the original guest indices for shader reads; PrepareGraphicsBindings
 		// synchronizes registered BDA ranges before any draw commands are committed.
-		(void)m_context.GetBufferCache().FindBuffer(
-		    index_source.address, static_cast<uint64_t>(draw.index_count) *
-		                              index_source.guest_element_size);
+		const uint64_t size           = static_cast<uint64_t>(draw.index_count) * index_source.guest_element_size;
+		const uint64_t mutation_epoch = m_context.GetBufferCache().MutationEpoch();
+		if (index_source.address < m_last_mesh_ib_page_begin ||
+		    index_source.address + size > m_last_mesh_ib_page_end ||
+		    m_last_mesh_ib_epoch != mutation_epoch) {
+			(void)m_context.GetBufferCache().FindBuffer(index_source.address, size);
+			m_last_mesh_ib_page_begin = Common::AlignDown(index_source.address, BufferCache::CACHING_PAGESIZE);
+			m_last_mesh_ib_page_end   = Common::AlignUp(index_source.address + size, BufferCache::CACHING_PAGESIZE);
+			m_last_mesh_ib_epoch      = mutation_epoch;
+		}
 	}
 	auto&                            bindings = m_graphics_bindings;
 	std::array<PreparedBindings*, 4> descriptor_stages {};

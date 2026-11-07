@@ -107,7 +107,18 @@ public:
 
 	void BeginRendering(const RenderState& state) const;
 	void EndRendering() const;
-	void InvalidateGraphicsState() const noexcept { m_bound_graphics_state.Reset(); }
+	void ResetDynamicEpochCache() const noexcept {
+		m_last_dynamic_epoch     = 0;
+		m_last_render_width      = 0;
+		m_last_render_height     = 0;
+		m_last_depth_format      = vk::Format::eUndefined;
+		m_last_indexed_viewports = false;
+		m_last_prim_type         = Prospero::PrimitiveType::kNone;
+	}
+	void InvalidateGraphicsState() const noexcept {
+		m_bound_graphics_state.Reset();
+		ResetDynamicEpochCache();
+	}
 
 	[[nodiscard]] BoundGraphicsState& GraphicsState() const noexcept {
 		return m_bound_graphics_state;
@@ -132,9 +143,19 @@ public:
 	[[nodiscard]] HW::UserConfig&   GetUserConfig() const noexcept { return *m_user_config; }
 	[[nodiscard]] HW::Shader&       GetShaders() const noexcept { return *m_shaders; }
 
+	mutable uint64_t                m_last_dynamic_epoch     = 0;
+	mutable uint32_t                m_last_render_width      = 0;
+	mutable uint32_t                m_last_render_height     = 0;
+	mutable vk::Format              m_last_depth_format      = vk::Format::eUndefined;
+	mutable bool                    m_last_indexed_viewports = false;
+	mutable Prospero::PrimitiveType m_last_prim_type         = Prospero::PrimitiveType::kNone;
+
 private:
 	explicit CommandBuffer(CommandScheduler& scheduler);
 	void Bind(HW::Context& registers, HW::UserConfig& user_config, HW::Shader& shaders) noexcept {
+		if (m_registers != nullptr && m_registers != &registers) {
+			InvalidateGraphicsState();
+		}
 		m_registers   = &registers;
 		m_user_config = &user_config;
 		m_shaders     = &shaders;
@@ -157,6 +178,7 @@ private:
 	HW::Shader*                                         m_shaders     = nullptr;
 
 	friend class CommandScheduler;
+	friend class RenderExecutor;
 };
 
 namespace Pssr {
@@ -267,6 +289,7 @@ private:
 
 	struct RenderTargetPassCache {
 		bool                                                       valid              = false;
+		uint64_t                                                   rt_epoch           = 0;
 		uint64_t                                                   resolve_epoch      = 0;
 		uint32_t                                                   mrt_mask           = 0;
 		uint32_t                                                   render_target_mask = 0;
@@ -299,6 +322,9 @@ private:
 	vk::Pipeline                           m_pssr_pipeline          = nullptr;
 	std::array<MipStatsCounter, 256>       m_mip_stats {};
 	uint32_t                               m_max_mdi_commands = 0;
+	uint64_t                               m_last_mesh_ib_page_begin = 0;
+	uint64_t                               m_last_mesh_ib_page_end   = 0;
+	uint64_t                               m_last_mesh_ib_epoch      = 0;
 
 	friend class CommandProcessor;
 	friend class ImageHeap;

@@ -48,6 +48,9 @@ public:
 		}
 	}
 
+	// Dumped occlusion counters are written before the guest can see the GPU ran them.
+	[[nodiscard]] bool HasPendingDumps() const noexcept { return !m_dumps.empty(); }
+
 	// A PIXEL_PIPE_STAT_DUMP to address, after the draws recorded so far.
 	void Dump(uint64_t address);
 	// Harvests completed dumps and writes their counters.

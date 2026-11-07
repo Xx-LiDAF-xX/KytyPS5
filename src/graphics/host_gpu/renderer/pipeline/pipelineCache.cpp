@@ -9,6 +9,7 @@
 #include "common/threads.h"
 #include "graphics/guest_gpu/gpu_format.h"
 #include "graphics/guest_gpu/hardwareContext.h"
+#include "graphics/host_gpu/renderer/cache/bufferCache.h"
 #include "graphics/host_gpu/renderer/debug.h"
 #include "graphics/host_gpu/renderer/image/imageView.h"
 #include "graphics/host_gpu/renderer/image/textureCommon.h"
@@ -46,9 +47,8 @@ namespace {
 constexpr auto DriverCacheSaveInterval = std::chrono::minutes {1};
 
 // How many draws a fast-linked pipeline has to serve before the optimized relink is worth its
-// CPU time, and how many relinks may wait in the queue at once.
+// CPU time.
 constexpr uint32_t LtoPromoteDraws   = 3;
-constexpr uint32_t MaxOutstandingLinks = 2;
 
 uint8_t RemapSourceAlphaFactor(uint8_t factor) {
 	switch (static_cast<Prospero::BlendFactor>(factor)) {
@@ -480,7 +480,13 @@ PipelineCache::PipelineCache(GraphicContext&                         graphics,
 	// Without a scheduler there is nothing to retire a replaced pipeline against, so the whole
 	// library path stays off and pipelines are created in one piece.
 	if (GraphicsPipelineLibraryEnabled()) {
-		m_link_thread = std::jthread {[this](std::stop_token) { RunPipelineLinkThread(); }};
+		const uint32_t worker_count =
+		    std::clamp(std::thread::hardware_concurrency() / 2u, 2u, 6u);
+		m_max_outstanding_links = worker_count * 2u;
+		m_link_threads.reserve(worker_count);
+		for (uint32_t i = 0; i < worker_count; ++i) {
+			m_link_threads.emplace_back([this](std::stop_token) { RunPipelineLinkThread(); });
+		}
 	}
 }
 
@@ -490,9 +496,12 @@ PipelineCache::~PipelineCache() {
 		m_link_stop = true;
 	}
 	m_link_ready.notify_all();
-	if (m_link_thread.joinable()) {
-		m_link_thread.join();
+	for (auto& thread: m_link_threads) {
+		if (thread.joinable()) {
+			thread.join();
+		}
 	}
+	m_link_threads.clear();
 	Save();
 	// The worker is gone, so a finished relink can no longer be published. Drop those handles and
 	// everything waiting on the GPU; nothing draws any more.
@@ -566,7 +575,11 @@ void PipelineCache::PollPipelineLinks() {
 			RetirePipeline(result.previous, m_scheduler->CurrentTick());
 		}
 	}
-	DestroyRetiredPipelines(false);
+	const uint64_t current_tick = m_scheduler != nullptr ? m_scheduler->CurrentTick() : 0;
+	if (current_tick != m_last_retired_poll_tick) {
+		m_last_retired_poll_tick = current_tick;
+		DestroyRetiredPipelines(false);
+	}
 }
 
 void PipelineCache::QueuePipelineLink(const GraphicsPipelineKey& key, Pipeline& pipeline) {
@@ -575,7 +588,7 @@ void PipelineCache::QueuePipelineLink(const GraphicsPipelineKey& key, Pipeline& 
 		return;
 	}
 	// The relink is opportunistic: a queue of them would only delay the frames that need the CPU.
-	if (m_link_outstanding.load(std::memory_order_acquire) >= MaxOutstandingLinks) {
+	if (m_link_outstanding.load(std::memory_order_acquire) >= m_max_outstanding_links) {
 		return;
 	}
 	LinkJob job;
@@ -599,8 +612,11 @@ void PipelineCache::RunPipelineLinkThread() {
 		{
 			std::unique_lock lock(m_link_mutex);
 			m_link_ready.wait(lock, [this] { return m_link_stop || !m_link_jobs.empty(); });
-			if (m_link_stop) {
+			if (m_link_stop && m_link_jobs.empty()) {
 				return;
+			}
+			if (m_link_jobs.empty()) {
+				continue;
 			}
 			job = std::move(m_link_jobs.front());
 			m_link_jobs.pop_front();
@@ -777,16 +793,272 @@ void PipelineCache::WriteDriverCache() const {
 }
 
 void PipelineCache::GetGraphicsPrograms(const CommandBuffer& command, DrawRenderState& state) {
-	const auto& context           = command.GetRegisters();
-	const auto& user_config       = command.GetUserConfig();
-	const auto& sh                = context.GetShaderRegisters();
-	const auto& vertex_regs       = command.GetShaders().GetVs();
-	const auto& pixel_regs        = command.GetShaders().GetPs();
-	auto&       vertex_info       = state.vertex_info;
-	auto&       pixel_info        = state.ps_input_info;
+	const auto& context     = command.GetRegisters();
+	const auto& user_config = command.GetUserConfig();
+	const bool  tess_active = user_config.GetPrimType() == Prospero::PrimitiveType::kPatch;
+	const auto& vertex_regs = command.GetShaders().GetVs();
+	const auto& pixel_regs  = command.GetShaders().GetPs();
+	auto&       vertex_info = state.vertex_info;
+	auto&       pixel_info  = state.ps_input_info;
+
+	if (tess_active) {
+		m_cached_gfx.valid = false;
+		const auto& sh                  = context.GetShaderRegisters();
+		const auto  write_mask          = context.GetRenderTargetMask() & sh.m_cbShaderMask;
+		const bool  object_primitive_id = context.HasObjectPrimitiveIdOutput();
+		uint32_t    color_output_mask   = object_primitive_id ? 1u << 7u : 0;
+		for (uint32_t index = 0; index < RENDER_COLOR_ATTACHMENTS_MAX; index++) {
+			const auto slot = ShaderPixelExportTarget(sh.m_cbShaderMask, index);
+			if (slot >= RENDER_COLOR_ATTACHMENTS_MAX) break;
+			if (sh.target_output_mode[index] != 0 && render_target_mask_slot(write_mask, slot) != 0) {
+				color_output_mask |= 1u << slot;
+			}
+		}
+		const auto& db = sh.db_shader_control;
+		const bool pixel_active =
+		    pixel_regs.ps_regs.data_addr != 0 &&
+		    (color_output_mask != 0 || db.shader_kill_enable || db.shader_z_export_enable ||
+		     db.shader_mask_export_enable || db.shader_dual_export_enable ||
+		     db.shader_execute_on_noop || sh.AlphaToMask());
+		state.ps_active = pixel_active;
+
+		auto vertex_params = PrepareTessellationPrograms(vertex_regs, context, vertex_info);
+		const uint64_t layout_key[] = {vertex_params[0].hash, vertex_params[1].hash,
+		                               uint64_t {sh.m_vgtLsHsConfig & 0xfff00u} << 32u |
+		                                   sh.m_vgtTfParam};
+		const auto [layout, inserted] = m_tess_layouts.try_emplace(
+		    XXH3_64bits(layout_key, sizeof(layout_key)), vertex_info[0].tess);
+		if (inserted) {
+			ShaderRecompiler::AnalyzeTessellationPrograms(vertex_params[0].code,
+			                                              vertex_params[1].code, layout->second);
+			StoreLayout(layout->first, layout->second);
+		}
+		for (auto& stage: vertex_info) {
+			stage.tess = layout->second;
+		}
+
+		ShaderParams pixel_params;
+		if (pixel_active) {
+			std::array<Prospero::ColorComponentMapping, RENDER_COLOR_ATTACHMENTS_MAX>
+			    target_export_mapping {};
+			for (uint32_t slot = 0; slot < RENDER_COLOR_ATTACHMENTS_MAX; slot++) {
+				const auto& rt = context.GetRenderTarget(slot);
+				if ((color_output_mask & (1u << slot)) != 0 && rt.base.addr != 0) {
+					target_export_mapping[slot] =
+					    TextureGetRenderTargetFormat(rt.info.format, rt.info.channel_type,
+					                                 rt.info.channel_order)
+					        .export_mapping;
+				}
+			}
+			pixel_params = PrepareProgram(pixel_regs, sh, target_export_mapping, pixel_info);
+			pixel_info.object_primitive_id = object_primitive_id;
+			for (uint32_t export_index = 0; export_index < 8u; export_index++) {
+				const auto slot = ShaderPixelExportTarget(pixel_info.target_shader_mask, export_index);
+				if (slot >= 8u || pixel_info.target_output_mode[export_index] == 0u) continue;
+				const auto& rt = context.GetRenderTarget(slot);
+				const auto target_mask = render_target_mask_slot(context.GetRenderTargetMask(), slot);
+				if (rt.base.addr == 0 || target_mask == 0u) continue;
+				if (rt.info.channel_type == Prospero::ChannelType::kUInt) {
+					pixel_info.target_uint_mask |= 1u << export_index;
+				} else if (rt.info.channel_type == Prospero::ChannelType::kSInt) {
+					pixel_info.target_sint_mask |= 1u << export_index;
+				}
+				const auto format = Prospero::ResolveRenderTargetFormat(rt.info.format, rt.info.channel_type);
+				if (format.buffer_format != Prospero::BufferFormat::k11_11_10UNorm) continue;
+				const auto mapping = pixel_info.target_export_mapping[export_index];
+				const auto shader_mask = render_target_mask_slot(pixel_info.target_shader_mask, slot);
+				const bool blend = context.GetBlendControl(slot).enable && !rt.info.blend_bypass;
+				if (blend || (mapping.ApplyMask(target_mask) & 7u) != 7u ||
+				    (mapping.ApplyMask(shader_mask) & 7u) != 7u ||
+				    pixel_info.target_output_mode[export_index] != 9u) {
+					EXIT("unsupported packed UNorm render-target export: slot=%u export=%u mode=%u "
+					     "target_mask=0x%x shader_mask=0x%x mapping=0x%02x blend=%u\n",
+					     slot, export_index, pixel_info.target_output_mode[export_index], target_mask,
+					     shader_mask, mapping.packed, static_cast<uint32_t>(blend));
+				}
+				pixel_info.target_packed_unorm_mask |= 1u << export_index;
+				pixel_info.target_round_mode |= static_cast<uint8_t>(rt.info.round_mode) << export_index;
+			}
+			if (context.GetModeControl().provoking_vtx_last) {
+				pixel_info.parameter_mode = ShaderPixelParameterMode::LastVertex;
+			} else {
+				pixel_info.parameter_mode = ShaderPixelParameterMode::FirstVertex;
+			}
+			const auto& blend = context.GetBlendControl(0);
+			pixel_info.dual_source_blending =
+			    blend.enable && !context.GetRenderTarget(0).info.blend_bypass &&
+			    (BlendFactorIsDualSource(blend.color_srcblend) ||
+			     BlendFactorIsDualSource(blend.color_destblend) ||
+			     (blend.separate_alpha_blend && (BlendFactorIsDualSource(blend.alpha_srcblend) ||
+			                                     BlendFactorIsDualSource(blend.alpha_destblend))));
+			if (pixel_info.dual_source_blending) {
+				pixel_info.target_output_mode[1]    = pixel_info.target_output_mode[0];
+				pixel_info.target_export_mapping[1] = pixel_info.target_export_mapping[0];
+				pixel_info.target_uint_mask &= ~2u;
+				pixel_info.target_sint_mask &= ~2u;
+			} else if (blend.enable && !context.GetRenderTarget(0).info.blend_bypass &&
+			           pixel_info.target_output_mode[0] != 0 && pixel_info.target_output_mode[0] != 7 &&
+			           std::all_of(std::begin(pixel_info.target_output_mode) + 1,
+			                       std::end(pixel_info.target_output_mode),
+			                       [](uint8_t mode) { return mode == 0; })) {
+				switch (ClassifyBlendMapping(blend, pixel_info.target_export_mapping[0])) {
+					case BlendMappingSupport::SourceAlpha:
+						pixel_info.alpha_blend_source = ShaderAlphaBlendSource::SourceAlpha;
+						break;
+					case BlendMappingSupport::SourceAlphaOne:
+						pixel_info.alpha_blend_source = ShaderAlphaBlendSource::SourceAlphaOne;
+						break;
+					case BlendMappingSupport::SourceAlphaZero:
+						pixel_info.alpha_blend_source = ShaderAlphaBlendSource::SourceAlphaZero;
+						break;
+					default: break;
+				}
+				if (pixel_info.alpha_blend_source != ShaderAlphaBlendSource::None) {
+					pixel_info.dual_source_blending     = true;
+					pixel_info.target_output_mode[1]    = pixel_info.target_output_mode[0];
+					pixel_info.target_export_mapping[1] = {};
+				}
+			}
+		}
+
+		auto& last_stage = vertex_info[2u];
+		const auto& clip_control = context.GetClipControl();
+		if (clip_control.clip_disable) {
+			const auto& viewport = context.GetScreenViewport().viewports[0];
+			const auto& limits   = m_graphics.GetPhysicalDeviceProperties().limits;
+			auto&       clip     = last_stage.clip_space;
+			clip.scale[0]        = viewport.xscale;
+			clip.scale[1]        = viewport.yscale;
+			clip.offset[0]       = viewport.xoffset;
+			clip.offset[1]       = viewport.yoffset;
+			clip.half_extent[0] =
+			    static_cast<float>(std::min(limits.maxViewportDimensions[0], 16384u)) * 0.5f;
+			clip.half_extent[1] =
+			    static_cast<float>(std::min(limits.maxViewportDimensions[1], 16384u)) * 0.5f;
+			clip.enabled = true;
+		}
+		uint32_t push_data_cursor = ShaderRecompiler::IR::PushData::GraphicsDrawDwords(
+		    false, object_primitive_id, last_stage.user_clip_planes);
+		if (pixel_active) {
+			const auto* pixel_module = GetProgram(pixel_params, pixel_info, push_data_cursor);
+			if (pixel_module != nullptr) {
+				for (const auto& output: pixel_module->info.info.outputs) {
+					if (output.kind == ShaderRecompiler::IR::StageOutputKind::Mrt ||
+					    output.kind == ShaderRecompiler::IR::StageOutputKind::ObjectPrimitiveId) {
+						state.mrt_mask |= 1u << output.location;
+					}
+				}
+				state.mrt_mask &= color_output_mask;
+			}
+		}
+		for (uint32_t i = 0; i < 3u; i++) {
+			GetProgram(vertex_params[i], vertex_info[i], push_data_cursor);
+		}
+		return;
+	}
+
+	const auto& sh                  = context.GetShaderRegisters();
 	const bool  object_primitive_id = context.HasObjectPrimitiveIdOutput();
 	const auto  write_mask          = context.GetRenderTargetMask() & sh.m_cbShaderMask;
-	uint32_t    color_output_mask   = object_primitive_id ? 1u << 7u : 0;
+	const auto& clip_control        = context.GetClipControl();
+
+	const auto current_shader_map_epoch  = ShaderGetMapEpoch();
+	const auto current_sh_static_epoch   = context.ShStaticEpoch();
+	const auto current_ucfg_static_epoch = user_config.StaticEpoch();
+	const auto current_vs_regs_epoch     = command.GetShaders().VsRegsEpoch();
+	const auto current_ps_regs_epoch     = command.GetShaders().PsRegsEpoch();
+	const auto current_rt_epoch          = context.RtEpoch();
+	const auto current_rt_mask           = context.GetRenderTargetMask();
+
+	const bool static_match =
+	    m_cached_gfx.valid &&
+	    m_cached_gfx.shader_map_epoch == current_shader_map_epoch &&
+	    m_cached_gfx.sh_static_epoch == current_sh_static_epoch &&
+	    m_cached_gfx.ucfg_static_epoch == current_ucfg_static_epoch &&
+	    m_cached_gfx.vs_regs_epoch == current_vs_regs_epoch &&
+	    m_cached_gfx.ps_regs_epoch == current_ps_regs_epoch &&
+	    m_cached_gfx.rt_epoch == current_rt_epoch &&
+	    m_cached_gfx.rt_mask == current_rt_mask &&
+	    m_cached_gfx.clip_disable == clip_control.clip_disable &&
+	    m_cached_gfx.user_clip_planes == clip_control.user_clip_planes &&
+	    m_cached_gfx.indirect_draw == state.indirect_draw &&
+	    (!state.indirect_draw || m_cached_gfx.indirect_offsets == state.indirect_offsets);
+
+	const auto current_vs_sgpr_epoch = command.GetShaders().VsSgprEpoch();
+	const auto current_ps_sgpr_epoch = command.GetShaders().PsSgprEpoch();
+	const auto current_srt_mem_epoch = BufferCache::GlobalSrtMemoryEpoch();
+
+	if (static_match) {
+		state.ps_active = m_cached_gfx.ps_active;
+		vertex_info[0]  = m_cached_gfx.vertex_info_template;
+		pixel_info      = m_cached_gfx.ps_info_template;
+
+		uint32_t push_data_cursor = m_cached_gfx.push_data_cursor_init;
+
+		if (m_cached_gfx.ps_active) {
+			if (m_cached_gfx.ps_stage &&
+			    m_cached_gfx.ps_sgpr_epoch == current_ps_sgpr_epoch &&
+			    m_cached_gfx.ps_srt_mem_epoch == current_srt_mem_epoch) {
+				pixel_info.stage = m_cached_gfx.ps_stage;
+				state.mrt_mask   = m_cached_gfx.ps_mrt_mask;
+				m_cached_gfx.ps_stage.module->info.bindings.AdvancePushData(push_data_cursor);
+			} else {
+				ShaderParams pixel_params = m_cached_gfx.ps_params;
+				const auto user_sgpr_count = pixel_regs.ps_regs.rsrc2.user_sgpr;
+				std::copy_n(pixel_regs.ps_user_sgpr.value, user_sgpr_count, pixel_params.user_data.data());
+				pixel_params.user_data_count = user_sgpr_count;
+				const auto* pixel_module = GetProgram(pixel_params, pixel_info, push_data_cursor);
+				state.mrt_mask = 0;
+				if (pixel_module != nullptr) {
+					for (const auto& output: pixel_module->info.info.outputs) {
+						if (output.kind == ShaderRecompiler::IR::StageOutputKind::Mrt ||
+						    output.kind == ShaderRecompiler::IR::StageOutputKind::ObjectPrimitiveId) {
+							state.mrt_mask |= 1u << output.location;
+						}
+					}
+					state.mrt_mask &= m_cached_gfx.color_output_mask;
+					if (!pixel_module->info.info.uses_image_heap) {
+						m_cached_gfx.ps_sgpr_epoch    = current_ps_sgpr_epoch;
+						m_cached_gfx.ps_srt_mem_epoch = current_srt_mem_epoch;
+						m_cached_gfx.ps_stage         = pixel_info.stage;
+						m_cached_gfx.ps_mrt_mask      = state.mrt_mask;
+					} else {
+						m_cached_gfx.ps_stage = {};
+					}
+				} else {
+					m_cached_gfx.ps_stage = {};
+				}
+			}
+		}
+
+		if (m_cached_gfx.vs_stage &&
+		    m_cached_gfx.vs_sgpr_epoch == current_vs_sgpr_epoch &&
+		    m_cached_gfx.vs_srt_mem_epoch == current_srt_mem_epoch) {
+			vertex_info[0].stage = m_cached_gfx.vs_stage;
+			m_cached_gfx.vs_stage.module->info.bindings.AdvancePushData(push_data_cursor);
+		} else {
+			ShaderParams vs_params = m_cached_gfx.vs_params;
+			if (m_cached_gfx.mesh_active) {
+				const auto user_sgpr_count = vertex_regs.gs_regs.rsrc2.user_sgpr;
+				constexpr uint32_t user_data_base = 8u;
+				std::copy_n(vertex_regs.gs_user_sgpr.value, user_sgpr_count, vs_params.user_data.data() + user_data_base);
+				vs_params.user_data_count = user_sgpr_count + user_data_base;
+			} else {
+				vs_params = PrepareProgram(vertex_regs, context, user_config, vertex_info[0]);
+			}
+			const auto* vs_module = GetProgram(vs_params, vertex_info[0], push_data_cursor);
+			if (vs_module != nullptr && !vs_module->info.info.uses_image_heap) {
+				m_cached_gfx.vs_sgpr_epoch    = current_vs_sgpr_epoch;
+				m_cached_gfx.vs_srt_mem_epoch = current_srt_mem_epoch;
+				m_cached_gfx.vs_stage         = vertex_info[0].stage;
+			} else {
+				m_cached_gfx.vs_stage = {};
+			}
+		}
+		return;
+	}
+
+	uint32_t color_output_mask = object_primitive_id ? 1u << 7u : 0;
 	for (uint32_t index = 0; index < RENDER_COLOR_ATTACHMENTS_MAX; index++) {
 		const auto slot = ShaderPixelExportTarget(sh.m_cbShaderMask, index);
 		if (slot >= RENDER_COLOR_ATTACHMENTS_MAX) {
@@ -804,29 +1076,11 @@ void PipelineCache::GetGraphicsPrograms(const CommandBuffer& command, DrawRender
 	     db.shader_mask_export_enable || db.shader_dual_export_enable ||
 	     db.shader_execute_on_noop || sh.AlphaToMask());
 	state.ps_active = pixel_active;
-	const bool tess_active = user_config.GetPrimType() == Prospero::PrimitiveType::kPatch;
+
 	std::array<ShaderParams, 3> vertex_params;
-	if (tess_active) {
-		vertex_params = PrepareTessellationPrograms(vertex_regs, context, vertex_info);
-		// Reflection decodes both programs; the key also covers the VGT fields in tess.
-		const uint64_t layout_key[] = {vertex_params[0].hash, vertex_params[1].hash,
-		                               uint64_t {sh.m_vgtLsHsConfig & 0xfff00u} << 32u |
-		                                   sh.m_vgtTfParam};
-		const auto [layout, inserted] = m_tess_layouts.try_emplace(
-		    XXH3_64bits(layout_key, sizeof(layout_key)), vertex_info[0].tess);
-		if (inserted) {
-			ShaderRecompiler::AnalyzeTessellationPrograms(vertex_params[0].code,
-			                                              vertex_params[1].code, layout->second);
-			StoreLayout(layout->first, layout->second);
-		}
-		for (auto& stage: vertex_info) {
-			stage.tess = layout->second;
-		}
-	} else {
-		vertex_params[0] = PrepareProgram(vertex_regs, context, user_config, vertex_info[0]);
-	}
+	vertex_params[0] = PrepareProgram(vertex_regs, context, user_config, vertex_info[0]);
 	const bool mesh_active = vertex_info[0].logical_stage == ShaderType::Mesh;
-	if (!tess_active && !mesh_active) {
+	if (!mesh_active) {
 		vertex_info[0].indirect_offsets = state.indirect_offsets;
 		vertex_info[0].indirect_draw    = state.indirect_draw;
 	}
@@ -860,6 +1114,7 @@ void PipelineCache::GetGraphicsPrograms(const CommandBuffer& command, DrawRender
 				    "Warning: dropping mesh draws the host does not support (shader 0x{:016x}).\n",
 				    vertex_params[0].hash));
 			}
+			m_cached_gfx.valid = false;
 			return;
 		}
 		// A task shader launches each record's groups and passes its draw parameters in a
@@ -874,9 +1129,8 @@ void PipelineCache::GetGraphicsPrograms(const CommandBuffer& command, DrawRender
 		}
 	}
 	ShaderParams pixel_params;
+	std::array<Prospero::ColorComponentMapping, RENDER_COLOR_ATTACHMENTS_MAX> target_export_mapping {};
 	if (pixel_active) {
-		std::array<Prospero::ColorComponentMapping, RENDER_COLOR_ATTACHMENTS_MAX>
-		    target_export_mapping {};
 		for (uint32_t slot = 0; slot < RENDER_COLOR_ATTACHMENTS_MAX; slot++) {
 			const auto& rt = context.GetRenderTarget(slot);
 			if ((color_output_mask & (1u << slot)) != 0 && rt.base.addr != 0) {
@@ -959,8 +1213,7 @@ void PipelineCache::GetGraphicsPrograms(const CommandBuffer& command, DrawRender
 			}
 		}
 	}
-	auto&       last_stage   = vertex_info[tess_active ? 2u : 0u];
-	const auto& clip_control = context.GetClipControl();
+	auto&       last_stage   = vertex_info[0];
 	if (clip_control.clip_disable) {
 		const auto& viewport = context.GetScreenViewport().viewports[0];
 		const auto& limits   = m_graphics.GetPhysicalDeviceProperties().limits;
@@ -982,20 +1235,60 @@ void PipelineCache::GetGraphicsPrograms(const CommandBuffer& command, DrawRender
 		                     Prospero::IsRectList(user_config.GetPrimType()));
 		last_stage.user_clip_planes = clip_control.user_clip_planes;
 	}
-	uint32_t push_data_cursor = ShaderRecompiler::IR::PushData::GraphicsDrawDwords(
+	const uint32_t push_data_cursor_init = ShaderRecompiler::IR::PushData::GraphicsDrawDwords(
 	    mesh_active, object_primitive_id, last_stage.user_clip_planes);
+	uint32_t push_data_cursor = push_data_cursor_init;
+
+	m_cached_gfx.valid = true;
+	m_cached_gfx.shader_map_epoch = current_shader_map_epoch;
+	m_cached_gfx.sh_static_epoch = current_sh_static_epoch;
+	m_cached_gfx.ucfg_static_epoch = current_ucfg_static_epoch;
+	m_cached_gfx.vs_regs_epoch = current_vs_regs_epoch;
+	m_cached_gfx.ps_regs_epoch = current_ps_regs_epoch;
+	m_cached_gfx.rt_epoch = current_rt_epoch;
+	m_cached_gfx.rt_mask = current_rt_mask;
+	m_cached_gfx.clip_disable = clip_control.clip_disable;
+	m_cached_gfx.user_clip_planes = clip_control.user_clip_planes;
+	m_cached_gfx.indirect_draw = state.indirect_draw;
+	m_cached_gfx.indirect_offsets = state.indirect_offsets;
+
+	m_cached_gfx.ps_active = pixel_active;
+	m_cached_gfx.mesh_active = mesh_active;
+	m_cached_gfx.object_primitive_id = object_primitive_id;
+	m_cached_gfx.color_output_mask = color_output_mask;
+	m_cached_gfx.push_data_cursor_init = push_data_cursor_init;
+	m_cached_gfx.vertex_info_template = vertex_info[0];
+	m_cached_gfx.ps_info_template = pixel_info;
+	m_cached_gfx.vs_params = vertex_params[0];
+	m_cached_gfx.ps_params = pixel_params;
+	m_cached_gfx.target_export_mapping = target_export_mapping;
+	m_cached_gfx.vs_stage = {};
+	m_cached_gfx.ps_stage = {};
+
 	if (pixel_active) {
-		const auto& pixel_module = *GetProgram(pixel_params, pixel_info, push_data_cursor);
-		for (const auto& output: pixel_module.info.info.outputs) {
-			if (output.kind == ShaderRecompiler::IR::StageOutputKind::Mrt ||
-			    output.kind == ShaderRecompiler::IR::StageOutputKind::ObjectPrimitiveId) {
-				state.mrt_mask |= 1u << output.location;
+		const auto* pixel_module = GetProgram(pixel_params, pixel_info, push_data_cursor);
+		state.mrt_mask = 0;
+		if (pixel_module != nullptr) {
+			for (const auto& output: pixel_module->info.info.outputs) {
+				if (output.kind == ShaderRecompiler::IR::StageOutputKind::Mrt ||
+				    output.kind == ShaderRecompiler::IR::StageOutputKind::ObjectPrimitiveId) {
+					state.mrt_mask |= 1u << output.location;
+				}
+			}
+			state.mrt_mask &= color_output_mask;
+			if (!pixel_module->info.info.uses_image_heap) {
+				m_cached_gfx.ps_sgpr_epoch    = current_ps_sgpr_epoch;
+				m_cached_gfx.ps_srt_mem_epoch = current_srt_mem_epoch;
+				m_cached_gfx.ps_stage         = pixel_info.stage;
+				m_cached_gfx.ps_mrt_mask      = state.mrt_mask;
 			}
 		}
-		state.mrt_mask &= color_output_mask;
 	}
-	for (uint32_t i = 0; i < (tess_active ? 3u : 1u); i++) {
-		GetProgram(vertex_params[i], vertex_info[i], push_data_cursor);
+	const auto* vs_module = GetProgram(vertex_params[0], vertex_info[0], push_data_cursor);
+	if (vs_module != nullptr && !vs_module->info.info.uses_image_heap) {
+		m_cached_gfx.vs_sgpr_epoch    = current_vs_sgpr_epoch;
+		m_cached_gfx.vs_srt_mem_epoch = current_srt_mem_epoch;
+		m_cached_gfx.vs_stage         = vertex_info[0].stage;
 	}
 }
 
@@ -1184,8 +1477,20 @@ PipelineCache::Pipeline& PipelineCache::GetGraphicsPipeline(const CommandBuffer&
 	// Publish any relink that finished since the last draw before this frame looks anything up.
 	PollPipelineLinks();
 
+	if (m_last_graphics_pipeline != nullptr && m_last_graphics_pipeline_key == key) {
+		if (m_last_graphics_pipeline->draws < LtoPromoteDraws) {
+			m_last_graphics_pipeline->draws++;
+			if (m_last_graphics_pipeline->draws == LtoPromoteDraws) {
+				QueuePipelineLink(key, *m_last_graphics_pipeline);
+			}
+		}
+		return *m_last_graphics_pipeline;
+	}
+
 	auto [iter, inserted] = m_graphics_pipelines.try_emplace(key);
 	auto& pipeline        = iter->second;
+	m_last_graphics_pipeline     = &pipeline;
+	m_last_graphics_pipeline_key = key;
 	if (!inserted) {
 		// The first draws run on the fast link; a pipeline the title keeps drawing is worth the
 		// background relink, and one it never comes back to is not.

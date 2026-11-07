@@ -280,10 +280,12 @@ template void CommandProcessor::WaitRegMem<uint64_t>(uint32_t, const uint64_t*, 
 void CommandProcessor::MemSemaphore(uint64_t* counter, bool signal, bool write) {
 	if (signal) {
 		*counter = write ? 1u : *counter + 1u;
+		m_renderer.GetBufferCache().BumpSrtMemoryEpoch();
 	} else if (*counter == 0) {
 		SuspendPm4();
 	} else {
 		(*counter)--;
+		m_renderer.GetBufferCache().BumpSrtMemoryEpoch();
 		m_renderer.GetRenderExecutor().InvalidateRenderTargetCache();
 	}
 }
@@ -304,6 +306,7 @@ void CommandProcessor::WriteData(uint32_t* dst, const uint32_t* src, uint32_t dw
 	if (dw_num == 0) {
 		return;
 	}
+	m_renderer.GetBufferCache().BumpSrtMemoryEpoch();
 	m_renderer.GetRenderExecutor().InvalidateRenderTargetCache();
 
 	// Completion labels can be reused immediately; memcpy may write a destination twice.
@@ -375,6 +378,7 @@ void CommandProcessor::DmaData(uint8_t dst_sel, uint64_t dst_address_or_offset, 
 	if (!decode_gds(dst_sel, dst_gds)) {
 		EXIT("unsupported dmaData destination selector 0x%02" PRIx8 "\n", dst_sel);
 	}
+	m_renderer.GetBufferCache().BumpSrtMemoryEpoch();
 	m_renderer.GetRenderExecutor().InvalidateRenderTargetCache();
 	auto& buffer_cache = m_renderer.GetBufferCache();
 	if (src_sel == 2) {
@@ -455,9 +459,8 @@ void GuestGpu::ThreadRun(void* data) {
 	KYTY_PROFILER_THREAD("Thread_Gpu");
 	g_gpu_state = gpu;
 
-	constexpr uint32_t MinCoalesceUs = 8;
-	constexpr uint32_t MaxCoalesceUs = 100;
-	uint32_t           coalesce_us   = 60;
+	constexpr uint32_t CoalesceWindowUs = 150;
+	uint32_t           slice_count      = 0;
 
 	for (;;) {
 		Submission                   submission;
@@ -475,7 +478,7 @@ void GuestGpu::ThreadRun(void* data) {
 					if (!gpu->ShouldBreakCoalesceWait()) {
 						const auto deadline =
 						    std::chrono::steady_clock::now() +
-						    std::chrono::microseconds(coalesce_us);
+						    std::chrono::microseconds(CoalesceWindowUs);
 						do {
 							for (uint32_t spin = 0; spin < 16u; ++spin) {
 #if defined(__x86_64__) || defined(_M_X64)
@@ -494,10 +497,7 @@ void GuestGpu::ThreadRun(void* data) {
 						    gpu->m_submission_count.load(std::memory_order_acquire) != 0 ||
 						    gpu->m_pending_commands.load(std::memory_order_acquire) != 0;
 					}
-					if (coalesced) {
-						coalesce_us = std::min(MaxCoalesceUs, coalesce_us + 20u);
-					} else {
-						coalesce_us = std::max(MinCoalesceUs, coalesce_us / 2u);
+					if (!coalesced) {
 						gpu->FlushPending();
 					}
 					gpu->m_queue_mutex.Lock();
@@ -545,7 +545,10 @@ void GuestGpu::ThreadRun(void* data) {
 				submission  = std::move(queue.front());
 				queue.pop_front();
 				gpu->m_submission_count.fetch_sub(1, std::memory_order_acq_rel);
-				gpu->m_next_queue = (static_cast<uint32_t>(selected_queue) + 1) % QueueCount;
+				if (queue.empty() || ++slice_count >= 16u) {
+					slice_count       = 0;
+					gpu->m_next_queue = (static_cast<uint32_t>(selected_queue) + 1) % QueueCount;
+				}
 				gpu->m_processing = true;
 			}
 		}
@@ -601,17 +604,6 @@ void GuestGpu::ThreadRun(void* data) {
 			}
 
 			needs_flush = !complete || gpu->GetProcessor(submission.queue_id).NeedsFlush();
-			if (!needs_flush) {
-				for (uint32_t offset = 0; offset < QueueCount; offset++) {
-					const auto id = (gpu->m_next_queue + offset) % QueueCount;
-					if (!gpu->m_queues[id].empty() && !gpu->m_queues[id].front().blocked) {
-						if (id != submission.queue_id) {
-							needs_flush = true;
-						}
-						break;
-					}
-				}
-			}
 		}
 
 		if (submission.type == SubmissionType::Commands && needs_flush) {
@@ -638,7 +630,6 @@ bool GuestGpu::Process(Submission& submission) {
 
 	switch (submission.type) {
 		case SubmissionType::Commands: {
-			m_renderer.GetRenderExecutor().InvalidateRenderTargetCache();
 			cp.MarkBatchDirty();
 			struct ActiveCpScope {
 				GuestGpu& gpu;
@@ -673,6 +664,7 @@ Pm4ProcessResult CommandProcessor::Process(Pm4Execution&             execution,
 	KYTY_PROFILER_BLOCK("CommandProcessor::Process");
 	EXIT_IF(g_current_execution != nullptr);
 	EXIT_IF(commands.size() > UINT32_MAX);
+	m_renderer.GetBufferCache().BumpSrtMemoryEpoch();
 	if (execution.m_buffer_stack.empty() && !commands.empty()) {
 		execution.m_buffer_stack.push_back({commands});
 	}
@@ -998,6 +990,7 @@ void CommandProcessor::DrawIndirectMulti(uint32_t data_offset, uint32_t max_coun
 void CommandProcessor::DispatchDirect(uint32_t thread_group_x, uint32_t thread_group_y,
                                       uint32_t thread_group_z, uint32_t mode) {
 	RecordDispatch();
+	m_renderer.GetBufferCache().BumpSrtMemoryEpoch();
 	m_sh_ctx.SetCsWaveSize(Pm4::ComputeWaveSize(mode));
 	m_renderer.GetRenderExecutor().DispatchDirect(CurrentBuffer(), thread_group_x, thread_group_y,
 	                                              thread_group_z, mode, IsAsyncComputeQueue());
@@ -1010,6 +1003,7 @@ void CommandProcessor::ProcessPssr(const Pssr::Request& request) {
 
 void CommandProcessor::DispatchIndirect(uint64_t args_addr, uint32_t mode) {
 	RecordDispatch();
+	m_renderer.GetBufferCache().BumpSrtMemoryEpoch();
 	EXIT_NOT_IMPLEMENTED(args_addr == 0 || (args_addr & 3u) != 0);
 	if ((mode & Pm4::COMPUTE_DISPATCH_INITIATOR_USE_THREAD_DIMENSIONS) != 0) {
 		const auto* args = reinterpret_cast<const vk::DispatchIndirectCommand*>(args_addr);
@@ -1062,7 +1056,13 @@ void CommandProcessor::ReleaseMem(uint32_t data_sel, uint32_t interrupt_selector
 	}
 
 	// Dumped occlusion counters are written before any end-of-pipe signal reaches the guest.
-	m_renderer.GetOcclusionQueries().Publish(true);
+	if (m_renderer.GetOcclusionQueries().HasPendingDumps()) {
+		if (data_sel == 1 || data_sel == 2) {
+			m_renderer.GetOcclusionQueries().Publish(true);
+		} else {
+			m_renderer.GetOcclusionQueries().Publish(false);
+		}
+	}
 
 	// A label beside GPU-written bytes goes to the backing store, so they are not downloaded.
 	// Other labels go through the guest mapping: its fault keeps a clean cached copy current and

@@ -774,6 +774,32 @@ void RenderExecutor::PrepareBindings(const ShaderStageRuntime& runtime,
 	const auto& program  = runtime.module->info;
 	const auto& snapshot = *runtime.resources;
 	prepared.runtime = &runtime;
+
+	const uint64_t texture_epoch = m_context.GetTextureCache().ResolveEpoch();
+	const uint64_t buffer_epoch  = m_context.GetBufferCache().MutationEpoch();
+	const uint64_t tick          = m_context.GetCommandScheduler().CurrentTick();
+
+	const bool can_reuse = (prepared.cached_module == runtime.module &&
+	                        prepared.cached_resources == runtime.resources &&
+	                        prepared.cached_texture_epoch == texture_epoch &&
+	                        prepared.cached_buffer_epoch == buffer_epoch &&
+	                        prepared.cached_tick == tick &&
+	                        !program.info.uses_image_heap);
+	if (can_reuse) {
+		for (const auto& binding: prepared.images) {
+			if (binding.image_id) {
+				BindImage(binding.image_id, binding.desc.type == TextureCache::BindingType::Storage);
+			}
+		}
+		return;
+	}
+
+	prepared.cached_module        = runtime.module;
+	prepared.cached_resources     = runtime.resources;
+	prepared.cached_texture_epoch = texture_epoch;
+	prepared.cached_buffer_epoch  = buffer_epoch;
+	prepared.cached_tick          = tick;
+
 	prepared.gds = {nullptr, 0, VK_WHOLE_SIZE};
 	prepared.flattened_srt = {};
 	prepared.shader_data_buffer = {};

@@ -96,7 +96,26 @@ public:
 	[[nodiscard]] RangeSet TakeBdaSync();
 	void               RunGarbageCollector();
 
+	[[nodiscard]] uint64_t MutationEpoch() const noexcept {
+		return m_mutation_epoch.load(std::memory_order_acquire);
+	}
+	void BumpMutationEpoch() noexcept {
+		m_mutation_epoch.fetch_add(1, std::memory_order_release);
+	}
+
+	[[nodiscard]] static uint64_t GlobalSrtMemoryEpoch() noexcept {
+		return s_srt_memory_epoch.load(std::memory_order_acquire);
+	}
+	[[nodiscard]] uint64_t SrtMemoryEpoch() const noexcept {
+		return m_srt_memory_epoch.load(std::memory_order_acquire);
+	}
+	void BumpSrtMemoryEpoch() noexcept {
+		s_srt_memory_epoch.fetch_add(1, std::memory_order_release);
+		m_srt_memory_epoch.fetch_add(1, std::memory_order_release);
+	}
+
 private:
+	inline static std::atomic<uint64_t> s_srt_memory_epoch {1};
 	friend struct BufferCacheTestAccess;
 
 	bool IsBufferInvalid(BufferId id) const { return !id || m_slot_buffers[id].is_deleted; }
@@ -157,6 +176,9 @@ private:
 	uint64_t m_trigger_gc_memory  = 1ull * 1024 * 1024 * 1024;
 	uint64_t m_critical_gc_memory = 2ull * 1024 * 1024 * 1024;
 	uint64_t m_gc_tick            = 0;
+
+	std::atomic<uint64_t> m_mutation_epoch {1};
+	std::atomic<uint64_t> m_srt_memory_epoch {1};
 };
 
 } // namespace Libs::Graphics
