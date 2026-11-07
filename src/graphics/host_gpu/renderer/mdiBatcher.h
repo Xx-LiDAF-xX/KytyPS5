@@ -242,13 +242,15 @@ inline void ResolveStageStreamUploads(vk::Buffer stream_handle, bool need_srt,
 	}
 }
 
-// Selector 2 (kAfterWriteConfirm) is emitted after tiny (~3-draw) bundles in games like GYLT;
-// keeping m_needs_flush false for selector 2 lets consecutive PM4 slices coalesce into MDI
-// batches up to MaxDrawsInBatch(), while GuestGpu::ThreadRun still flushes immediately whenever
-// the queue drains (m_submission_count == 0), blocks (!complete), or switches queues.
+// Selectors 1 (kOnly) and 2 (kAfterWriteConfirm) are emitted after command list slices in UE4
+// and other guest engines; keeping m_needs_flush false for selectors 1 and 2 lets consecutive
+// PM4 slices coalesce into MDI batches up to MaxDrawsInBatch(), while GuestGpu::ThreadRun still
+// flushes immediately whenever the queue drains (m_submission_count == 0), blocks (!complete),
+// switches queues, or reaches MaxInterruptsInBatch.
+// Only selector 4 (kSendIntCtx, context synchronizations) forces an immediate submit.
 [[nodiscard]] constexpr bool ShouldFlushReleaseMemInterrupt(bool     has_listener,
                                                             uint32_t interrupt_selector) noexcept {
-	return has_listener && (interrupt_selector == 1u || interrupt_selector == 4u);
+	return has_listener && interrupt_selector == 4u;
 }
 
 class MdiBatcher {

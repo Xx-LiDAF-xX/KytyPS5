@@ -287,12 +287,12 @@ void TestStreamSliceCacheWraparoundInvalidation() {
 }
 
 void TestReleaseMemInterruptFlushPolicy() {
-	// Explicit interrupt sync selectors (1 = kOnly, 4 = kSendIntCtx) flush immediately when a
-	// listener exists, whereas selector 2 (kAfterWriteConfirm) stays batched across PM4 slices
+	// Explicit inter-queue sync selector (4 = kSendIntCtx) flushes immediately when a
+	// listener exists, whereas selectors 1 (kOnly) and 2 (kAfterWriteConfirm) stay batched across PM4 slices
 	// until MaxDrawsInBatch(), queue drain (m_submission_count == 0), block, or queue switch.
 	CHECK(!ShouldFlushReleaseMemInterrupt(/*has_listener=*/false, /*selector=*/1));
 	CHECK(!ShouldFlushReleaseMemInterrupt(/*has_listener=*/false, /*selector=*/2));
-	CHECK(ShouldFlushReleaseMemInterrupt(/*has_listener=*/true, /*selector=*/1));
+	CHECK(!ShouldFlushReleaseMemInterrupt(/*has_listener=*/true, /*selector=*/1));
 	CHECK(!ShouldFlushReleaseMemInterrupt(/*has_listener=*/true, /*selector=*/2));
 	CHECK(ShouldFlushReleaseMemInterrupt(/*has_listener=*/true, /*selector=*/4));
 }
