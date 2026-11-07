@@ -34,14 +34,14 @@
 
 ## Tasks
 
-- [ ] **Task 1: Compiler Optimization Flags & Warning Suppression**
+- [x] **Task 1: Compiler Optimization Flags & Warning Suppression**
   - **Files:** `src/utils.cmake`
   - **Details:**
     - In MSVC / Clang-CL configuration, replace `/Oy-` with `/Oy` for Release and RelWithDebInfo builds to enable Frame Pointer Omission on x64, freeing `rbp` as a 16th general-purpose register.
     - Add compile definitions `_SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING` and `_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS` to eliminate spam during compilation.
   - **Verification:** Run `ninja -C _Build/windows -j 4` and verify clean compilation without codecvt warnings.
 
-- [ ] **Task 2: Eliminate Synchronous CPU-GPU Wait Stalls in ReleaseMem**
+- [x] **Task 2: Eliminate Synchronous CPU-GPU Wait Stalls in ReleaseMem**
   - **Files:** `src/graphics/guest_gpu/graphicsRun.cpp`
   - **Details:**
     - In `CommandProcessor::ReleaseMem` (around line 1065), replace `m_renderer.GetOcclusionQueries().Publish(true)` with `m_renderer.GetOcclusionQueries().Publish(false)`.
@@ -49,7 +49,7 @@
     - Confirm that blocking waits (`Publish(true)`) remain active where required: in `CommandProcessor::SetPredication` (where the GPU CPU actually tests predication data), `CommandProcessor::BufferWait()`, and `SubmissionType::SuspendPoint`.
   - **Verification:** Run `.\_Build\windows\occlusion_queries_tests.exe` and `.\_Build\windows\mdi_batcher_tests.exe`.
 
-- [ ] **Task 3: Scale Background Pipeline Linking Worker Pool**
+- [x] **Task 3: Scale Background Pipeline Linking Worker Pool**
   - **Files:** `src/graphics/host_gpu/renderer/pipeline/pipelineCache.h`, `src/graphics/host_gpu/renderer/pipeline/pipelineCache.cpp`
   - **Details:**
     - Increase `MaxOutstandingLinks` from 2 to 16.
@@ -58,14 +58,14 @@
     - In destructor, notify all workers (`m_link_ready.notify_all()`) and join all workers before saving cache.
   - **Verification:** Build and run all test binaries.
 
-- [ ] **Task 4: Eliminate Duplicate MDI Bindings Hash Calculation**
+- [x] **Task 4: Eliminate Duplicate MDI Bindings Hash Calculation**
   - **Files:** `src/graphics/host_gpu/renderer/renderDraw.cpp`, `src/graphics/host_gpu/renderer/pipeline/descriptors.cpp`, `src/graphics/host_gpu/renderer/render.h`
   - **Details:**
     - In `RenderExecutor::Draw`, when `CanFastAppendMdiBindings` evaluates the 128-bit hash, pass an optional output pointer `MdiHash128* out_hash`.
     - If the batch cannot be appended and a new batch begins, forward `computed_hash` directly into `gfx_extra.out_mdi_bindings_hash` instead of re-running the full `ComputeMdiBindingsHash` over all descriptor tables a second time.
   - **Verification:** Run `.\_Build\windows\mdi_batcher_tests.exe` and `.\_Build\windows\resource_tracking_tests.exe`.
 
-- [ ] **Task 5: Full Regression Testing & Binary Linking**
+- [x] **Task 5: Full Regression Testing & Binary Linking**
   - **Files:** All modified files
   - **Details:**
     - Build full project with `ninja -C _Build/windows -j 4`.
