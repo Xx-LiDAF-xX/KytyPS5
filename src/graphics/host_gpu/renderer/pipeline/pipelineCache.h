@@ -13,7 +13,6 @@
 #include "graphics/shader/recompiler/ir/passes/ResourceMaterialization.h"
 #include "graphics/shader/rectListShader.h"
 #include "graphics/shader/shader.h"
-#include "graphics/shader/shaderCompiler.h"
 
 #include <array>
 #include <atomic>
@@ -306,55 +305,8 @@ private:
 	std::vector<RetiredPipeline> m_retired;
 	std::atomic<uint32_t>        m_link_outstanding {0};
 	bool                         m_link_stop = false;
-	uint32_t                     m_max_outstanding_links = 8;
-	uint64_t                     m_last_retired_poll_tick = 0;
-
-	struct CachedGraphicsStatic {
-		uint64_t shader_map_epoch = UINT64_MAX;
-		uint64_t sh_static_epoch = UINT64_MAX;
-		uint64_t ucfg_static_epoch = UINT64_MAX;
-		uint64_t vs_regs_epoch = UINT64_MAX;
-		uint64_t ps_regs_epoch = UINT64_MAX;
-		uint64_t rt_epoch = UINT64_MAX;
-		uint32_t rt_mask = 0;
-		bool clip_disable = false;
-		uint32_t user_clip_planes = 0;
-		bool indirect_draw = false;
-		ShaderIndirectOffsets indirect_offsets {};
-		bool valid = false;
-
-		// Resolved static attributes
-		bool ps_active = false;
-		bool mesh_active = false;
-		bool object_primitive_id = false;
-		uint32_t color_output_mask = 0;
-		uint32_t push_data_cursor_init = 0;
-		ShaderVertexInputInfo vertex_info_template {};
-		ShaderPixelInputInfo ps_info_template {};
-		ShaderParams vs_params {};
-		ShaderParams ps_params {};
-		std::array<Prospero::ColorComponentMapping, RENDER_COLOR_ATTACHMENTS_MAX> target_export_mapping {};
-
-		// VS dynamic binding cache
-		uint64_t vs_sgpr_epoch = UINT64_MAX;
-		uint64_t vs_srt_mem_epoch = UINT64_MAX;
-		ShaderStageRuntime vs_stage {};
-		ShaderVertexInputInfo vs_info {};
-
-		// PS dynamic binding cache
-		uint64_t ps_sgpr_epoch = UINT64_MAX;
-		uint64_t ps_srt_mem_epoch = UINT64_MAX;
-		ShaderStageRuntime ps_stage {};
-		ShaderPixelInputInfo ps_info {};
-		uint32_t ps_mrt_mask = 0;
-	};
-	CachedGraphicsStatic m_cached_gfx;
-
-	Pipeline*           m_last_graphics_pipeline = nullptr;
-	GraphicsPipelineKey m_last_graphics_pipeline_key {};
-
-	// Declared last, so they join before the state they read is destroyed.
-	std::vector<std::jthread> m_link_threads;
+	// Declared last, so it joins before the state it reads is destroyed.
+	std::jthread m_link_thread;
 
 	template <typename InputInfo>
 	const ShaderModule* GetProgram(const ShaderParams& params, InputInfo& input_info,

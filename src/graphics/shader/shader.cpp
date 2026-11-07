@@ -94,10 +94,6 @@ void ShaderMapUserData(uint64_t addr, const ShaderMappedData& data) {
 	g_shader_map_epoch.fetch_add(1, std::memory_order_release);
 }
 
-uint64_t ShaderGetMapEpoch() noexcept {
-	return g_shader_map_epoch.load(std::memory_order_acquire);
-}
-
 static ShaderMapEntry ShaderGetMappedData(uint64_t addr, const char* label) {
 	EXIT_IF(g_shader_map == nullptr);
 

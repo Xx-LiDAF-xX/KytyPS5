@@ -51,12 +51,6 @@ struct PreparedBindings {
 	// Per-tick stream upload deduplication (with wraparound tick-advance re-upload protection).
 	StreamSliceCache cached_srt;
 	StreamSliceCache cached_shader_data;
-
-	const ShaderModule*                           cached_module        = nullptr;
-	const ShaderRecompiler::IR::ResourceSnapshot* cached_resources     = nullptr;
-	uint64_t                                      cached_texture_epoch = 0;
-	uint64_t                                      cached_buffer_epoch  = 0;
-	uint64_t                                      cached_tick          = 0;
 };
 
 [[nodiscard]] vk::DescriptorType
