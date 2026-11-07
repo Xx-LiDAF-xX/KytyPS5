@@ -253,9 +253,8 @@ public:
 	[[nodiscard]] vk::Format Format() const noexcept { return m_format; }
 	[[nodiscard]] bool IsHdrSupported() const noexcept { return m_hdr_supported.load(); }
 	bool SetHdr(bool hdr) {
-		const bool target_hdr = (hdr || Config::HdrEnabled()) && IsHdrSupported();
-		const bool changed    = m_hdr_active != target_hdr;
-		m_hdr_requested       = target_hdr;
+		const bool changed = m_hdr_active != (hdr && IsHdrSupported());
+		m_hdr_requested = hdr;
 		return changed;
 	}
 
@@ -347,7 +346,7 @@ vk::SurfaceFormatKHR Swapchain::SelectFormat() {
 		           vk::FormatFeatureFlagBits::eBlitDst);
 	});
 	m_hdr_supported        = Config::HdrEnabled() && hdr_format != formats.end();
-	m_hdr_active           = (m_hdr_requested || Config::HdrEnabled()) && IsHdrSupported();
+	m_hdr_active           = m_hdr_requested && IsHdrSupported();
 	if (m_hdr_active) {
 		return *hdr_format;
 	}
@@ -755,7 +754,7 @@ void Swapchain::DrawLayer(vk::CommandBuffer command, const Presenter::Layer& lay
 void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* source,
                                       const Presenter::Layer& overlay, bool draw_system_overlay) {
 	auto       vk_command      = command.Handle();
-	const bool convert_source  = source != nullptr && source->hdr != m_hdr_active;
+	const bool convert_source  = source != nullptr && source->hdr && !m_hdr_active;
 	const bool blit_source     = source != nullptr && !convert_source;
 	const bool draw_overlay    = overlay.frame != nullptr;
 	const bool draw_attachment = convert_source || draw_overlay || draw_system_overlay;
