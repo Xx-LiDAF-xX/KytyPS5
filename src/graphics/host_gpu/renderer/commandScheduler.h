@@ -111,9 +111,10 @@ private:
 	std::mutex                   m_operation_mutex;
 	std::condition_variable      m_operation_available;
 	std::jthread                 m_priority_thread;
-	std::atomic<uint64_t>        m_submitted_tick       {0};
-	uint64_t                     m_priority_active_tick = 0; // 0 while none runs
-	OperationState               m_operation_state      = OperationState::Open;
+	std::atomic<uint64_t>        m_submitted_tick        {0};
+	std::atomic<uint64_t>        m_earliest_pending_tick {UINT64_MAX};
+	uint64_t                     m_priority_active_tick  = 0; // 0 while none runs
+	OperationState               m_operation_state       = OperationState::Open;
 };
 
 } // namespace Libs::Graphics

@@ -296,6 +296,91 @@ void TestReleaseMemInterruptFlushPolicy() {
 	CHECK(!ShouldFlushReleaseMemInterrupt(/*has_listener=*/true, /*selector=*/2));
 	CHECK(ShouldFlushReleaseMemInterrupt(/*has_listener=*/true, /*selector=*/4));
 }
+
+void TestDescriptorSet0AndPushConstantDeduplication() {
+	BoundGraphicsState state {};
+	const auto         layout1 = reinterpret_cast<VkPipelineLayout>(0xa001);
+	const auto         layout2 = reinterpret_cast<VkPipelineLayout>(0xa002);
+	const MdiHash128   hash1 {0x1111222233334444ULL, 0x5555666677778888ULL};
+	const MdiHash128   hash2 {0x9999aaaabbbbccccULL, 0xddddeeeeffff0000ULL};
+
+	CHECK(state.ShouldBindDescriptorSet0(layout1, hash1));
+	CHECK(!state.ShouldBindDescriptorSet0(layout1, hash1));
+	CHECK(state.ShouldBindDescriptorSet0(layout2, hash1));
+	CHECK(!state.ShouldBindDescriptorSet0(layout2, hash1));
+	CHECK(state.ShouldBindDescriptorSet0(layout2, hash2));
+	state.InvalidateDescriptorSet0();
+	CHECK(state.ShouldBindDescriptorSet0(layout2, hash2));
+
+	const std::array<uint32_t, 4> push_a {1u, 2u, 3u, 4u};
+	const std::array<uint32_t, 6> push_a_ext {1u, 2u, 3u, 4u, 5u, 6u};
+	const std::array<uint32_t, 4> push_b {1u, 2u, 9u, 4u};
+
+	CHECK(!state.ShouldPushConstants(layout1, 0x21u, {}));
+	CHECK(state.ShouldPushConstants(layout1, 0x21u, push_a));
+	CHECK(!state.ShouldPushConstants(layout1, 0x21u, push_a));
+	// Growing push constant range with same prefix must still push the newly needed tail dwords.
+	CHECK(state.ShouldPushConstants(layout1, 0x21u, push_a_ext));
+	// Shrinking to an identical prefix with same layout & stages can skip pushing.
+	CHECK(!state.ShouldPushConstants(layout1, 0x21u, push_a));
+	// Different pipeline layout or stage flags must re-push.
+	CHECK(state.ShouldPushConstants(layout2, 0x21u, push_a));
+	CHECK(state.ShouldPushConstants(layout2, 0x01u, push_a));
+	// Different payload must re-push.
+	CHECK(state.ShouldPushConstants(layout2, 0x01u, push_b));
+	// Compute/EndRendering helper invalidation forces next graphics draw to re-push.
+	state.InvalidatePushConstants();
+	CHECK(state.ShouldPushConstants(layout2, 0x01u, push_b));
+}
+
+void TestActiveVertexBufferHashAndMdiMatchesScalars() {
+	BoundGraphicsState state {};
+	CHECK(state.MatchesActiveVertexBuffers(0, {}, {}, {}));
+	CHECK(state.vertex_buffer_hash == ComputeVertexBufferHash(0, {}, {}, {}));
+
+	const std::array<vk::Buffer, 2> bufs {
+	    vk::Buffer {reinterpret_cast<VkBuffer>(0xb001)},
+	    vk::Buffer {reinterpret_cast<VkBuffer>(0xb002)},
+	};
+	const std::array<vk::DeviceSize, 2> offs {0, 64};
+	const std::array<vk::DeviceSize, 2> szs {128, 256};
+
+	CHECK(state.ShouldBindVertexBuffers(2, bufs, offs, szs));
+	CHECK(state.MatchesActiveVertexBuffers(2, bufs, offs, szs));
+	CHECK(state.vertex_buffer_hash == ComputeVertexBufferHash(2, bufs, offs, szs));
+
+	// Shrinking active count from 2 -> 1 with identical slot 0 skips vkCmdBindVertexBuffers2
+	// while updating active_vertex_count and vertex_buffer_hash for 1-slot shaders!
+	CHECK(!state.ShouldBindVertexBuffers(1, std::span {bufs}.first(1), std::span {offs}.first(1),
+	                                     std::span {szs}.first(1)));
+	CHECK(state.MatchesActiveVertexBuffers(1, std::span {bufs}.first(1), std::span {offs}.first(1),
+	                                       std::span {szs}.first(1)));
+	CHECK(!state.MatchesActiveVertexBuffers(2, bufs, offs, szs));
+	CHECK(state.vertex_buffer_hash ==
+	      ComputeVertexBufferHash(1, std::span {bufs}.first(1), std::span {offs}.first(1),
+	                              std::span {szs}.first(1)));
+
+	MdiBatcher        batcher {};
+	const VkPipeline  pipe = reinterpret_cast<VkPipeline>(0xc001);
+	const VkBuffer    ib   = reinterpret_cast<VkBuffer>(0xc002);
+	const MdiBatchKey key {
+	    .pipeline           = pipe,
+	    .index_buffer       = ib,
+	    .index_offset       = 0,
+	    .index_type         = VK_INDEX_TYPE_UINT16,
+	    .topology           = 4,
+	    .object_id          = 7,
+	    .vertex_buffer_hash = state.vertex_buffer_hash,
+	    .bindings_hash      = {0x123ULL, 0x456ULL},
+	};
+	CHECK(!batcher.MatchesScalars(pipe, ib, 0, VK_INDEX_TYPE_UINT16, 4, 7, true, 16));
+	batcher.BeginBatch(key, true);
+	batcher.AppendIndexed({.indexCount = 18, .instanceCount = 1});
+	CHECK(batcher.MatchesScalars(pipe, ib, 0, VK_INDEX_TYPE_UINT16, 4, 7, true, 16));
+	CHECK(!batcher.MatchesScalars(pipe, ib, 0, VK_INDEX_TYPE_UINT16, 4, 8, true, 16));
+	CHECK(!batcher.MatchesScalars(pipe, ib, 0, VK_INDEX_TYPE_UINT16, 4, 7, false, 16));
+	CHECK(!batcher.MatchesScalars(pipe, ib, 0, VK_INDEX_TYPE_UINT16, 4, 7, true, 1));
+}
 } // namespace
 
 int main() {
@@ -306,6 +391,8 @@ int main() {
 	TestPerCommandBufferStateIsolationAndHelperInvalidation();
 	TestStreamSliceCacheWraparoundInvalidation();
 	TestReleaseMemInterruptFlushPolicy();
+	TestDescriptorSet0AndPushConstantDeduplication();
+	TestActiveVertexBufferHashAndMdiMatchesScalars();
 	std::printf("MdiBatcher tests passed\n");
 	return 0;
 }

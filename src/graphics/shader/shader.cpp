@@ -18,6 +18,8 @@
 #include "libs/errno.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <bit>
 #include <cstdio>
 #include <cstring>
@@ -49,11 +51,13 @@ struct ShaderMapEntry {
 
 static std::unique_ptr<std::unordered_map<uint64_t, ShaderMapEntry>> g_shader_map;
 static std::mutex                                                      g_shader_map_mutex;
+static std::atomic<uint64_t>                                           g_shader_map_epoch {1};
 
 void ShaderInit() {
 	EXIT_IF(g_shader_map != nullptr);
 
 	g_shader_map = std::make_unique<std::unordered_map<uint64_t, ShaderMapEntry>>();
+	g_shader_map_epoch.fetch_add(1, std::memory_order_release);
 }
 
 // The program's code and, at align16(code size), its literal buffer, as sized by the 0x30-byte
@@ -87,14 +91,32 @@ void ShaderMapUserData(uint64_t addr, const ShaderMappedData& data) {
 	    ShaderReadVertexMetadata(data, HW::UserSgprInfo::SGPRS_MAX, mapped.vertex);
 	std::scoped_lock lock(g_shader_map_mutex);
 	(*g_shader_map)[addr] = {mapped, hash};
+	g_shader_map_epoch.fetch_add(1, std::memory_order_release);
 }
 
 static ShaderMapEntry ShaderGetMappedData(uint64_t addr, const char* label) {
 	EXIT_IF(g_shader_map == nullptr);
 
+	struct ThreadCacheSlot {
+		uint64_t       epoch = 0;
+		uint64_t       addr  = 0;
+		ShaderMapEntry entry {};
+	};
+	static constexpr size_t                           CacheSize = 64;
+	thread_local std::array<ThreadCacheSlot, CacheSize> tl_cache {};
+
+	const uint64_t epoch = g_shader_map_epoch.load(std::memory_order_acquire);
+	auto&          slot  = tl_cache[((addr >> 6u) ^ (addr >> 15u)) & (CacheSize - 1u)];
+	if (slot.epoch == epoch && slot.addr == addr && addr != 0) {
+		return slot.entry;
+	}
+
 	std::scoped_lock lock(g_shader_map_mutex);
 
 	if (auto iter = g_shader_map->find(addr); iter != g_shader_map->end()) {
+		slot.epoch = g_shader_map_epoch.load(std::memory_order_relaxed);
+		slot.addr  = addr;
+		slot.entry = iter->second;
 		return iter->second;
 	}
 

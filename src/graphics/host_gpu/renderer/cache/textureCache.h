@@ -12,6 +12,7 @@
 #include "graphics/host_gpu/renderer/image/image.h"
 #include "graphics/host_gpu/renderer/image/tiler.h"
 
+#include <atomic>
 #include <bitset>
 #include <map>
 #include <unordered_set>
@@ -76,6 +77,9 @@ public:
 	[[nodiscard]] bool TouchMeta(uint64_t address, uint32_t slice, bool is_clear);
 
 	void UnmapMemory(uint64_t address, uint64_t size);
+	[[nodiscard]] uint64_t ResolveEpoch() const noexcept {
+		return m_resolve_epoch.load(std::memory_order_relaxed);
+	}
 	// Returns the number of images whose writeback was recorded into the current command buffer.
 	uint32_t ProcessDownloadImages();
 	void RunGarbageCollector();
@@ -173,9 +177,10 @@ private:
 	uint64_t                                          m_trigger_gc_memory  = 0;
 	uint64_t                                          m_pressure_gc_memory = 1536ull * 1024 * 1024;
 	uint64_t         m_critical_gc_memory     = 3ull * 1024 * 1024 * 1024;
-	uint64_t         m_gc_tick                = 0;
-	bool             m_readback_linear_images = false;
-	bool             m_readback_tiled_images  = false;
+	uint64_t              m_gc_tick                = 0;
+	std::atomic<uint64_t> m_resolve_epoch {1};
+	bool                  m_readback_linear_images = false;
+	bool                  m_readback_tiled_images  = false;
 
 	friend struct TextureCacheTestAccess;
 	friend class BufferCache;

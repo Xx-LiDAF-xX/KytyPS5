@@ -32,10 +32,12 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
+#include <cstring>
 #include <fmt/format.h>
 #include <limits>
 #include <span>
 #include <vector>
+#include <xxhash.h>
 
 namespace Libs::Graphics {
 
@@ -469,6 +471,38 @@ static bool ResolveTextureMipView(ImageInfo& info, uint32_t physical_levels, boo
 	return false;
 }
 
+[[nodiscard]] static uint64_t
+PackImageResourceKey(const ShaderRecompiler::IR::ImageResource& r) noexcept {
+	uint64_t key = 0;
+	key |= uint64_t {static_cast<uint32_t>(r.resource_class) & 0x7u};
+	key |= uint64_t {static_cast<uint32_t>(r.numeric_class) & 0x7u} << 3u;
+	key |= uint64_t {static_cast<uint32_t>(r.dimension) & 0xfu} << 6u;
+	key |= uint64_t {static_cast<uint32_t>(r.mip_mode) & 0x7u} << 10u;
+	key |= uint64_t {r.mip_count & 0x1fu} << 13u;
+	key |= uint64_t {static_cast<uint8_t>(r.conversion_format)} << 18u;
+	key |= uint64_t {static_cast<uint8_t>(r.srgb_decode)} << 26u;
+	key |= uint64_t {r.read} << 34u;
+	key |= uint64_t {r.written} << 35u;
+	key |= uint64_t {r.atomic} << 36u;
+	key |= uint64_t {r.atomic64} << 37u;
+	key |= uint64_t {r.unfiltered_access_only} << 38u;
+	key |= uint64_t {r.depth_compare} << 39u;
+	key |= uint64_t {r.skip_degamma} << 40u;
+	key |= uint64_t {r.cube} << 41u;
+	key |= uint64_t {r.r128} << 42u;
+	key |= uint64_t {r.heap} << 43u;
+	key |= uint64_t {r.shader_swizzle & 0xfffffu} << 44u;
+	return key;
+}
+
+[[nodiscard]] static bool
+SameDescriptorValue(const ShaderRecompiler::IR::DescriptorValue& left,
+                    const ShaderRecompiler::IR::DescriptorValue& right) noexcept {
+	return left.dword_count == right.dword_count &&
+	       std::equal(left.dwords.begin(), left.dwords.begin() + left.dword_count,
+	                  right.dwords.begin());
+}
+
 TextureBinding RenderExecutor::ResolveTexture(const ShaderRecompiler::IR::ImageResource&   resource,
                                               const ShaderRecompiler::IR::DescriptorValue& value) {
 	if (resource.atomic64 && !m_context.GetGraphics().shader_image_int64_atomics_enabled) {
@@ -483,6 +517,38 @@ TextureBinding RenderExecutor::ResolveTexture(const ShaderRecompiler::IR::ImageR
 	auto& texture_cache = m_context.GetTextureCache();
 	if (descriptor.IsNull()) {
 		return {.layout = vk::ImageLayout::eGeneral};
+	}
+
+	const bool cacheable = !storage && !resource.heap && !m_lod_stats &&
+	                       (resource.r128 || !descriptor.MetaCompress()) &&
+	                       resource.mip_count < 32u && (resource.shader_swizzle >> 20u) == 0u;
+	uint64_t resource_key = 0;
+	size_t   cache_slot   = 0;
+	if (cacheable) {
+		resource_key = PackImageResourceKey(resource);
+		uint64_t h   = resource_key ^ (uint64_t {value.dword_count} * 0x9e3779b97f4a7c15ULL);
+		for (uint32_t i = 0; i < value.dword_count; ++i) {
+			h ^= uint64_t {value.dwords[i]} + 0x9e3779b97f4a7c15ULL + (h << 6u) + (h >> 2u);
+		}
+		h ^= h >> 33u;
+		h *= 0xff51afd7ed558ccdULL;
+		h ^= h >> 33u;
+		cache_slot          = static_cast<size_t>(h) & (ResolvedTextureCacheSize - 1u);
+		const uint64_t epoch = texture_cache.ResolveEpoch();
+		const auto&    entry = m_resolved_texture_cache[cache_slot];
+		if (entry.epoch == epoch && entry.resource_key == resource_key &&
+		    SameDescriptorValue(entry.value, value)) {
+			std::scoped_lock lock {texture_cache.m_lock};
+			if (entry.epoch == texture_cache.ResolveEpoch()) {
+				if (auto* cached = texture_cache.m_slot_images.try_get(entry.image_id);
+				    cached != nullptr && cached->registered && !cached->depth_id &&
+				    !cached->binding.needs_rebind) {
+					cached->tick_accessed_last = texture_cache.m_gc_tick;
+					texture_cache.TouchImage(*cached);
+					return {entry.image_id, nullptr, entry.desc};
+				}
+			}
+		}
 	}
 	// Image heap resolves do not follow the draws that sample them: they report no samples.
 	if (m_lod_stats && descriptor.MipStatsCntEn() && !resource.heap) {
@@ -640,6 +706,14 @@ TextureBinding RenderExecutor::ResolveTexture(const ShaderRecompiler::IR::ImageR
 		                                          resource.skip_degamma);
 		(void)SelectSampledColorView(image->info.pixel_format, desc.view_info.format,
 		                             descriptor.DstSelXYZW());
+	}
+	if (cacheable && !stencil_association) {
+		auto& entry        = m_resolved_texture_cache[cache_slot];
+		entry.epoch        = texture_cache.ResolveEpoch();
+		entry.resource_key = resource_key;
+		entry.value        = value;
+		entry.image_id     = id;
+		entry.desc         = desc;
 	}
 	return {id, nullptr, std::move(desc)};
 }
@@ -921,14 +995,195 @@ void RenderExecutor::PrepareGraphicsBindings(std::span<PreparedBindings* const> 
 	}
 }
 
+[[nodiscard]] static bool IsImageReadyForFastMdi(const Image&         image,
+                                                 const ImageViewInfo& view) noexcept {
+	const auto     expected_layout = image.ReadLayout();
+	constexpr auto expected_access = vk::AccessFlagBits2::eShaderRead;
+	if (image.backing.subresource_states.empty()) {
+		return image.backing.state.layout == expected_layout &&
+		       image.backing.state.access_mask == expected_access;
+	}
+	const uint32_t layers = image.info.resources.layers;
+	for (uint32_t level = view.base_level; level < view.base_level + view.level_count; ++level) {
+		for (uint32_t layer = view.base_layer; layer < view.base_layer + view.layer_count;
+		     ++layer) {
+			const auto index = level * layers + layer;
+			if (index >= image.backing.subresource_states.size()) {
+				return false;
+			}
+			const auto& sub = image.backing.subresource_states[index];
+			if (sub.layout != expected_layout || sub.access_mask != expected_access) {
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+[[nodiscard]] static MdiHash128 ComputeMdiBindingsHash(
+    RenderContext& context, const CommandBuffer& buffer,
+    std::span<PreparedBindings* const> stages, uint32_t draw_dword_count,
+    std::span<const uint32_t> draw_dwords, uint32_t user_clip_planes, bool check_fast_ready,
+    bool& out_eligible) noexcept {
+	MdiHash128 hash {0x517cc1b727220a95ULL, 0xbb67ae8584caa73bULL};
+	MixMdiHash128(hash, stages.size());
+	MixMdiHash128(hash, draw_dword_count);
+	for (uint32_t i = 0; i < draw_dword_count; ++i) {
+		MixMdiHash128(hash, draw_dwords[i]);
+	}
+	out_eligible = true;
+
+	auto& texture_cache = context.GetTextureCache();
+	auto& buffer_cache  = context.GetBufferCache();
+
+	for (const auto* prepared: stages) {
+		const auto& program = prepared->runtime->module->info;
+		MixMdiHash128(hash, program.shader_hash);
+		MixMdiHash128(hash, program.bindings.descriptor_mask);
+
+		if (prepared->gds.buffer != nullptr) {
+			out_eligible = false;
+			if (check_fast_ready) {
+				return {};
+			}
+		}
+
+		MixMdiHash128(hash, prepared->buffers.size());
+		for (const auto& buf: prepared->buffers) {
+			MixMdiHash128(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(buf.buffer)));
+			MixMdiHash128(hash, buf.offset);
+			MixMdiHash128(hash, buf.range);
+		}
+
+		const auto mix_buf_info = [&](const vk::DescriptorBufferInfo& info) {
+			MixMdiHash128(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(info.buffer)));
+			MixMdiHash128(hash, info.offset);
+			MixMdiHash128(hash, info.range);
+		};
+		mix_buf_info(prepared->flattened_srt);
+		mix_buf_info(prepared->shader_data_buffer);
+		mix_buf_info(prepared->shared_memory);
+
+		if (program.bindings.descriptor_counts[static_cast<size_t>(BindingKind::BdaPagetable)] != 0) {
+			const auto* bda = buffer_cache.GetBdaPageTableBuffer();
+			MixMdiHash128(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(bda->Handle())));
+			MixMdiHash128(hash, bda->Size());
+		}
+		if (program.bindings.descriptor_counts[static_cast<size_t>(BindingKind::FaultBuffer)] != 0) {
+			const auto* fault = buffer_cache.GetFaultBuffer();
+			MixMdiHash128(hash,
+			              reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(fault->Handle())));
+			MixMdiHash128(hash, fault->Size());
+		}
+
+		const auto& sdata = prepared->shader_data;
+		MixMdiHash128(hash, sdata.size());
+		size_t d = 0;
+		for (; d + 1 < sdata.size(); d += 2) {
+			MixMdiHash128(hash, uint64_t {sdata[d]} | (uint64_t {sdata[d + 1]} << 32u));
+		}
+		if (d < sdata.size()) {
+			MixMdiHash128(hash, sdata[d]);
+		}
+
+		MixMdiHash128(hash, prepared->samplers.size());
+		for (const auto sampler: prepared->samplers) {
+			MixMdiHash128(hash, reinterpret_cast<uintptr_t>(static_cast<VkSampler>(sampler)));
+		}
+
+		MixMdiHash128(hash, program.info.images.size());
+		for (uint32_t i = 0; i < program.info.images.size(); ++i) {
+			if (program.info.images[i].heap) {
+				continue;
+			}
+			const auto& tex = prepared->images[i];
+			MixMdiHash128(hash, tex.image_id.index);
+			MixMdiHash128(hash,
+			              reinterpret_cast<uintptr_t>(static_cast<VkImageView>(tex.image_view)));
+			MixMdiHash128(hash, tex.mip_views.size());
+			for (const auto mv: tex.mip_views) {
+				MixMdiHash128(hash, reinterpret_cast<uintptr_t>(static_cast<VkImageView>(mv)));
+			}
+			if (!tex.image_id) {
+				continue;
+			}
+			if (tex.desc.type == TextureCache::BindingType::Storage) {
+				out_eligible = false;
+				if (check_fast_ready) {
+					return {};
+				}
+				continue;
+			}
+			const auto& img = texture_cache.GetImage(tex.image_id);
+			if (img.binding.is_target || img.binding.shader_write ||
+			    (img.binding.force_general && !img.info.IsDepth())) {
+				out_eligible = false;
+				if (check_fast_ready) {
+					return {};
+				}
+			} else if (check_fast_ready && !IsImageReadyForFastMdi(img, tex.desc.view_info)) {
+				out_eligible = false;
+				return {};
+			}
+		}
+	}
+
+	MixMdiHash128(hash, user_clip_planes);
+	if (user_clip_planes != 0) {
+		const auto&    clip_data = buffer.GetRegisters().GetUserClipPlanes();
+		const uint32_t dword_cnt = std::bit_width(user_clip_planes) * 4u;
+		const auto*    bytes     = reinterpret_cast<const uint8_t*>(clip_data.data());
+		for (uint32_t d = 0; d < dword_cnt; d += 2) {
+			uint64_t qword = 0;
+			std::memcpy(&qword, bytes + static_cast<size_t>(d) * sizeof(uint32_t), sizeof(uint64_t));
+			MixMdiHash128(hash, qword);
+		}
+	}
+
+	return hash;
+}
+
+bool RenderExecutor::CanFastAppendMdiBindings(const CommandBuffer&               buffer,
+                                              const PipelineCache::Pipeline&     pipeline,
+                                              std::span<PreparedBindings* const> bindings,
+                                              uint32_t                           draw_dword_count,
+                                              std::span<const uint32_t>          draw_dwords,
+                                              uint32_t                           user_clip_planes,
+                                              const MdiHash128&                  expected_hash) {
+	(void)pipeline;
+	bool             eligible = false;
+	const MdiHash128 hash =
+	    ComputeMdiBindingsHash(m_context, buffer, bindings, draw_dword_count, draw_dwords,
+	                           user_clip_planes, /*check_fast_ready=*/true, eligible);
+	return eligible && hash == expected_hash;
+}
+
 void RenderExecutor::CommitBindings(CommandBuffer&                     buffer,
                                     vk::PipelineBindPoint              pipeline_bind_point,
                                     const PipelineCache::Pipeline&     pipeline,
-                                    std::span<PreparedBindings* const> prepared_bindings) {
+                                    std::span<PreparedBindings* const> prepared_bindings,
+                                    GraphicsCommitExtra*               gfx_extra) {
 	KYTY_PROFILER_FUNCTION();
 	size_t                         image_descriptor_count = 0;
-	ShaderRecompiler::IR::PushData push_data;
-	bool                           has_push_data = false;
+	ShaderRecompiler::IR::PushData push_data {};
+	uint32_t                       max_push_dword = 0;
+	if (gfx_extra != nullptr) {
+		if (gfx_extra->draw_dword_count != 0) {
+			std::copy_n(gfx_extra->draw_dwords.begin(), gfx_extra->draw_dword_count,
+			            push_data.dwords.begin());
+			max_push_dword = std::max(max_push_dword, gfx_extra->draw_dword_count);
+		}
+		if (gfx_extra->user_clip_planes != 0) {
+			const uint32_t clip_dwords = std::bit_width(gfx_extra->user_clip_planes) * 4u;
+			std::memcpy(
+			    &push_data.dwords[ShaderRecompiler::IR::PushData::UserClipPlaneDword],
+			    buffer.GetRegisters().GetUserClipPlanes().data(),
+			    clip_dwords * sizeof(uint32_t));
+			max_push_dword = std::max(
+			    max_push_dword,
+			    ShaderRecompiler::IR::PushData::UserClipPlaneDword + clip_dwords);
+		}
+	}
 	for (const auto* prepared: prepared_bindings) {
 		const auto& program = prepared->runtime->module->info;
 		for (auto mask = program.bindings.descriptor_mask; mask != 0; mask &= mask - 1) {
@@ -943,6 +1198,11 @@ void RenderExecutor::CommitBindings(CommandBuffer&                     buffer,
 	}
 	if (pipeline.uses_image_heap) {
 		m_context.GetImageHeap().Commit(buffer, pipeline_bind_point, pipeline.pipeline_layout);
+		if (pipeline_bind_point == vk::PipelineBindPoint::eGraphics &&
+		    buffer.GraphicsState().set0_layout !=
+		        static_cast<VkPipelineLayout>(pipeline.pipeline_layout)) {
+			buffer.GraphicsState().InvalidateDescriptorSet0();
+		}
 	}
 	auto vk_buffer = buffer.Handle();
 	m_descriptor_images.resize(image_descriptor_count);
@@ -1076,33 +1336,88 @@ void RenderExecutor::CommitBindings(CommandBuffer&                     buffer,
 		}
 
 		if (program.bindings.UsesPushData()) {
-			std::ranges::copy(prepared->shader_data,
-			                  push_data.dwords.begin() + program.bindings.push_data_start_dword);
-			has_push_data = true;
+			const uint32_t start = program.bindings.push_data_start_dword;
+			std::ranges::copy(prepared->shader_data, push_data.dwords.begin() + start);
+			max_push_dword =
+			    std::max(max_push_dword, start + static_cast<uint32_t>(prepared->shader_data.size()));
 		}
 	}
 
-	if (has_push_data) {
-		vk_buffer.pushConstants(pipeline.pipeline_layout, pipeline.push_stages, 0,
-		                        sizeof(push_data), push_data.dwords.data());
+	if (max_push_dword != 0) {
+		if (pipeline_bind_point == vk::PipelineBindPoint::eGraphics) {
+			const std::span<const uint32_t> push_span {push_data.dwords.data(), max_push_dword};
+			if (buffer.GraphicsState().ShouldPushConstants(
+			        static_cast<VkPipelineLayout>(pipeline.pipeline_layout),
+			        static_cast<uint32_t>(pipeline.push_stages), push_span)) {
+				vk_buffer.pushConstants(pipeline.pipeline_layout, pipeline.push_stages, 0,
+				                        max_push_dword * sizeof(uint32_t), push_data.dwords.data());
+			}
+		} else {
+			buffer.GraphicsState().InvalidatePushConstants();
+			vk_buffer.pushConstants(pipeline.pipeline_layout, pipeline.push_stages, 0,
+			                        sizeof(push_data), push_data.dwords.data());
+		}
 	}
 
 	if (!m_descriptor_writes.empty()) {
-		if (pipeline.uses_push_descriptors) {
-			vk_buffer.pushDescriptorSetKHR(pipeline_bind_point, pipeline.pipeline_layout, 0,
-			                               static_cast<uint32_t>(m_descriptor_writes.size()),
-			                               m_descriptor_writes.data());
-		} else {
-			const auto set = m_context.GetDescriptorHeap().Commit(pipeline.descriptor_set_layout);
-			for (auto& write: m_descriptor_writes) {
-				write.dstSet = set;
+		bool should_bind_set0 = true;
+		if (pipeline_bind_point == vk::PipelineBindPoint::eGraphics) {
+			m_descriptor_hash_words.clear();
+			for (const auto& write: m_descriptor_writes) {
+				m_descriptor_hash_words.push_back(
+				    uint64_t {write.dstBinding} |
+				    (uint64_t {static_cast<uint32_t>(write.descriptorType)} << 16u) |
+				    (uint64_t {write.descriptorCount} << 32u));
+				if (write.pBufferInfo != nullptr) {
+					for (uint32_t i = 0; i < write.descriptorCount; ++i) {
+						const auto& bi = write.pBufferInfo[i];
+						m_descriptor_hash_words.push_back(
+						    reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(bi.buffer)));
+						m_descriptor_hash_words.push_back(bi.offset);
+						m_descriptor_hash_words.push_back(bi.range);
+					}
+				} else if (write.pImageInfo != nullptr) {
+					for (uint32_t i = 0; i < write.descriptorCount; ++i) {
+						const auto& ii = write.pImageInfo[i];
+						m_descriptor_hash_words.push_back(
+						    reinterpret_cast<uintptr_t>(static_cast<VkSampler>(ii.sampler)));
+						m_descriptor_hash_words.push_back(
+						    reinterpret_cast<uintptr_t>(static_cast<VkImageView>(ii.imageView)));
+						m_descriptor_hash_words.push_back(static_cast<uint32_t>(ii.imageLayout));
+					}
+				}
 			}
-			m_context.GetGraphics().device.updateDescriptorSets(
-			    static_cast<uint32_t>(m_descriptor_writes.size()), m_descriptor_writes.data(), 0,
-			    nullptr);
-			vk_buffer.bindDescriptorSets(pipeline_bind_point, pipeline.pipeline_layout, 0, 1, &set,
-			                             0, nullptr);
+			const auto xxh = XXH3_128bits(m_descriptor_hash_words.data(),
+			                              m_descriptor_hash_words.size() * sizeof(uint64_t));
+			should_bind_set0 = buffer.GraphicsState().ShouldBindDescriptorSet0(
+			    static_cast<VkPipelineLayout>(pipeline.pipeline_layout), {xxh.low64, xxh.high64});
 		}
+		if (should_bind_set0) {
+			if (pipeline.uses_push_descriptors) {
+				vk_buffer.pushDescriptorSetKHR(pipeline_bind_point, pipeline.pipeline_layout, 0,
+				                               static_cast<uint32_t>(m_descriptor_writes.size()),
+				                               m_descriptor_writes.data());
+			} else {
+				const auto set =
+				    m_context.GetDescriptorHeap().Commit(pipeline.descriptor_set_layout);
+				for (auto& write: m_descriptor_writes) {
+					write.dstSet = set;
+				}
+				m_context.GetGraphics().device.updateDescriptorSets(
+				    static_cast<uint32_t>(m_descriptor_writes.size()), m_descriptor_writes.data(), 0,
+				    nullptr);
+				vk_buffer.bindDescriptorSets(pipeline_bind_point, pipeline.pipeline_layout, 0, 1,
+				                             &set, 0, nullptr);
+			}
+		}
+	}
+
+	if (gfx_extra != nullptr && gfx_extra->compute_mdi_info) {
+		const std::span<const uint32_t> draw_span {gfx_extra->draw_dwords.data(),
+		                                           gfx_extra->draw_dword_count};
+		gfx_extra->out_mdi_bindings_hash = ComputeMdiBindingsHash(
+		    m_context, buffer, prepared_bindings, gfx_extra->draw_dword_count, draw_span,
+		    gfx_extra->user_clip_planes, /*check_fast_ready=*/false, gfx_extra->out_can_begin_mdi);
 	}
 }
 

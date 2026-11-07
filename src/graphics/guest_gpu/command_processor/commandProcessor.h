@@ -116,16 +116,27 @@ public:
 	Pm4ProcessResult Process(Pm4Execution& execution, std::span<const uint32_t> commands);
 	void             ProcessIndirectBuffer(std::span<const uint32_t> commands, bool chain);
 
+	static constexpr uint32_t MaxInterruptsInBatch = 32u;
+
 	[[nodiscard]] bool IsAsyncComputeQueue() const { return m_interrupt_event_id >= 0x20; }
 	[[nodiscard]] bool NeedsFlush() const noexcept { return m_needs_flush; }
-	[[nodiscard]] bool HasWork() const noexcept { return m_draws_in_batch > 0 || m_needs_flush; }
-	static uint32_t    MaxDrawsInBatch() noexcept {
+	[[nodiscard]] bool HasWork() const noexcept {
+		return m_batch_dirty || m_draws_in_batch > 0 || m_interrupts_in_batch > 0 || m_needs_flush;
+	}
+	void MarkBatchDirty() noexcept { m_batch_dirty = true; }
+	void ClearBatchState() noexcept {
+		m_needs_flush         = false;
+		m_batch_dirty         = false;
+		m_draws_in_batch      = 0;
+		m_interrupts_in_batch = 0;
+	}
+	static uint32_t MaxDrawsInBatch() noexcept {
 		const auto threads = std::thread::hardware_concurrency();
-		return std::clamp(threads != 0 ? threads * 8 : 128u, 32u, 256u);
+		return std::clamp(threads != 0 ? threads * 16 : 128u, 64u, 256u);
 	}
 	static uint32_t MaxDispatchesInBatch() noexcept {
 		const auto threads = std::thread::hardware_concurrency();
-		return std::clamp(threads != 0 ? threads * 4 : 64u, 16u, 128u);
+		return std::clamp(threads != 0 ? threads * 8 : 64u, 32u, 128u);
 	}
 	void RecordDrawCall() noexcept {
 		if (++m_draws_in_batch >= MaxDrawsInBatch()) {
@@ -165,7 +176,9 @@ private:
 	uint64_t  m_synthetic_occlusion_counter = 0;
 	bool      m_predicate_skip              = false;
 	bool      m_needs_flush                 = false;
+	bool      m_batch_dirty                 = false;
 	uint32_t  m_draws_in_batch              = 0;
+	uint32_t  m_interrupts_in_batch         = 0;
 };
 
 } // namespace Libs::Graphics

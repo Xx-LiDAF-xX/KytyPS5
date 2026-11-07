@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <deque>
 #include <memory>
@@ -30,6 +31,10 @@
 #include <semaphore>
 #include <thread>
 #include <vector>
+
+#if defined(__x86_64__) || defined(_M_X64)
+#include <immintrin.h>
+#endif
 
 namespace Libs::Graphics {
 
@@ -54,7 +59,7 @@ void GuestGpu::Shutdown() {
 	{
 		Common::LockGuard lock(m_queue_mutex);
 		m_accepting = false;
-		m_stopping  = true;
+		m_stopping.store(true, std::memory_order_release);
 		m_work_available.SignalAll();
 	}
 	if (m_thread.joinable()) {
@@ -64,8 +69,7 @@ void GuestGpu::Shutdown() {
 }
 
 bool GuestGpu::IsStopping() {
-	Common::LockGuard lock(m_queue_mutex);
-	return m_stopping;
+	return m_stopping.load(std::memory_order_acquire);
 }
 
 void GuestGpu::SendCommand(Common::UniqueFunction<void>&& command) {
@@ -83,6 +87,7 @@ void GuestGpu::SendCommand(Common::UniqueFunction<void>&& command) {
 
 void GuestGpu::ProcessCommands() {
 	while (m_pending_commands.load(std::memory_order_acquire) != 0) {
+		FlushPending();
 		Common::UniqueFunction<void> command;
 		{
 			Common::LockGuard lock(m_queue_mutex);
@@ -92,6 +97,9 @@ void GuestGpu::ProcessCommands() {
 			EXIT_IF(m_pending_commands.fetch_sub(1, std::memory_order_acq_rel) == 0);
 		}
 		command();
+		if (m_active_cp != nullptr) {
+			m_active_cp->MarkBatchDirty();
+		}
 	}
 }
 
@@ -180,8 +188,7 @@ void CommandProcessor::Reset() {
 	m_predicate_skip                   = false;
 	m_draw_indirect_args_base_addr     = 0;
 	m_dispatch_indirect_args_base_addr = 0;
-	m_needs_flush                      = false;
-	m_draws_in_batch                   = 0;
+	ClearBatchState();
 }
 
 void CommandProcessor::ApplyContextStateOperation(ContextStateOperation operation) {
@@ -209,8 +216,7 @@ void CommandProcessor::BufferInit() {
 }
 
 void CommandProcessor::BufferFlush() {
-	m_needs_flush    = false;
-	m_draws_in_batch = 0;
+	ClearBatchState();
 	if (!GetScheduler().Active()) {
 		return;
 	}
@@ -224,8 +230,7 @@ void CommandProcessor::BufferFlush() {
 }
 
 void CommandProcessor::BufferWait() {
-	m_needs_flush    = false;
-	m_draws_in_batch = 0;
+	ClearBatchState();
 	BufferInit();
 	m_renderer.GetRenderExecutor().FlushMdi(CurrentBuffer());
 	GetScheduler().Finish();
@@ -262,7 +267,9 @@ void CommandProcessor::WaitRegMem(uint32_t func, const T* addr, T ref, T mask, u
 
 	if (!TestWaitRegMemValue(*addr, ref, mask, func)) {
 		SuspendPm4();
+		return;
 	}
+	m_renderer.GetRenderExecutor().InvalidateRenderTargetCache();
 }
 
 template void CommandProcessor::WaitRegMem<uint32_t>(uint32_t, const uint32_t*, uint32_t, uint32_t,
@@ -277,6 +284,7 @@ void CommandProcessor::MemSemaphore(uint64_t* counter, bool signal, bool write) 
 		SuspendPm4();
 	} else {
 		(*counter)--;
+		m_renderer.GetRenderExecutor().InvalidateRenderTargetCache();
 	}
 }
 
@@ -296,6 +304,7 @@ void CommandProcessor::WriteData(uint32_t* dst, const uint32_t* src, uint32_t dw
 	if (dw_num == 0) {
 		return;
 	}
+	m_renderer.GetRenderExecutor().InvalidateRenderTargetCache();
 
 	// Completion labels can be reused immediately; memcpy may write a destination twice.
 	auto* output = static_cast<volatile uint32_t*>(dst);
@@ -366,6 +375,7 @@ void CommandProcessor::DmaData(uint8_t dst_sel, uint64_t dst_address_or_offset, 
 	if (!decode_gds(dst_sel, dst_gds)) {
 		EXIT("unsupported dmaData destination selector 0x%02" PRIx8 "\n", dst_sel);
 	}
+	m_renderer.GetRenderExecutor().InvalidateRenderTargetCache();
 	auto& buffer_cache = m_renderer.GetBufferCache();
 	if (src_sel == 2) {
 		buffer_cache.FillBuffer(
@@ -388,15 +398,54 @@ void GuestGpu::Enqueue(Submission submission) {
 	Common::LockGuard lock(m_queue_mutex);
 	EXIT_IF(!m_accepting);
 	m_queues[submission.queue_id].push_back(std::move(submission));
-	m_submission_count++;
+	m_submission_count.fetch_add(1, std::memory_order_release);
 	m_work_available.Signal();
 }
 
 void GuestGpu::WaitForIdle() {
 	EXIT_IF(IsGpuThread() || CommandScheduler::InDeferredOperation());
+	struct IdleWaiterScope {
+		GuestGpu& gpu;
+		explicit IdleWaiterScope(GuestGpu& g) noexcept: gpu(g) {
+			gpu.m_idle_waiters.fetch_add(1, std::memory_order_acq_rel);
+		}
+		~IdleWaiterScope() { gpu.m_idle_waiters.fetch_sub(1, std::memory_order_acq_rel); }
+	} waiter_scope(*this);
 	Common::LockGuard lock(m_queue_mutex);
-	while (m_processing || !m_commands.empty() || m_submission_count != 0) {
+	m_work_available.Signal();
+	while (m_processing || !m_commands.empty() ||
+	       m_submission_count.load(std::memory_order_acquire) != 0) {
 		m_idle.Wait(&m_queue_mutex);
+	}
+}
+
+bool GuestGpu::HasUnflushedWork() const noexcept {
+	if (m_gfx_cp && m_gfx_cp->HasWork()) {
+		return true;
+	}
+	for (const auto& cp: m_compute_cp) {
+		if (cp && cp->HasWork()) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool GuestGpu::ShouldBreakCoalesceWait() const noexcept {
+	return m_submission_count.load(std::memory_order_acquire) != 0 ||
+	       m_pending_commands.load(std::memory_order_acquire) != 0 ||
+	       m_stopping.load(std::memory_order_acquire) ||
+	       m_idle_waiters.load(std::memory_order_acquire) != 0;
+}
+
+void GuestGpu::FlushPending() {
+	if (m_gfx_cp && m_gfx_cp->HasWork()) {
+		m_gfx_cp->BufferFlush();
+	}
+	for (auto& cp: m_compute_cp) {
+		if (cp && cp->HasWork()) {
+			cp->BufferFlush();
+		}
 	}
 }
 
@@ -406,27 +455,9 @@ void GuestGpu::ThreadRun(void* data) {
 	KYTY_PROFILER_THREAD("Thread_Gpu");
 	g_gpu_state = gpu;
 
-	const auto has_unflushed_work = [gpu]() noexcept {
-		if (gpu->m_gfx_cp && gpu->m_gfx_cp->HasWork()) {
-			return true;
-		}
-		for (const auto& cp: gpu->m_compute_cp) {
-			if (cp && cp->HasWork()) {
-				return true;
-			}
-		}
-		return false;
-	};
-	const auto flush_all_pending = [gpu]() {
-		if (gpu->m_gfx_cp && gpu->m_gfx_cp->HasWork()) {
-			gpu->m_gfx_cp->BufferFlush();
-		}
-		for (auto& cp: gpu->m_compute_cp) {
-			if (cp && cp->HasWork()) {
-				cp->BufferFlush();
-			}
-		}
-	};
+	constexpr uint32_t MinCoalesceUs = 8;
+	constexpr uint32_t MaxCoalesceUs = 100;
+	uint32_t           coalesce_us   = 60;
 
 	for (;;) {
 		Submission                   submission;
@@ -434,11 +465,41 @@ void GuestGpu::ThreadRun(void* data) {
 		bool                         should_stop = false;
 		{
 			Common::LockGuard lock(gpu->m_queue_mutex);
-			while (gpu->m_commands.empty() && gpu->m_submission_count == 0 && !gpu->m_stopping) {
-				if (has_unflushed_work()) {
+			while (gpu->m_commands.empty() &&
+			       gpu->m_submission_count.load(std::memory_order_acquire) == 0 &&
+			       !gpu->m_stopping.load(std::memory_order_acquire)) {
+				if (gpu->HasUnflushedWork()) {
 					gpu->m_processing = true;
 					gpu->m_queue_mutex.Unlock();
-					flush_all_pending();
+					bool coalesced = false;
+					if (!gpu->ShouldBreakCoalesceWait()) {
+						const auto deadline =
+						    std::chrono::steady_clock::now() +
+						    std::chrono::microseconds(coalesce_us);
+						do {
+							for (uint32_t spin = 0; spin < 16u; ++spin) {
+#if defined(__x86_64__) || defined(_M_X64)
+								_mm_pause();
+#endif
+							}
+							if (gpu->ShouldBreakCoalesceWait()) {
+								coalesced =
+								    gpu->m_submission_count.load(std::memory_order_acquire) != 0 ||
+								    gpu->m_pending_commands.load(std::memory_order_acquire) != 0;
+								break;
+							}
+						} while (std::chrono::steady_clock::now() < deadline);
+					} else {
+						coalesced =
+						    gpu->m_submission_count.load(std::memory_order_acquire) != 0 ||
+						    gpu->m_pending_commands.load(std::memory_order_acquire) != 0;
+					}
+					if (coalesced) {
+						coalesce_us = std::min(MaxCoalesceUs, coalesce_us + 20u);
+					} else {
+						coalesce_us = std::max(MinCoalesceUs, coalesce_us / 2u);
+						gpu->FlushPending();
+					}
 					gpu->m_queue_mutex.Lock();
 					continue;
 				}
@@ -446,7 +507,8 @@ void GuestGpu::ThreadRun(void* data) {
 				gpu->m_idle.SignalAll();
 				gpu->m_work_available.Wait(&gpu->m_queue_mutex);
 			}
-			if (gpu->m_stopping && gpu->m_commands.empty() && gpu->m_submission_count == 0) {
+			if (gpu->m_stopping.load(std::memory_order_acquire) && gpu->m_commands.empty() &&
+			    gpu->m_submission_count.load(std::memory_order_acquire) == 0) {
 				gpu->m_processing = true;
 				should_stop       = true;
 			} else if (!gpu->m_commands.empty()) {
@@ -464,10 +526,10 @@ void GuestGpu::ThreadRun(void* data) {
 					}
 				}
 				if (selected_queue < 0) {
-					if (has_unflushed_work()) {
+					if (gpu->HasUnflushedWork()) {
 						gpu->m_processing = true;
 						gpu->m_queue_mutex.Unlock();
-						flush_all_pending();
+						gpu->FlushPending();
 						gpu->m_queue_mutex.Lock();
 					}
 					gpu->m_processing = false;
@@ -482,13 +544,13 @@ void GuestGpu::ThreadRun(void* data) {
 				auto& queue = gpu->m_queues[static_cast<uint32_t>(selected_queue)];
 				submission  = std::move(queue.front());
 				queue.pop_front();
-				gpu->m_submission_count--;
+				gpu->m_submission_count.fetch_sub(1, std::memory_order_acq_rel);
 				gpu->m_next_queue = (static_cast<uint32_t>(selected_queue) + 1) % QueueCount;
 				gpu->m_processing = true;
 			}
 		}
 		if (should_stop) {
-			flush_all_pending();
+			gpu->FlushPending();
 			gpu->m_gfx_cp->BufferWait();
 			{
 				Common::LockGuard lock(gpu->m_queue_mutex);
@@ -500,6 +562,7 @@ void GuestGpu::ThreadRun(void* data) {
 		}
 
 		if (command) {
+			gpu->FlushPending();
 			{
 				Common::DebugCounters::ScopedTimer busy(
 				    Common::DebugCounters::Counter::GpuThreadBusyNs);
@@ -507,7 +570,9 @@ void GuestGpu::ThreadRun(void* data) {
 			}
 
 			Common::LockGuard lock(gpu->m_queue_mutex);
-			if (gpu->m_commands.empty() && gpu->m_submission_count == 0 && !has_unflushed_work()) {
+			if (gpu->m_commands.empty() &&
+			    gpu->m_submission_count.load(std::memory_order_acquire) == 0 &&
+			    !gpu->HasUnflushedWork()) {
 				gpu->m_processing = false;
 				gpu->m_idle.SignalAll();
 			}
@@ -526,7 +591,7 @@ void GuestGpu::ThreadRun(void* data) {
 			if (!complete) {
 				submission.blocked = true;
 				gpu->m_queues[submission.queue_id].push_front(std::move(submission));
-				gpu->m_submission_count++;
+				gpu->m_submission_count.fetch_add(1, std::memory_order_acq_rel);
 			} else {
 				for (auto& queue: gpu->m_queues) {
 					if (!queue.empty()) {
@@ -535,9 +600,7 @@ void GuestGpu::ThreadRun(void* data) {
 				}
 			}
 
-			needs_flush = !complete ||
-			              gpu->GetProcessor(submission.queue_id).NeedsFlush() ||
-			              (gpu->m_submission_count == 0);
+			needs_flush = !complete || gpu->GetProcessor(submission.queue_id).NeedsFlush();
 			if (!needs_flush) {
 				for (uint32_t offset = 0; offset < QueueCount; offset++) {
 					const auto id = (gpu->m_next_queue + offset) % QueueCount;
@@ -557,7 +620,9 @@ void GuestGpu::ThreadRun(void* data) {
 
 		{
 			Common::LockGuard lock(gpu->m_queue_mutex);
-			if (gpu->m_commands.empty() && gpu->m_submission_count == 0 && !has_unflushed_work()) {
+			if (gpu->m_commands.empty() &&
+			    gpu->m_submission_count.load(std::memory_order_acquire) == 0 &&
+			    !gpu->HasUnflushedWork()) {
 				gpu->m_processing = false;
 				gpu->m_idle.SignalAll();
 			}
@@ -572,10 +637,20 @@ bool GuestGpu::Process(Submission& submission) {
 	bool complete = true;
 
 	switch (submission.type) {
-		case SubmissionType::Commands:
+		case SubmissionType::Commands: {
+			m_renderer.GetRenderExecutor().InvalidateRenderTargetCache();
+			cp.MarkBatchDirty();
+			struct ActiveCpScope {
+				GuestGpu& gpu;
+				explicit ActiveCpScope(GuestGpu& g, CommandProcessor& processor) noexcept: gpu(g) {
+					gpu.m_active_cp = &processor;
+				}
+				~ActiveCpScope() { gpu.m_active_cp = nullptr; }
+			} active_cp_scope(*this, cp);
 			complete =
 			    cp.Process(submission.execution, submission.commands) == Pm4ProcessResult::Complete;
 			break;
+		}
 		case SubmissionType::FlipPreparation:
 			cp.PrepareCpuFlip(submission.flip_request_id);
 			break;
@@ -1028,7 +1103,9 @@ void CommandProcessor::ReleaseMem(uint32_t data_sel, uint32_t interrupt_selector
 		    [&renderer = m_renderer, event_id = m_interrupt_event_id, interrupt_context_id] {
 			    renderer.TriggerInterrupt(event_id, interrupt_context_id);
 		    });
-		if (ShouldFlushReleaseMemInterrupt(has_listener, interrupt_selector)) {
+		++m_interrupts_in_batch;
+		if (ShouldFlushReleaseMemInterrupt(has_listener, interrupt_selector) ||
+		    m_interrupts_in_batch >= MaxInterruptsInBatch) {
 			m_needs_flush = true;
 		}
 	}
@@ -1116,8 +1193,7 @@ void CommandProcessor::Flip(int handle, int index, int flip_mode, int64_t flip_a
 	if (graphics_debug_dump_enabled()) {
 		LOGF("CommandProcessor::Flip()\n");
 	}
-	m_needs_flush    = false;
-	m_draws_in_batch = 0;
+	ClearBatchState();
 	auto& command = CurrentBuffer();
 	m_renderer.GetRenderExecutor().FlushMdi(command);
 	m_renderer.GetOcclusionQueries().Publish(true);
@@ -1128,8 +1204,7 @@ void CommandProcessor::Flip(int handle, int index, int flip_mode, int64_t flip_a
 }
 
 void CommandProcessor::PrepareCpuFlip(uint64_t request_id) {
-	m_needs_flush    = false;
-	m_draws_in_batch = 0;
+	ClearBatchState();
 	auto& command = CurrentBuffer();
 	m_renderer.GetRenderExecutor().FlushMdi(command);
 	m_renderer.GetVideoOut().PrepareFlip(request_id, command);

@@ -578,6 +578,7 @@ bool RenderExecutor::ConsumeMetadataColorOperation(CommandBuffer& buffer) {
 	const auto  mode = ctx.GetColorControl().mode;
 	if (mode == static_cast<uint8_t>(CbColorMode::EliminateFastClear)) {
 		FlushMdi(buffer);
+		InvalidateRenderTargetCache();
 		// FCE can precede any ordinary draw. Discover the target to materialize its native
 		// clear metadata before the expanded image is sampled.
 		RenderColorInfo target {};
@@ -835,6 +836,133 @@ static bool ResolvePrimitiveRestart(const CommandBuffer& buffer,
 	return false;
 }
 
+[[nodiscard]] static bool SameColorTargetRegs(const HW::RenderTarget& a,
+                                              const HW::RenderTarget& b) noexcept {
+	return a.base.addr == b.base.addr &&
+	       a.view.base_array_slice_index == b.view.base_array_slice_index &&
+	       a.view.last_array_slice_index == b.view.last_array_slice_index &&
+	       a.view.current_mip_level == b.view.current_mip_level &&
+	       a.info.fmask_compression_enable == b.info.fmask_compression_enable &&
+	       a.info.fmask_data_compression_disable == b.info.fmask_data_compression_disable &&
+	       a.info.fmask_one_frag_mode == b.info.fmask_one_frag_mode &&
+	       a.info.cmask_fast_clear_enable == b.info.cmask_fast_clear_enable &&
+	       a.info.dcc_compression_enable == b.info.dcc_compression_enable &&
+	       a.info.blend_clamp == b.info.blend_clamp &&
+	       a.info.blend_bypass == b.info.blend_bypass &&
+	       a.info.round_mode == b.info.round_mode &&
+	       a.info.format == b.info.format &&
+	       a.info.channel_type == b.info.channel_type &&
+	       a.info.channel_order == b.info.channel_order &&
+	       a.attrib.force_dest_alpha_to_one == b.attrib.force_dest_alpha_to_one &&
+	       a.attrib.num_samples == b.attrib.num_samples &&
+	       a.attrib.num_fragments == b.attrib.num_fragments &&
+	       a.attrib2.height == b.attrib2.height &&
+	       a.attrib2.width == b.attrib2.width &&
+	       a.attrib2.num_mip_levels == b.attrib2.num_mip_levels &&
+	       a.attrib3.depth == b.attrib3.depth &&
+	       a.attrib3.tile_mode == b.attrib3.tile_mode &&
+	       a.attrib3.dimension == b.attrib3.dimension &&
+	       a.attrib3.metadata_pipe_aligned == b.attrib3.metadata_pipe_aligned &&
+	       a.attrib3.write_vrs_rate_hint_to_cmask == b.attrib3.write_vrs_rate_hint_to_cmask &&
+	       a.dcc.max_uncompressed_block_size == b.dcc.max_uncompressed_block_size &&
+	       a.dcc.max_compressed_block_size == b.dcc.max_compressed_block_size &&
+	       a.dcc.color_transform == b.dcc.color_transform &&
+	       a.dcc.dcc_clear_key_enable == b.dcc.dcc_clear_key_enable &&
+	       a.dcc.overwrite_combiner_disable == b.dcc.overwrite_combiner_disable &&
+	       a.dcc.independent_block_size == b.dcc.independent_block_size &&
+	       a.dcc.data_write_on_dcc_clear_to_reg == b.dcc.data_write_on_dcc_clear_to_reg &&
+	       a.cmask.addr == b.cmask.addr &&
+	       a.fmask.addr == b.fmask.addr &&
+	       a.clear_word0.word0 == b.clear_word0.word0 &&
+	       a.clear_word1.word1 == b.clear_word1.word1 &&
+	       a.dcc_addr.addr == b.dcc_addr.addr;
+}
+
+[[nodiscard]] static bool SameDepthTargetRegs(const HW::DepthRenderTarget& a,
+                                              const HW::DepthRenderTarget& b) noexcept {
+	return a.z_info.format == b.z_info.format &&
+	       a.z_info.num_samples == b.z_info.num_samples &&
+	       a.z_info.texture_compatibility == b.z_info.texture_compatibility &&
+	       a.z_info.z_compare_base == b.z_info.z_compare_base &&
+	       a.z_info.htile_acceleration == b.z_info.htile_acceleration &&
+	       a.z_info.expclear_enabled == b.z_info.expclear_enabled &&
+	       a.z_info.partially_resident == b.z_info.partially_resident &&
+	       a.z_info.max_mip_level == b.z_info.max_mip_level &&
+	       a.stencil_info.format == b.stencil_info.format &&
+	       a.stencil_info.texture_compatibility == b.stencil_info.texture_compatibility &&
+	       a.stencil_info.expclear_enabled == b.stencil_info.expclear_enabled &&
+	       a.stencil_info.htile_stencil_disabled == b.stencil_info.htile_stencil_disabled &&
+	       a.stencil_info.partially_resident == b.stencil_info.partially_resident &&
+	       a.depth_view.slice_start == b.depth_view.slice_start &&
+	       a.depth_view.slice_max == b.depth_view.slice_max &&
+	       a.depth_view.current_mip_level == b.depth_view.current_mip_level &&
+	       a.depth_view.depth_write_disable == b.depth_view.depth_write_disable &&
+	       a.depth_view.stencil_write_disable == b.depth_view.stencil_write_disable &&
+	       a.size.x_max == b.size.x_max &&
+	       a.size.y_max == b.size.y_max &&
+	       a.size.valid == b.size.valid &&
+	       a.z_read_base_addr == b.z_read_base_addr &&
+	       a.stencil_read_base_addr == b.stencil_read_base_addr &&
+	       a.z_write_base_addr == b.z_write_base_addr &&
+	       a.stencil_write_base_addr == b.stencil_write_base_addr &&
+	       a.htile_data_base_addr == b.htile_data_base_addr &&
+	       a.shading_rate_encoding == b.shading_rate_encoding;
+}
+
+[[nodiscard]] static bool SameAaConfig(const HW::AaConfig& a, const HW::AaConfig& b) noexcept {
+	return a.msaa_num_samples == b.msaa_num_samples &&
+	       a.aa_mask_centroid_dtmn == b.aa_mask_centroid_dtmn &&
+	       a.max_sample_dist == b.max_sample_dist &&
+	       a.msaa_exposed_samples == b.msaa_exposed_samples;
+}
+
+[[nodiscard]] static bool SameRenderControl(const HW::RenderControl& a,
+                                            const HW::RenderControl& b) noexcept {
+	return a.depth_clear_enable == b.depth_clear_enable &&
+	       a.stencil_clear_enable == b.stencil_clear_enable &&
+	       a.resummarize_enable == b.resummarize_enable &&
+	       a.stencil_compress_disable == b.stencil_compress_disable &&
+	       a.depth_compress_disable == b.depth_compress_disable &&
+	       a.copy_depth_to_color == b.copy_depth_to_color &&
+	       a.copy_stencil_to_color == b.copy_stencil_to_color &&
+	       a.copy_centroid == b.copy_centroid &&
+	       a.copy_sample == b.copy_sample;
+}
+
+[[nodiscard]] static bool SameDepthControl(const HW::DepthControl& a,
+                                           const HW::DepthControl& b) noexcept {
+	return a.stencil_enable == b.stencil_enable &&
+	       a.z_enable == b.z_enable &&
+	       a.z_write_enable == b.z_write_enable &&
+	       a.depth_bounds_enable == b.depth_bounds_enable &&
+	       a.zfunc == b.zfunc &&
+	       a.backface_enable == b.backface_enable &&
+	       a.stencilfunc == b.stencilfunc &&
+	       a.stencilfunc_bf == b.stencilfunc_bf;
+}
+
+[[nodiscard]] static bool SameStencilControl(const HW::StencilControl& a,
+                                             const HW::StencilControl& b) noexcept {
+	return a.stencil_fail == b.stencil_fail &&
+	       a.stencil_zpass == b.stencil_zpass &&
+	       a.stencil_zfail == b.stencil_zfail &&
+	       a.stencil_fail_bf == b.stencil_fail_bf &&
+	       a.stencil_zpass_bf == b.stencil_zpass_bf &&
+	       a.stencil_zfail_bf == b.stencil_zfail_bf;
+}
+
+[[nodiscard]] static bool SameStencilMask(const HW::StencilMask& a,
+                                          const HW::StencilMask& b) noexcept {
+	return a.stencil_testval == b.stencil_testval &&
+	       a.stencil_mask == b.stencil_mask &&
+	       a.stencil_writemask == b.stencil_writemask &&
+	       a.stencil_opval == b.stencil_opval &&
+	       a.stencil_testval_bf == b.stencil_testval_bf &&
+	       a.stencil_mask_bf == b.stencil_mask_bf &&
+	       a.stencil_writemask_bf == b.stencil_writemask_bf &&
+	       a.stencil_opval_bf == b.stencil_opval_bf;
+}
+
 bool RenderExecutor::PrepareDrawRenderState(CommandBuffer& buffer, const DrawCallInfo& draw,
                                             DrawRenderState& state) {
 	m_context.GetImageHeap().BeginDraw();
@@ -844,6 +972,75 @@ bool RenderExecutor::PrepareDrawRenderState(CommandBuffer& buffer, const DrawCal
 	if (state.vertex_info[0].stage.module == nullptr) {
 		return false;
 	}
+
+	auto&       texture_cache = m_context.GetTextureCache();
+	const auto& hw            = buffer.GetRegisters();
+	if (m_rt_cache.valid && buffer.IsRendering() && !graphics_debug_dump_enabled() &&
+	    m_rt_cache.resolve_epoch == texture_cache.ResolveEpoch() &&
+	    m_rt_cache.mrt_mask == state.mrt_mask &&
+	    m_rt_cache.render_target_mask == hw.GetRenderTargetMask() &&
+	    SameAaConfig(m_rt_cache.aa_config, hw.GetAaConfig()) &&
+	    SameDepthTargetRegs(m_rt_cache.depth_rt, hw.GetDepthRenderTarget()) &&
+	    SameRenderControl(m_rt_cache.render_control, hw.GetRenderControl()) &&
+	    SameDepthControl(m_rt_cache.depth_control, hw.GetDepthControl()) &&
+	    SameStencilControl(m_rt_cache.stencil_control, hw.GetStencilControl()) &&
+	    SameStencilMask(m_rt_cache.stencil_mask, hw.GetStencilMask()) &&
+	    std::bit_cast<uint32_t>(m_rt_cache.depth_clear_value) ==
+	        std::bit_cast<uint32_t>(hw.GetDepthClearValue()) &&
+	    m_rt_cache.stencil_clear_value == hw.GetStencilClearValue()) {
+		bool rt_match = true;
+		for (uint32_t slot = 0; slot < RENDER_COLOR_ATTACHMENTS_MAX; ++slot) {
+			if ((state.mrt_mask & (1u << slot)) != 0 &&
+			    !SameColorTargetRegs(m_rt_cache.rt_regs[slot], hw.GetRenderTarget(slot))) {
+				rt_match = false;
+				break;
+			}
+		}
+		if (rt_match) {
+			bool images_valid = false;
+			{
+				std::scoped_lock lock {texture_cache.m_lock};
+				if (m_rt_cache.resolve_epoch == texture_cache.ResolveEpoch()) {
+					images_valid = true;
+					for (uint32_t i = 0; i < m_rt_cache.color_count; ++i) {
+						const auto* img =
+						    texture_cache.m_slot_images.try_get(m_rt_cache.color_info[i].image_id);
+						if (img == nullptr || !img->registered || img->depth_id ||
+						    img->binding.needs_rebind) {
+							images_valid = false;
+							break;
+						}
+					}
+					if (images_valid && m_rt_cache.depth_info.image_id) {
+						const auto* img =
+						    texture_cache.m_slot_images.try_get(m_rt_cache.depth_info.image_id);
+						if (img == nullptr || !img->registered || img->depth_id ||
+						    img->binding.needs_rebind) {
+							images_valid = false;
+						}
+					}
+				}
+			}
+			if (images_valid) {
+				state.color_count = m_rt_cache.color_count;
+				for (uint32_t i = 0; i < state.color_count; ++i) {
+					state.color_info[i] = m_rt_cache.color_info[i];
+					BindRenderTarget(state.color_info[i].image_id);
+				}
+				state.depth_info = m_rt_cache.depth_info;
+				if (state.depth_info.image_id) {
+					BindRenderTarget(state.depth_info.image_id);
+				}
+				if (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {
+					LogFramebufferSkip(draw.Name(), state.color_info[0], state.depth_info, buffer,
+					                   draw.index_count, 0);
+					return false;
+				}
+				return true;
+			}
+		}
+	}
+
 	for (uint32_t slot = 0; slot < RENDER_COLOR_ATTACHMENTS_MAX; slot++) {
 		if ((state.mrt_mask & (1u << slot)) != 0) {
 			ResolveRenderColorTarget(buffer, state.color_info[state.color_count], slot);
@@ -881,6 +1078,31 @@ bool RenderExecutor::PrepareDrawRenderState(CommandBuffer& buffer, const DrawCal
 		LogFramebufferSkip(draw.Name(), state.color_info[0], state.depth_info, buffer,
 		                   draw.index_count, 0);
 		return false;
+	}
+
+	if (!graphics_debug_dump_enabled() && (state.color_count != 0 || state.depth_info.image_id)) {
+		m_rt_cache.valid               = true;
+		m_rt_cache.resolve_epoch       = texture_cache.ResolveEpoch();
+		m_rt_cache.mrt_mask            = state.mrt_mask;
+		m_rt_cache.render_target_mask  = hw.GetRenderTargetMask();
+		m_rt_cache.aa_config           = hw.GetAaConfig();
+		for (uint32_t slot = 0; slot < RENDER_COLOR_ATTACHMENTS_MAX; ++slot) {
+			if ((state.mrt_mask & (1u << slot)) != 0) {
+				m_rt_cache.rt_regs[slot] = hw.GetRenderTarget(slot);
+			}
+		}
+		m_rt_cache.depth_rt            = hw.GetDepthRenderTarget();
+		m_rt_cache.render_control      = hw.GetRenderControl();
+		m_rt_cache.depth_control       = hw.GetDepthControl();
+		m_rt_cache.stencil_control     = hw.GetStencilControl();
+		m_rt_cache.stencil_mask        = hw.GetStencilMask();
+		m_rt_cache.depth_clear_value   = hw.GetDepthClearValue();
+		m_rt_cache.stencil_clear_value = hw.GetStencilClearValue();
+		m_rt_cache.color_count         = state.color_count;
+		for (uint32_t i = 0; i < state.color_count; ++i) {
+			m_rt_cache.color_info[i] = state.color_info[i];
+		}
+		m_rt_cache.depth_info = state.depth_info;
 	}
 
 	return true;
@@ -940,171 +1162,6 @@ static void LogDrawStateIfNeeded(const CommandBuffer& buffer, const DrawCallInfo
 	}
 	LogDrawInputState(buffer, state.color_info[0], state.vertex_info[0], index_type_and_size,
 	                  draw.index_count, index_addr);
-}
-
-static void Mix128(MdiHash128& h, uint64_t k) noexcept {
-	uint64_t a = k ^ (k >> 33u);
-	a *= 0xff51afd7ed558ccdULL;
-	a ^= a >> 33u;
-	a *= 0xc4ceb9fe1a85ec53ULL;
-	a ^= a >> 33u;
-	h.lo ^= a;
-	h.lo = ((h.lo << 27u) | (h.lo >> 37u)) * 5ULL + 0x52dce729ULL;
-
-	uint64_t b = (k + 0x9e3779b97f4a7c15ULL) ^ (h.lo >> 29u);
-	b = (b ^ (b >> 30u)) * 0xbf58476d1ce4e5b9ULL;
-	b = (b ^ (b >> 27u)) * 0x94d049bb133111ebULL;
-	b ^= b >> 31u;
-	h.hi ^= b;
-	h.hi = ((h.hi << 31u) | (h.hi >> 33u)) * 5ULL + 0x38495ab5ULL;
-}
-
-[[nodiscard]] static MdiHash128 HashVertexBuffers(const PreparedVertexBuffers& vb) noexcept {
-	MdiHash128 hash {0x9e3779b97f4a7c15ULL, 0x6a09e667f3bcc908ULL};
-	Mix128(hash, vb.count);
-	for (uint32_t i = 0; i < vb.count; ++i) {
-		Mix128(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(vb.buffers[i])));
-		Mix128(hash, vb.offsets[i]);
-		Mix128(hash, vb.sizes[i]);
-	}
-	return hash;
-}
-
-[[nodiscard]] static bool IsImageReadyForFastMdi(const Image&         image,
-                                                 const ImageViewInfo& view) noexcept {
-	const auto expected_layout = image.ReadLayout();
-	constexpr auto expected_access = vk::AccessFlagBits2::eShaderRead;
-	if (image.backing.subresource_states.empty()) {
-		return image.backing.state.layout == expected_layout &&
-		       image.backing.state.access_mask == expected_access;
-	}
-	const uint32_t layers = image.info.resources.layers;
-	for (uint32_t level = view.base_level; level < view.base_level + view.level_count; ++level) {
-		for (uint32_t layer = view.base_layer; layer < view.base_layer + view.layer_count;
-		     ++layer) {
-			const auto index = level * layers + layer;
-			if (index >= image.backing.subresource_states.size()) {
-				return false;
-			}
-			const auto& sub = image.backing.subresource_states[index];
-			if (sub.layout != expected_layout || sub.access_mask != expected_access) {
-				return false;
-			}
-		}
-	}
-	return true;
-}
-
-[[nodiscard]] static MdiHash128 InspectAndHashBindings(
-    RenderContext& context, std::span<PreparedBindings* const> stages,
-    const ShaderVertexInputInfo& last_vs_stage, const CommandBuffer& buffer,
-    bool& out_can_begin_mdi, bool& out_can_fast_append) noexcept {
-	using BindingKind = ShaderRecompiler::IR::DescriptorBindingKind;
-	MdiHash128 hash {0x517cc1b727220a95ULL, 0xbb67ae8584caa73bULL};
-	Mix128(hash, stages.size());
-	out_can_begin_mdi   = true;
-	out_can_fast_append = true;
-
-	auto& texture_cache = context.GetTextureCache();
-	auto& buffer_cache  = context.GetBufferCache();
-
-	for (const auto* prepared: stages) {
-		const auto& program = prepared->runtime->module->info;
-		Mix128(hash, program.shader_hash);
-		Mix128(hash, program.bindings.descriptor_mask);
-
-		if (prepared->gds.buffer != nullptr) {
-			out_can_begin_mdi   = false;
-			out_can_fast_append = false;
-		}
-
-		Mix128(hash, prepared->buffers.size());
-		for (const auto& buf: prepared->buffers) {
-			Mix128(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(buf.buffer)));
-			Mix128(hash, buf.offset);
-			Mix128(hash, buf.range);
-		}
-
-		const auto mix_buf_info = [&](const vk::DescriptorBufferInfo& info) {
-			Mix128(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(info.buffer)));
-			Mix128(hash, info.offset);
-			Mix128(hash, info.range);
-		};
-		mix_buf_info(prepared->flattened_srt);
-		mix_buf_info(prepared->shader_data_buffer);
-		mix_buf_info(prepared->shared_memory);
-
-		if (program.bindings.descriptor_counts[static_cast<size_t>(BindingKind::BdaPagetable)] != 0) {
-			const auto* bda = buffer_cache.GetBdaPageTableBuffer();
-			Mix128(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(bda->Handle())));
-			Mix128(hash, bda->Size());
-		}
-		if (program.bindings.descriptor_counts[static_cast<size_t>(BindingKind::FaultBuffer)] != 0) {
-			const auto* fault = buffer_cache.GetFaultBuffer();
-			Mix128(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(fault->Handle())));
-			Mix128(hash, fault->Size());
-		}
-
-		const auto& sdata = prepared->shader_data;
-		Mix128(hash, sdata.size());
-		size_t d = 0;
-		for (; d + 1 < sdata.size(); d += 2) {
-			Mix128(hash, uint64_t {sdata[d]} | (uint64_t {sdata[d + 1]} << 32u));
-		}
-		if (d < sdata.size()) {
-			Mix128(hash, sdata[d]);
-		}
-
-		Mix128(hash, prepared->samplers.size());
-		for (const auto sampler: prepared->samplers) {
-			Mix128(hash, reinterpret_cast<uintptr_t>(static_cast<VkSampler>(sampler)));
-		}
-
-		Mix128(hash, program.info.images.size());
-		for (uint32_t i = 0; i < program.info.images.size(); ++i) {
-			if (program.info.images[i].heap) {
-				continue;
-			}
-			const auto& tex = prepared->images[i];
-			Mix128(hash, tex.image_id.index);
-			Mix128(hash, reinterpret_cast<uintptr_t>(static_cast<VkImageView>(tex.image_view)));
-			Mix128(hash, tex.mip_views.size());
-			for (const auto mv: tex.mip_views) {
-				Mix128(hash, reinterpret_cast<uintptr_t>(static_cast<VkImageView>(mv)));
-			}
-			if (!tex.image_id) {
-				continue;
-			}
-			if (tex.desc.type == TextureCache::BindingType::Storage) {
-				out_can_begin_mdi   = false;
-				out_can_fast_append = false;
-				continue;
-			}
-			const auto& img = texture_cache.GetImage(tex.image_id);
-			if (img.binding.is_target || img.binding.shader_write ||
-			    (img.binding.force_general && !img.info.IsDepth())) {
-				out_can_begin_mdi   = false;
-				out_can_fast_append = false;
-			} else if (out_can_fast_append && !IsImageReadyForFastMdi(img, tex.desc.view_info)) {
-				out_can_fast_append = false;
-			}
-		}
-	}
-
-	const auto planes = last_vs_stage.user_clip_planes;
-	Mix128(hash, planes);
-	if (planes != 0) {
-		const auto&    clip_data = buffer.GetRegisters().GetUserClipPlanes();
-		const uint32_t dword_cnt = std::bit_width(planes) * 4u;
-		const auto*    bytes     = reinterpret_cast<const uint8_t*>(clip_data.data());
-		for (uint32_t d = 0; d < dword_cnt; d += 2) {
-			uint64_t qword = 0;
-			std::memcpy(&qword, bytes + static_cast<size_t>(d) * sizeof(uint32_t), sizeof(uint64_t));
-			Mix128(hash, qword);
-		}
-	}
-
-	return hash;
 }
 
 uint32_t RenderExecutor::MaxMdiCommands() noexcept {
@@ -1237,6 +1294,7 @@ bool RenderExecutor::CopyDepthToColor(CommandBuffer& buffer, const DrawCallInfo&
 		return false;
 	}
 	FlushMdi(buffer);
+	InvalidateRenderTargetCache();
 	auto& ucfg = buffer.GetUserConfig();
 	const auto& hw = buffer.GetRegisters();
 	auto& depth = state.depth_info;
@@ -1446,85 +1504,11 @@ void RenderExecutor::ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallIn
 	    prim_type != Prospero::PrimitiveType::kQuadListLegacy && !shader_write_stages &&
 	    !occlusion_queries.IsOpen() && !graphics_debug_dump_enabled();
 
-	MdiBatchKey batch_key {};
-	bool        can_begin_mdi   = false;
-	bool        can_fast_append = false;
-	if (mdi_eligible_shape) {
-		const MdiHash128 bindings_hash =
-		    InspectAndHashBindings(m_context, stages, vertex_stages.back(), buffer,
-		                           can_begin_mdi, can_fast_append);
-		if (can_begin_mdi) {
-			const uint32_t object_id =
-			    state.ps_input_info.object_primitive_id ? ucfg.GetObjectId() : 0u;
-			batch_key = {
-			    .pipeline     = static_cast<VkPipeline>(pipeline.pipeline),
-			    .index_buffer = draw.indexed ? static_cast<VkBuffer>(index_binding.buffer) : nullptr,
-			    .index_offset = draw.indexed ? index_binding.offset : 0u,
-			    .index_type   = draw.indexed ? static_cast<VkIndexType>(index_binding.type)
-			                                 : VK_INDEX_TYPE_UINT16,
-			    .topology           = static_cast<uint32_t>(prim_type),
-			    .object_id          = object_id,
-			    .vertex_buffer_hash = HashVertexBuffers(vertex_bindings),
-			    .bindings_hash      = bindings_hash,
-			};
-		}
-	}
-
-	auto& mdi_batcher = buffer.GetMdiBatcher();
-	if (can_fast_append && !dynamic_state_dirty && buffer.IsRenderingWith(rendering) &&
-	    (!pipeline.uses_image_heap || !m_context.GetImageHeap().NeedsCommit()) &&
-	    mdi_batcher.IsIndexed() == draw.indexed &&
-	    mdi_batcher.CanBatch(batch_key, max_mdi_commands)) {
-		if (pipeline.uses_image_heap) {
-			m_context.GetImageHeap().ClearActive();
-		}
-		if (draw.indexed) {
-			mdi_batcher.AppendIndexed({
-			    .indexCount    = draw.index_count,
-			    .instanceCount = draw.instance_count,
-			    .firstIndex    = first_index,
-			    .vertexOffset  = emit.vertex_offset,
-			    .firstInstance = emit.first_instance,
-			});
-		} else {
-			mdi_batcher.AppendDirect({
-			    .vertexCount   = draw.index_count,
-			    .instanceCount = draw.instance_count,
-			    .firstVertex   = static_cast<uint32_t>(emit.vertex_offset),
-			    .firstInstance = emit.first_instance,
-			});
-		}
-		Common::DebugCounters::Add(Common::DebugCounters::Counter::Draws);
-		Common::DebugCounters::Add(Common::DebugCounters::Counter::DrawInstances,
-		                           draw.instance_count);
-		return;
-	}
-
-	// Flush any pending MDI batch before mutating bound buffers, descriptors, push constants,
-	// or dynamic state for the incoming draw.
-	FlushMdi(buffer);
-
-	// Resource preparation above may synchronously finish and restart the scheduler. From this
-	// point onward, every operation targets the current command buffer and cannot touch guest
-	// memory.
-	auto& gfx_state = buffer.GraphicsState();
-	auto  vk_buffer = buffer.Handle();
-	if (!mesh_active && vertex_bindings.count != 0 &&
-	    gfx_state.ShouldBindVertexBuffers(vertex_bindings.count, vertex_bindings.buffers,
-	                                      vertex_bindings.offsets, vertex_bindings.sizes)) {
-		CommitVertexBuffers(vk_buffer, vertex_bindings);
-	}
-	CommitBindings(buffer, vk::PipelineBindPoint::eGraphics, pipeline, stages);
-	if (!mesh_active && index_binding.buffer != nullptr &&
-	    gfx_state.ShouldBindIndexBuffer(index_binding.buffer, index_binding.offset,
-	                                    index_binding.type)) {
-		CommitIndexBuffer(vk_buffer, index_binding);
-	}
 	using ShaderRecompiler::IR::PushData;
-	const auto draw_dwords =
+	const uint32_t draw_dword_count =
 	    PushData::GraphicsDrawDwords(mesh_active, state.ps_input_info.object_primitive_id);
-	if (draw_dwords != 0) {
-		std::array<uint32_t, PushData::MeshDrawDwordCount> draw_data {};
+	std::array<uint32_t, PushData::MeshDrawDwordCount> draw_data {};
+	if (draw_dword_count != 0) {
 		if (mesh_task) {
 			draw_data[0] = static_cast<uint32_t>(task_params);
 			draw_data[1] = static_cast<uint32_t>(task_params >> 32u);
@@ -1535,23 +1519,101 @@ void RenderExecutor::ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallIn
 			             static_cast<uint32_t>(index_source.address),
 			             static_cast<uint32_t>(index_source.address >> 32u)};
 		} else {
-			draw_data[0] = buffer.GetUserConfig().GetObjectId();
+			draw_data[0] = ucfg.GetObjectId();
 		}
-		vk_buffer.pushConstants(pipeline.pipeline_layout, pipeline.push_stages, 0,
-		                        draw_dwords * sizeof(uint32_t), draw_data.data());
 	}
-	if (const auto planes = vertex_stages.back().user_clip_planes; planes != 0) {
-		vk_buffer.pushConstants(pipeline.pipeline_layout, pipeline.push_stages,
-		                        PushData::UserClipPlaneDword * sizeof(uint32_t),
-		                        std::bit_width(planes) * 4u * sizeof(uint32_t),
-		                        buffer.GetRegisters().GetUserClipPlanes().data());
+	const uint32_t user_clip_planes = vertex_stages.back().user_clip_planes;
+	const uint32_t object_id        =
+	    state.ps_input_info.object_primitive_id ? ucfg.GetObjectId() : 0u;
+
+	auto& gfx_state   = buffer.GraphicsState();
+	auto& mdi_batcher = buffer.GetMdiBatcher();
+	if (mdi_eligible_shape && !dynamic_state_dirty && buffer.IsRenderingWith(rendering) &&
+	    (!pipeline.uses_image_heap || !m_context.GetImageHeap().NeedsCommit()) &&
+	    mdi_batcher.MatchesScalars(
+	        static_cast<VkPipeline>(pipeline.pipeline),
+	        draw.indexed ? static_cast<VkBuffer>(index_binding.buffer) : nullptr,
+	        draw.indexed ? index_binding.offset : 0u,
+	        draw.indexed ? static_cast<VkIndexType>(index_binding.type) : VK_INDEX_TYPE_UINT16,
+	        static_cast<uint32_t>(prim_type), object_id, draw.indexed, max_mdi_commands)) {
+		const MdiHash128 vb_hash =
+		    gfx_state.MatchesActiveVertexBuffers(vertex_bindings.count, vertex_bindings.buffers,
+		                                         vertex_bindings.offsets, vertex_bindings.sizes)
+		        ? gfx_state.vertex_buffer_hash
+		        : ComputeVertexBufferHash(vertex_bindings.count, vertex_bindings.buffers,
+		                                  vertex_bindings.offsets, vertex_bindings.sizes);
+		if (vb_hash == mdi_batcher.CurrentKey().vertex_buffer_hash &&
+		    CanFastAppendMdiBindings(buffer, pipeline, stages, draw_dword_count,
+		                             std::span<const uint32_t> {draw_data.data(), draw_dword_count},
+		                             user_clip_planes, mdi_batcher.CurrentKey().bindings_hash)) {
+			if (pipeline.uses_image_heap) {
+				m_context.GetImageHeap().ClearActive();
+			}
+			if (draw.indexed) {
+				mdi_batcher.AppendIndexed({
+				    .indexCount    = draw.index_count,
+				    .instanceCount = draw.instance_count,
+				    .firstIndex    = first_index,
+				    .vertexOffset  = emit.vertex_offset,
+				    .firstInstance = emit.first_instance,
+				});
+			} else {
+				mdi_batcher.AppendDirect({
+				    .vertexCount   = draw.index_count,
+				    .instanceCount = draw.instance_count,
+				    .firstVertex   = static_cast<uint32_t>(emit.vertex_offset),
+				    .firstInstance = emit.first_instance,
+				});
+			}
+			Common::DebugCounters::Add(Common::DebugCounters::Counter::Draws);
+			Common::DebugCounters::Add(Common::DebugCounters::Counter::DrawInstances,
+			                           draw.instance_count);
+			return;
+		}
+	}
+
+	// Flush any pending MDI batch before mutating bound buffers, descriptors, push constants,
+	// or dynamic state for the incoming draw.
+	FlushMdi(buffer);
+
+	// End any incompatible or barriered render pass before CommitBindings records push-constant
+	// state, since EndRendering() invalidates push-constant tracking for compute helpers.
+	if (!buffer.IsRenderingWith(rendering) || shader_write_stages) {
+		buffer.EndRendering();
+	}
+
+	// Resource preparation above may synchronously finish and restart the scheduler. From this
+	// point onward, every operation targets the current command buffer and cannot touch guest
+	// memory.
+	auto vk_buffer = buffer.Handle();
+	if (!mesh_active) {
+		if (vertex_bindings.count != 0) {
+			if (gfx_state.ShouldBindVertexBuffers(vertex_bindings.count, vertex_bindings.buffers,
+			                                      vertex_bindings.offsets, vertex_bindings.sizes)) {
+				CommitVertexBuffers(vk_buffer, vertex_bindings);
+			}
+		} else if (gfx_state.active_vertex_count != 0) {
+			gfx_state.active_vertex_count = 0;
+			gfx_state.vertex_buffer_hash  = ComputeVertexBufferHash(0, {}, {}, {});
+		}
+	}
+	GraphicsCommitExtra gfx_extra {
+	    .draw_dword_count = draw_dword_count,
+	    .draw_dwords      = draw_data,
+	    .user_clip_planes = user_clip_planes,
+	    .compute_mdi_info = mdi_eligible_shape,
+	};
+	CommitBindings(buffer, vk::PipelineBindPoint::eGraphics, pipeline, stages, &gfx_extra);
+	if (!mesh_active && index_binding.buffer != nullptr &&
+	    gfx_state.ShouldBindIndexBuffer(index_binding.buffer, index_binding.offset,
+	                                    index_binding.type)) {
+		CommitIndexBuffer(vk_buffer, index_binding);
 	}
 
 	dynamic_state.Commit(m_context.GetGraphics(), vk_buffer);
 
 	if (shader_write_stages) {
 		// As for dispatches, buffer writes wait for earlier accesses to the memory.
-		buffer.EndRendering();
 		ShaderWriteHazardBarrier(vk_buffer, shader_write_stages);
 	}
 	buffer.BeginRendering(rendering);
@@ -1559,7 +1621,18 @@ void RenderExecutor::ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallIn
 		vk_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.pipeline);
 	}
 
-	if (can_begin_mdi) {
+	if (mdi_eligible_shape && gfx_extra.out_can_begin_mdi) {
+		const MdiBatchKey batch_key {
+		    .pipeline     = static_cast<VkPipeline>(pipeline.pipeline),
+		    .index_buffer = draw.indexed ? static_cast<VkBuffer>(index_binding.buffer) : nullptr,
+		    .index_offset = draw.indexed ? index_binding.offset : 0u,
+		    .index_type   = draw.indexed ? static_cast<VkIndexType>(index_binding.type)
+		                                 : VK_INDEX_TYPE_UINT16,
+		    .topology           = static_cast<uint32_t>(prim_type),
+		    .object_id          = object_id,
+		    .vertex_buffer_hash = gfx_state.vertex_buffer_hash,
+		    .bindings_hash      = gfx_extra.out_mdi_bindings_hash,
+		};
 		mdi_batcher.BeginBatch(batch_key, draw.indexed);
 		if (draw.indexed) {
 			mdi_batcher.AppendIndexed({
@@ -1656,6 +1729,7 @@ bool RenderExecutor::DrawIndex(CommandBuffer& buffer, const DrawIndexArgs& args)
 
 	if (ConsumeMetadataColorOperation(buffer) || DepthStencilCopy(buffer) ||
 	    ResolveColorTargets(buffer)) {
+		InvalidateRenderTargetCache();
 		ResetBindings();
 		return true;
 	}
@@ -1748,6 +1822,7 @@ bool RenderExecutor::DrawAuto(CommandBuffer& buffer, const DrawAutoArgs& args) {
 
 	if (ConsumeMetadataColorOperation(buffer) || DepthStencilCopy(buffer) ||
 	    ResolveColorTargets(buffer)) {
+		InvalidateRenderTargetCache();
 		ResetBindings();
 		return true;
 	}
@@ -1823,6 +1898,7 @@ bool RenderExecutor::ResolveColorTargets(CommandBuffer& buffer) {
 		return false;
 	}
 	FlushMdi(buffer);
+	InvalidateRenderTargetCache();
 
 	RenderColorInfo src {};
 	RenderColorInfo dst {};

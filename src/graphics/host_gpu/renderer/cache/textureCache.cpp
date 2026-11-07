@@ -226,6 +226,7 @@ void TextureCache::RegisterImage(ImageId id) {
 	image.registered = true;
 	image.lru_id     = m_lru_cache.Insert(id, m_gc_tick);
 	m_total_used_memory += image.AccountedSize();
+	m_resolve_epoch.fetch_add(1, std::memory_order_relaxed);
 }
 
 void TextureCache::UnregisterImage(ImageId id) {
@@ -241,6 +242,7 @@ void TextureCache::UnregisterImage(ImageId id) {
 	m_lru_cache.Free(image.lru_id);
 	m_total_used_memory -= image.AccountedSize();
 	image.registered = false;
+	m_resolve_epoch.fetch_add(1, std::memory_order_relaxed);
 }
 
 void TextureCache::DeleteImage(ImageId id) {
@@ -1235,6 +1237,11 @@ ImageId TextureCache::AssociateStencil(ImageId depth_id, GuestRange stencil) {
 			}
 			depth.stencil_ids.push_back(association);
 		}
+		if (record.depth_id != depth_id || record.info.data != plane.data ||
+		    record.info.resources != plane.resources ||
+		    record.stencil_subresources != depth.stencil_subresources) {
+			m_resolve_epoch.fetch_add(1, std::memory_order_relaxed);
+		}
 		record.info                 = plane;
 		record.depth_id             = depth_id;
 		record.stencil_subresources = depth.stencil_subresources;
@@ -1401,6 +1408,7 @@ ImageId TextureCache::FindImageFromRange(uint64_t address, uint64_t size, bool e
 vk::ImageView TextureCache::FindTexture(ImageId id, const ImageDesc& desc) {
 	std::scoped_lock lock {m_lock};
 	auto&            image = m_slot_images[id];
+	image.tick_accessed_last = m_gc_tick;
 	TouchImage(image);
 	if (!image.registered || image.depth_id || image.binding.needs_rebind) {
 		EXIT("TextureCache: texture requires rediscovery before final acquisition\n");
@@ -1435,6 +1443,7 @@ vk::ImageView TextureCache::FindRenderTarget(ImageId id, const ImageDesc& desc) 
 	if (!image.registered || image.depth_id || image.binding.needs_rebind) {
 		EXIT("TextureCache: color target requires rediscovery before final acquisition\n");
 	}
+	image.tick_accessed_last = m_gc_tick;
 	TouchImage(image);
 	image.usage.render_target = true;
 	RefreshImage(id);
@@ -1449,6 +1458,7 @@ vk::ImageView TextureCache::FindDepthTarget(ImageId id, const ImageDesc& desc) {
 	if (!image.registered || image.depth_id || image.binding.needs_rebind) {
 		EXIT("TextureCache: depth target requires rediscovery before final acquisition\n");
 	}
+	image.tick_accessed_last = m_gc_tick;
 	TouchImage(image);
 	if (desc.info.HasStencil()) {
 		const auto layers = image.info.resources.layers;
@@ -1496,6 +1506,9 @@ void TextureCache::MarkGpuWritten(ImageId id) {
 void TextureCache::CommitGpuWrite(Image& image) {
 	if (!image.depth_id && image.backing.image == nullptr) {
 		EXIT("TextureCache: GPU writes require a native image or stencil association\n");
+	}
+	if (!image.IsGpuModified() || image.IsBufferModified() || image.IsCpuDirty()) {
+		m_resolve_epoch.fetch_add(1, std::memory_order_relaxed);
 	}
 	image.ClearBufferModified();
 	image.RefreshComplete();
@@ -1841,6 +1854,7 @@ bool TextureCache::DownloadImageMemory(ImageId id) {
 
 void TextureCache::InvalidateMemoryFromGPU(uint64_t address, uint64_t size) {
 	std::scoped_lock lock {m_lock};
+	bool             modified = false;
 	for (const auto id: FindImagesInRegion(address, size)) {
 		auto& image = m_slot_images[id];
 		if (image.info.data.address != address) {
@@ -1848,6 +1862,10 @@ void TextureCache::InvalidateMemoryFromGPU(uint64_t address, uint64_t size) {
 		}
 		image.ClearGpuModified();
 		image.MarkBufferModified();
+		modified = true;
+	}
+	if (modified) {
+		m_resolve_epoch.fetch_add(1, std::memory_order_relaxed);
 	}
 }
 
@@ -1855,7 +1873,11 @@ void TextureCache::InvalidateMemory(uint64_t address, uint64_t size) {
 	std::scoped_lock lock {m_lock};
 	const auto       page_begin = Common::AlignDown(address, TRACKER_PAGE_SIZE);
 	const auto       page_end   = Common::AlignUp(address + size, TRACKER_PAGE_SIZE);
-	for (const auto id: FindImagesInRegion(page_begin, page_end - page_begin)) {
+	const auto       images     = FindImagesInRegion(page_begin, page_end - page_begin);
+	if (!images.empty()) {
+		m_resolve_epoch.fetch_add(1, std::memory_order_relaxed);
+	}
+	for (const auto id: images) {
 		Common::DebugCounters::Add(Common::DebugCounters::Counter::TextureCacheFaults);
 		auto& owner = m_slot_images[id];
 		if (owner.Overlaps(address, size)) {
@@ -1897,6 +1919,7 @@ bool TextureCache::ClearMeta(uint64_t address) {
 		return false;
 	}
 	found->second.clear_mask.set();
+	m_resolve_epoch.fetch_add(1, std::memory_order_relaxed);
 	return true;
 }
 
@@ -1907,6 +1930,7 @@ bool TextureCache::TouchMeta(uint64_t address, uint32_t slice, bool is_clear) {
 		return false;
 	}
 	found->second.clear_mask.set(slice, is_clear);
+	m_resolve_epoch.fetch_add(1, std::memory_order_relaxed);
 	return true;
 }
 

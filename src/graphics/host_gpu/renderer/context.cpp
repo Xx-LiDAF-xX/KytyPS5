@@ -23,6 +23,7 @@ void CommandBuffer::Begin() {
 	EXIT_IF(m_rendering || IsInvalid());
 	m_bound_graphics_state.Reset();
 	m_mdi_batcher.Reset();
+	m_context.GetRenderExecutor().InvalidateRenderTargetCache();
 	auto buffer = Handle();
 
 	vk::CommandBufferBeginInfo begin_info {};
@@ -50,7 +51,9 @@ void CommandBuffer::BeginRendering(const RenderState& state) const {
 	if (m_rendering && m_render_state == state) {
 		return;
 	}
-	EndRendering();
+	if (m_rendering) {
+		EndRendering();
+	}
 
 	std::array<vk::RenderingAttachmentInfo, RENDER_COLOR_ATTACHMENTS_MAX> colors {};
 	for (uint32_t i = 0; i < state.num_color_attachments; i++) {
@@ -94,6 +97,7 @@ void CommandBuffer::BeginRendering(const RenderState& state) const {
 }
 
 void CommandBuffer::EndRendering() const {
+	m_bound_graphics_state.InvalidatePushConstants();
 	if (!m_rendering) {
 		return;
 	}
@@ -102,6 +106,7 @@ void CommandBuffer::EndRendering() const {
 	}
 	Handle().endRendering();
 	m_rendering = false;
+	m_context.GetRenderExecutor().InvalidateRenderTargetCache();
 }
 
 } // namespace Libs::Graphics

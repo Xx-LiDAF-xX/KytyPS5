@@ -19,6 +19,37 @@ struct MdiHash128 {
 	[[nodiscard]] bool operator==(const MdiHash128& other) const noexcept = default;
 };
 
+inline void MixMdiHash128(MdiHash128& h, uint64_t k) noexcept {
+	uint64_t a = k ^ (k >> 33u);
+	a *= 0xff51afd7ed558ccdULL;
+	a ^= a >> 33u;
+	a *= 0xc4ceb9fe1a85ec53ULL;
+	a ^= a >> 33u;
+	h.lo ^= a;
+	h.lo = ((h.lo << 27u) | (h.lo >> 37u)) * 5ULL + 0x52dce729ULL;
+
+	uint64_t b = (k + 0x9e3779b97f4a7c15ULL) ^ (h.lo >> 29u);
+	b = (b ^ (b >> 30u)) * 0xbf58476d1ce4e5b9ULL;
+	b = (b ^ (b >> 27u)) * 0x94d049bb133111ebULL;
+	b ^= b >> 31u;
+	h.hi ^= b;
+	h.hi = ((h.hi << 31u) | (h.hi >> 33u)) * 5ULL + 0x38495ab5ULL;
+}
+
+[[nodiscard]] inline MdiHash128 ComputeVertexBufferHash(uint32_t                        count,
+                                                        std::span<const vk::Buffer>     bufs,
+                                                        std::span<const vk::DeviceSize> offs,
+                                                        std::span<const vk::DeviceSize> szs) noexcept {
+	MdiHash128 hash {0x9e3779b97f4a7c15ULL, 0x6a09e667f3bcc908ULL};
+	MixMdiHash128(hash, count);
+	for (uint32_t i = 0; i < count; ++i) {
+		MixMdiHash128(hash, reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(bufs[i])));
+		MixMdiHash128(hash, offs[i]);
+		MixMdiHash128(hash, szs[i]);
+	}
+	return hash;
+}
+
 struct MdiBatchKey {
 	VkPipeline  pipeline           = nullptr;
 	VkBuffer    index_buffer       = nullptr;
@@ -33,19 +64,44 @@ struct MdiBatchKey {
 };
 
 struct BoundGraphicsState {
-	static constexpr uint32_t MaxVertexBuffers = 32;
+	static constexpr uint32_t MaxVertexBuffers      = 32;
+	static constexpr uint32_t MaxPushConstantDwords = 32;
 
-	vk::Pipeline                                     pipeline     = nullptr;
-	vk::Buffer                                       index_buffer = nullptr;
-	vk::DeviceSize                                   index_offset = 0;
-	vk::IndexType                                    index_type   = {};
-	bool                                             has_index    = false;
-	uint32_t                                         vertex_count = 0;
+	vk::Pipeline                                     pipeline            = nullptr;
+	vk::Buffer                                       index_buffer        = nullptr;
+	vk::DeviceSize                                   index_offset        = 0;
+	vk::IndexType                                    index_type          = {};
+	bool                                             has_index           = false;
+	uint32_t                                         vertex_count        = 0;
+	uint32_t                                         active_vertex_count = 0;
+	MdiHash128                                       vertex_buffer_hash =
+	    ComputeVertexBufferHash(0, {}, {}, {});
 	std::array<vk::Buffer, MaxVertexBuffers>         vertex_buffers {};
 	std::array<vk::DeviceSize, MaxVertexBuffers>     vertex_offsets {};
 	std::array<vk::DeviceSize, MaxVertexBuffers>     vertex_sizes {};
 
+	VkPipelineLayout                                 set0_layout = nullptr;
+	MdiHash128                                       set0_hash {};
+	bool                                             has_set0 = false;
+
+	VkPipelineLayout                                 push_layout      = nullptr;
+	uint32_t                                         push_stages      = 0;
+	uint32_t                                         push_dword_count = 0;
+	std::array<uint32_t, MaxPushConstantDwords>      push_dwords {};
+
 	void Reset() noexcept { *this = BoundGraphicsState {}; }
+
+	void InvalidateDescriptorSet0() noexcept {
+		set0_layout = nullptr;
+		set0_hash   = {};
+		has_set0    = false;
+	}
+
+	void InvalidatePushConstants() noexcept {
+		push_layout      = nullptr;
+		push_stages      = 0;
+		push_dword_count = 0;
+	}
 
 	[[nodiscard]] bool ShouldBindPipeline(vk::Pipeline next) noexcept {
 		if (pipeline == next) {
@@ -67,6 +123,22 @@ struct BoundGraphicsState {
 		return true;
 	}
 
+	[[nodiscard]] bool MatchesActiveVertexBuffers(uint32_t                        count,
+	                                              std::span<const vk::Buffer>     bufs,
+	                                              std::span<const vk::DeviceSize> offs,
+	                                              std::span<const vk::DeviceSize> szs) const noexcept {
+		if (active_vertex_count != count) {
+			return false;
+		}
+		for (uint32_t i = 0; i < count; ++i) {
+			if (vertex_buffers[i] != bufs[i] || vertex_offsets[i] != offs[i] ||
+			    vertex_sizes[i] != szs[i]) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	[[nodiscard]] bool ShouldBindVertexBuffers(uint32_t                        count,
 	                                           std::span<const vk::Buffer>     bufs,
 	                                           std::span<const vk::DeviceSize> offs,
@@ -77,6 +149,10 @@ struct BoundGraphicsState {
 			       vertex_sizes[i] == szs[i];
 		}
 		if (same) {
+			if (active_vertex_count != count) {
+				active_vertex_count = count;
+				vertex_buffer_hash  = ComputeVertexBufferHash(count, bufs, offs, szs);
+			}
 			return false;
 		}
 		for (uint32_t i = 0; i < count; ++i) {
@@ -84,7 +160,42 @@ struct BoundGraphicsState {
 			vertex_offsets[i] = offs[i];
 			vertex_sizes[i]   = szs[i];
 		}
-		vertex_count = std::max(vertex_count, count);
+		vertex_count        = std::max(vertex_count, count);
+		active_vertex_count = count;
+		vertex_buffer_hash  = ComputeVertexBufferHash(count, bufs, offs, szs);
+		return true;
+	}
+
+	[[nodiscard]] bool ShouldBindDescriptorSet0(VkPipelineLayout  layout,
+	                                            const MdiHash128& hash) noexcept {
+		if (has_set0 && set0_layout == layout && set0_hash == hash) {
+			return false;
+		}
+		set0_layout = layout;
+		set0_hash   = hash;
+		has_set0    = true;
+		return true;
+	}
+
+	[[nodiscard]] bool ShouldPushConstants(VkPipelineLayout          layout,
+	                                       uint32_t                  stages,
+	                                       std::span<const uint32_t> dwords) noexcept {
+		if (dwords.empty()) {
+			return false;
+		}
+		if (dwords.size() > MaxPushConstantDwords) {
+			InvalidatePushConstants();
+			return true;
+		}
+		const auto count = static_cast<uint32_t>(dwords.size());
+		if (push_layout == layout && push_stages == stages && push_dword_count >= count &&
+		    std::equal(dwords.begin(), dwords.end(), push_dwords.begin())) {
+			return false;
+		}
+		std::copy(dwords.begin(), dwords.end(), push_dwords.begin());
+		push_layout      = layout;
+		push_stages      = stages;
+		push_dword_count = count;
 		return true;
 	}
 };
@@ -162,6 +273,24 @@ public:
 			return false;
 		}
 		return m_current_key == key;
+	}
+
+	[[nodiscard]] bool MatchesScalars(VkPipeline  pipeline,
+	                                  VkBuffer    index_buffer,
+	                                  uint64_t    index_offset,
+	                                  VkIndexType index_type,
+	                                  uint32_t    topology,
+	                                  uint32_t    object_id,
+	                                  bool        indexed,
+	                                  uint32_t    max_commands = MaxBatchCommands) const noexcept {
+		const uint32_t limit = max_commands < MaxBatchCommands ? max_commands : MaxBatchCommands;
+		if (!m_active || m_is_indexed != indexed || m_count >= limit) {
+			return false;
+		}
+		return m_current_key.pipeline == pipeline && m_current_key.index_buffer == index_buffer &&
+		       m_current_key.index_offset == index_offset &&
+		       m_current_key.index_type == index_type && m_current_key.topology == topology &&
+		       m_current_key.object_id == object_id;
 	}
 
 	void BeginBatch(const MdiBatchKey& key, bool indexed = true) {

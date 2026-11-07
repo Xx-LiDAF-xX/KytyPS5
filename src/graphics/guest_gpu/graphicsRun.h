@@ -65,6 +65,9 @@ private:
 	void              Enqueue(Submission submission);
 	void              ProcessCommands();
 	bool              Process(Submission& submission);
+	[[nodiscard]] bool HasUnflushedWork() const noexcept;
+	[[nodiscard]] bool ShouldBreakCoalesceWait() const noexcept;
+	void              FlushPending();
 	static void       ThreadRun(void* data);
 	CommandProcessor& GetProcessor(uint32_t queue_id);
 
@@ -77,11 +80,13 @@ private:
 	std::deque<Common::UniqueFunction<void>>       m_commands;
 	std::atomic_uint32_t                           m_pending_commands {0};
 	uint32_t                                       m_next_queue        = 0;
-	uint32_t                                       m_submission_count  = 0;
+	std::atomic_uint32_t                           m_submission_count {0};
+	std::atomic_uint32_t                           m_idle_waiters {0};
 	bool                                           m_processing        = false;
 	bool                                           m_accepting         = true;
-	bool                                           m_stopping          = false;
+	std::atomic_bool                               m_stopping {false};
 	bool                                           m_shutdown_complete = false;
+	CommandProcessor*                              m_active_cp         = nullptr;
 	// Completion callbacks can outlive GuestGpu during renderer shutdown.
 	std::shared_ptr<std::binary_semaphore> m_suspend_point_ready =
 	    std::make_shared<std::binary_semaphore>(1);

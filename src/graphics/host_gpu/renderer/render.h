@@ -4,6 +4,7 @@
 #include "common/abi.h"
 #include "common/assert.h"
 #include "common/common.h"
+#include "graphics/guest_gpu/hardwareContext.h"
 #include "graphics/host_gpu/renderer/mdiBatcher.h"
 #include "graphics/host_gpu/renderer/pipeline/descriptors.h"
 #include "graphics/host_gpu/renderer/pipeline/pipelineCache.h"
@@ -99,6 +100,7 @@ public:
 	KYTY_CLASS_NO_COPY(CommandBuffer);
 
 	[[nodiscard]] bool IsInvalid() const noexcept { return m_buffer == nullptr; }
+	[[nodiscard]] bool IsRendering() const noexcept { return m_rendering; }
 	[[nodiscard]] bool IsRenderingWith(const RenderState& state) const noexcept {
 		return m_rendering && m_render_state == state;
 	}
@@ -163,6 +165,15 @@ struct Request;
 
 class RenderExecutor {
 public:
+	struct GraphicsCommitExtra {
+		uint32_t                draw_dword_count = 0;
+		std::array<uint32_t, 5> draw_dwords {};
+		uint32_t                user_clip_planes = 0;
+		bool                    compute_mdi_info = false;
+		MdiHash128              out_mdi_bindings_hash {};
+		bool                    out_can_begin_mdi = false;
+	};
+
 	explicit RenderExecutor(RenderContext& context): m_context(context) {}
 	~RenderExecutor();
 	KYTY_CLASS_NO_COPY(RenderExecutor);
@@ -179,11 +190,20 @@ public:
 	void RebindImages(PreparedBindings& bindings);
 	void CommitBindings(CommandBuffer& buffer, vk::PipelineBindPoint pipeline_bind_point,
 	                    const PipelineCache::Pipeline&     pipeline,
-	                    std::span<PreparedBindings* const> bindings);
+	                    std::span<PreparedBindings* const> bindings,
+	                    GraphicsCommitExtra*               gfx_extra = nullptr);
+	[[nodiscard]] bool CanFastAppendMdiBindings(const CommandBuffer&               buffer,
+	                                            const PipelineCache::Pipeline&     pipeline,
+	                                            std::span<PreparedBindings* const> bindings,
+	                                            uint32_t                           draw_dword_count,
+	                                            std::span<const uint32_t>          draw_dwords,
+	                                            uint32_t                           user_clip_planes,
+	                                            const MdiHash128&                  expected_hash);
 	[[nodiscard]] TextureBinding ResolveTexture(const ShaderRecompiler::IR::ImageResource&   resource,
 	                                            const ShaderRecompiler::IR::DescriptorValue& value);
 
 	void FlushMdi(CommandBuffer& buffer);
+	void InvalidateRenderTargetCache() noexcept { m_rt_cache.valid = false; }
 
 private:
 	// False, with nothing drawn, when the draw's indirect records need CPU counts.
@@ -235,18 +255,50 @@ private:
 		bool    unclamped    = false;
 	};
 
-	RenderContext&                       m_context;
-	bool                                 m_lod_stats = Config::LodStatsEnabled();
-	GraphicsBindings                     m_graphics_bindings;
-	PreparedBindings                     m_compute_bindings;
-	std::vector<ImageId>                 m_bound_images;
-	std::vector<vk::DescriptorImageInfo> m_descriptor_images;
-	std::vector<vk::WriteDescriptorSet>  m_descriptor_writes;
-	vk::DescriptorSetLayout              m_pssr_descriptor_layout = nullptr;
-	vk::PipelineLayout                   m_pssr_pipeline_layout   = nullptr;
-	vk::Pipeline                         m_pssr_pipeline          = nullptr;
-	std::array<MipStatsCounter, 256>     m_mip_stats {};
-	uint32_t                             m_max_mdi_commands = 0;
+	static constexpr size_t ResolvedTextureCacheSize = 512;
+
+	struct ResolvedTextureCacheEntry {
+		uint64_t                              epoch        = 0;
+		uint64_t                              resource_key = 0;
+		ShaderRecompiler::IR::DescriptorValue value {};
+		ImageId                               image_id {};
+		TextureCache::ImageDesc               desc {};
+	};
+
+	struct RenderTargetPassCache {
+		bool                                                       valid              = false;
+		uint64_t                                                   resolve_epoch      = 0;
+		uint32_t                                                   mrt_mask           = 0;
+		uint32_t                                                   render_target_mask = 0;
+		HW::AaConfig                                               aa_config {};
+		std::array<HW::RenderTarget, RENDER_COLOR_ATTACHMENTS_MAX> rt_regs {};
+		HW::DepthRenderTarget                                      depth_rt {};
+		HW::RenderControl                                          render_control {};
+		HW::DepthControl                                           depth_control {};
+		HW::StencilControl                                         stencil_control {};
+		HW::StencilMask                                            stencil_mask {};
+		float                                                      depth_clear_value   = 0.0f;
+		uint8_t                                                    stencil_clear_value = 0;
+		uint32_t                                                   color_count         = 0;
+		std::array<RenderColorInfo, RENDER_COLOR_ATTACHMENTS_MAX>  color_info {};
+		RenderDepthInfo                                            depth_info {};
+	};
+
+	RenderContext&                         m_context;
+	bool                                   m_lod_stats = Config::LodStatsEnabled();
+	GraphicsBindings                       m_graphics_bindings;
+	PreparedBindings                       m_compute_bindings;
+	std::vector<ImageId>                   m_bound_images;
+	std::vector<vk::DescriptorImageInfo>   m_descriptor_images;
+	std::vector<vk::WriteDescriptorSet>    m_descriptor_writes;
+	std::vector<uint64_t>                  m_descriptor_hash_words;
+	std::vector<ResolvedTextureCacheEntry> m_resolved_texture_cache {ResolvedTextureCacheSize};
+	RenderTargetPassCache                  m_rt_cache {};
+	vk::DescriptorSetLayout                m_pssr_descriptor_layout = nullptr;
+	vk::PipelineLayout                     m_pssr_pipeline_layout   = nullptr;
+	vk::Pipeline                           m_pssr_pipeline          = nullptr;
+	std::array<MipStatsCounter, 256>       m_mip_stats {};
+	uint32_t                               m_max_mdi_commands = 0;
 
 	friend class CommandProcessor;
 	friend class ImageHeap;
