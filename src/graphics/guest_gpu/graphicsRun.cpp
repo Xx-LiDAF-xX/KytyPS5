@@ -1061,8 +1061,8 @@ void CommandProcessor::ReleaseMem(uint32_t data_sel, uint32_t interrupt_selector
 		return;
 	}
 
-	// Harvest completed occlusion counters without stalling the CPU on intermediate releases.
-	m_renderer.GetOcclusionQueries().Publish(false);
+	// Dumped occlusion counters are written before any end-of-pipe signal reaches the guest.
+	m_renderer.GetOcclusionQueries().Publish(true);
 
 	// A label beside GPU-written bytes goes to the backing store, so they are not downloaded.
 	// Other labels go through the guest mapping: its fault keeps a clean cached copy current and
