@@ -537,6 +537,9 @@ void PipelineCache::RetirePipeline(vk::Pipeline handle, uint64_t tick) {
 	if (handle == nullptr) {
 		return;
 	}
+	if (m_last_graphics_pipeline != nullptr && m_last_graphics_pipeline->pipeline == handle) {
+		m_last_graphics_pipeline = nullptr;
+	}
 	m_retired.push_back({handle, tick});
 }
 
@@ -574,7 +577,11 @@ void PipelineCache::PollPipelineLinks() {
 			RetirePipeline(result.previous, m_scheduler->CurrentTick());
 		}
 	}
-	DestroyRetiredPipelines(false);
+	const uint64_t current_tick = m_scheduler != nullptr ? m_scheduler->CurrentTick() : 0;
+	if (!m_retired.empty() && current_tick != m_last_retired_poll_tick) {
+		m_last_retired_poll_tick = current_tick;
+		DestroyRetiredPipelines(false);
+	}
 }
 
 void PipelineCache::QueuePipelineLink(const GraphicsPipelineKey& key, Pipeline& pipeline) {
@@ -1192,8 +1199,20 @@ PipelineCache::Pipeline& PipelineCache::GetGraphicsPipeline(const CommandBuffer&
 	// Publish any relink that finished since the last draw before this frame looks anything up.
 	PollPipelineLinks();
 
+	if (m_last_graphics_pipeline != nullptr && m_last_graphics_pipeline_key == key) {
+		if (m_last_graphics_pipeline->draws < LtoPromoteDraws) {
+			m_last_graphics_pipeline->draws++;
+			if (m_last_graphics_pipeline->draws == LtoPromoteDraws) {
+				QueuePipelineLink(key, *m_last_graphics_pipeline);
+			}
+		}
+		return *m_last_graphics_pipeline;
+	}
+
 	auto [iter, inserted] = m_graphics_pipelines.try_emplace(key);
 	auto& pipeline        = iter->second;
+	m_last_graphics_pipeline     = &pipeline;
+	m_last_graphics_pipeline_key = key;
 	if (!inserted) {
 		// The first draws run on the fast link; a pipeline the title keeps drawing is worth the
 		// background relink, and one it never comes back to is not.

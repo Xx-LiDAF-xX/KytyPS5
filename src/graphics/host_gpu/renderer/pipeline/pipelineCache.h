@@ -288,6 +288,9 @@ private:
 	std::chrono::steady_clock::time_point m_next_driver_cache_save;
 	bool                          m_driver_cache_dirty = false;
 	std::unordered_map<GraphicsPipelineKey, Pipeline, GraphicsPipelineKeyHash> m_graphics_pipelines;
+	Pipeline*                                                                  m_last_graphics_pipeline = nullptr;
+	GraphicsPipelineKey                                                        m_last_graphics_pipeline_key {};
+	uint64_t                                                                   m_last_retired_poll_tick = UINT64_MAX;
 	std::unordered_map<uint64_t, Pipeline>                                     m_compute_pipelines;
 	std::unordered_map<uint64_t, ShaderTessellationInputInfo>                  m_tess_layouts;
 	// Records everything first created if a shader store is open, and writes the driver cache.
