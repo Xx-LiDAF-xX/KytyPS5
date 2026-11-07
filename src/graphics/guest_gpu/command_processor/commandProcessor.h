@@ -116,7 +116,7 @@ public:
 	Pm4ProcessResult Process(Pm4Execution& execution, std::span<const uint32_t> commands);
 	void             ProcessIndirectBuffer(std::span<const uint32_t> commands, bool chain);
 
-	static constexpr uint32_t MaxInterruptsInBatch = 128u;
+	static constexpr uint32_t MaxInterruptsInBatch = 32u;
 
 	[[nodiscard]] bool IsAsyncComputeQueue() const { return m_interrupt_event_id >= 0x20; }
 	[[nodiscard]] bool NeedsFlush() const noexcept { return m_needs_flush; }
@@ -132,11 +132,11 @@ public:
 	}
 	static uint32_t MaxDrawsInBatch() noexcept {
 		const auto threads = std::thread::hardware_concurrency();
-		return std::clamp(threads != 0 ? threads * 64 : 512u, 256u, 1024u);
+		return std::clamp(threads != 0 ? threads * 16 : 128u, 64u, 256u);
 	}
 	static uint32_t MaxDispatchesInBatch() noexcept {
 		const auto threads = std::thread::hardware_concurrency();
-		return std::clamp(threads != 0 ? threads * 32 : 256u, 128u, 512u);
+		return std::clamp(threads != 0 ? threads * 8 : 64u, 32u, 128u);
 	}
 	void RecordDrawCall() noexcept {
 		if (++m_draws_in_batch >= MaxDrawsInBatch()) {
