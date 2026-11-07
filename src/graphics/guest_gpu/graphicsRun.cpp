@@ -455,9 +455,10 @@ void GuestGpu::ThreadRun(void* data) {
 	KYTY_PROFILER_THREAD("Thread_Gpu");
 	g_gpu_state = gpu;
 
-	constexpr uint32_t MinCoalesceUs = 8;
-	constexpr uint32_t MaxCoalesceUs = 100;
-	uint32_t           coalesce_us   = 60;
+	constexpr uint32_t MinCoalesceUs = 50;
+	constexpr uint32_t MaxCoalesceUs = 150;
+	uint32_t           coalesce_us   = 100;
+	uint32_t           slice_count   = 0;
 
 	for (;;) {
 		Submission                   submission;
@@ -497,7 +498,7 @@ void GuestGpu::ThreadRun(void* data) {
 					if (coalesced) {
 						coalesce_us = std::min(MaxCoalesceUs, coalesce_us + 20u);
 					} else {
-						coalesce_us = std::max(MinCoalesceUs, coalesce_us / 2u);
+						coalesce_us = std::max(MinCoalesceUs, coalesce_us - 10u);
 						gpu->FlushPending();
 					}
 					gpu->m_queue_mutex.Lock();
@@ -545,7 +546,10 @@ void GuestGpu::ThreadRun(void* data) {
 				submission  = std::move(queue.front());
 				queue.pop_front();
 				gpu->m_submission_count.fetch_sub(1, std::memory_order_acq_rel);
-				gpu->m_next_queue = (static_cast<uint32_t>(selected_queue) + 1) % QueueCount;
+				if (queue.empty() || ++slice_count >= 16u) {
+					slice_count       = 0;
+					gpu->m_next_queue = (static_cast<uint32_t>(selected_queue) + 1) % QueueCount;
+				}
 				gpu->m_processing = true;
 			}
 		}
