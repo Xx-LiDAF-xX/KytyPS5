@@ -48,7 +48,7 @@ constexpr auto DriverCacheSaveInterval = std::chrono::minutes {1};
 // How many draws a fast-linked pipeline has to serve before the optimized relink is worth its
 // CPU time, and how many relinks may wait in the queue at once.
 constexpr uint32_t LtoPromoteDraws   = 3;
-constexpr uint32_t MaxOutstandingLinks = 2;
+constexpr uint32_t MaxOutstandingLinks = 16;
 
 uint8_t RemapSourceAlphaFactor(uint8_t factor) {
 	switch (static_cast<Prospero::BlendFactor>(factor)) {
@@ -480,7 +480,12 @@ PipelineCache::PipelineCache(GraphicContext&                         graphics,
 	// Without a scheduler there is nothing to retire a replaced pipeline against, so the whole
 	// library path stays off and pipelines are created in one piece.
 	if (GraphicsPipelineLibraryEnabled()) {
-		m_link_thread = std::jthread {[this](std::stop_token) { RunPipelineLinkThread(); }};
+		const auto thread_count =
+		    std::clamp(std::thread::hardware_concurrency() / 4, 2u, 4u);
+		m_link_threads.reserve(thread_count);
+		for (uint32_t i = 0; i < thread_count; ++i) {
+			m_link_threads.emplace_back([this](std::stop_token) { RunPipelineLinkThread(); });
+		}
 	}
 }
 
@@ -490,9 +495,12 @@ PipelineCache::~PipelineCache() {
 		m_link_stop = true;
 	}
 	m_link_ready.notify_all();
-	if (m_link_thread.joinable()) {
-		m_link_thread.join();
+	for (auto& thread: m_link_threads) {
+		if (thread.joinable()) {
+			thread.join();
+		}
 	}
+	m_link_threads.clear();
 	Save();
 	// The worker is gone, so a finished relink can no longer be published. Drop those handles and
 	// everything waiting on the GPU; nothing draws any more.

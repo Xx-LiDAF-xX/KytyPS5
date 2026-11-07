@@ -1526,8 +1526,10 @@ void RenderExecutor::ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallIn
 	const uint32_t object_id        =
 	    state.ps_input_info.object_primitive_id ? ucfg.GetObjectId() : 0u;
 
-	auto& gfx_state   = buffer.GraphicsState();
-	auto& mdi_batcher = buffer.GetMdiBatcher();
+	MdiHash128 precomputed_hash {};
+	bool       precomputed_eligible = false;
+	auto&      gfx_state            = buffer.GraphicsState();
+	auto&      mdi_batcher          = buffer.GetMdiBatcher();
 	if (mdi_eligible_shape && !dynamic_state_dirty && buffer.IsRenderingWith(rendering) &&
 	    (!pipeline.uses_image_heap || !m_context.GetImageHeap().NeedsCommit()) &&
 	    mdi_batcher.MatchesScalars(
@@ -1545,7 +1547,8 @@ void RenderExecutor::ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallIn
 		if (vb_hash == mdi_batcher.CurrentKey().vertex_buffer_hash &&
 		    CanFastAppendMdiBindings(buffer, pipeline, stages, draw_dword_count,
 		                             std::span<const uint32_t> {draw_data.data(), draw_dword_count},
-		                             user_clip_planes, mdi_batcher.CurrentKey().bindings_hash)) {
+		                             user_clip_planes, mdi_batcher.CurrentKey().bindings_hash,
+		                             &precomputed_hash, &precomputed_eligible)) {
 			if (pipeline.uses_image_heap) {
 				m_context.GetImageHeap().ClearActive();
 			}
@@ -1598,10 +1601,12 @@ void RenderExecutor::ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallIn
 		}
 	}
 	GraphicsCommitExtra gfx_extra {
-	    .draw_dword_count = draw_dword_count,
-	    .draw_dwords      = draw_data,
-	    .user_clip_planes = user_clip_planes,
-	    .compute_mdi_info = mdi_eligible_shape,
+	    .draw_dword_count              = draw_dword_count,
+	    .draw_dwords                   = draw_data,
+	    .user_clip_planes              = user_clip_planes,
+	    .compute_mdi_info              = mdi_eligible_shape,
+	    .has_precomputed_mdi_hash      = precomputed_eligible,
+	    .precomputed_mdi_bindings_hash = precomputed_hash,
 	};
 	CommitBindings(buffer, vk::PipelineBindPoint::eGraphics, pipeline, stages, &gfx_extra);
 	if (!mesh_active && index_binding.buffer != nullptr &&

@@ -305,8 +305,8 @@ private:
 	std::vector<RetiredPipeline> m_retired;
 	std::atomic<uint32_t>        m_link_outstanding {0};
 	bool                         m_link_stop = false;
-	// Declared last, so it joins before the state it reads is destroyed.
-	std::jthread m_link_thread;
+	// Declared last, so they join before the state they read is destroyed.
+	std::vector<std::jthread> m_link_threads;
 
 	template <typename InputInfo>
 	const ShaderModule* GetProgram(const ShaderParams& params, InputInfo& input_info,

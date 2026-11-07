@@ -170,6 +170,8 @@ public:
 		std::array<uint32_t, 5> draw_dwords {};
 		uint32_t                user_clip_planes = 0;
 		bool                    compute_mdi_info = false;
+		bool                    has_precomputed_mdi_hash = false;
+		MdiHash128              precomputed_mdi_bindings_hash {};
 		MdiHash128              out_mdi_bindings_hash {};
 		bool                    out_can_begin_mdi = false;
 	};
@@ -198,7 +200,9 @@ public:
 	                                            uint32_t                           draw_dword_count,
 	                                            std::span<const uint32_t>          draw_dwords,
 	                                            uint32_t                           user_clip_planes,
-	                                            const MdiHash128&                  expected_hash);
+	                                            const MdiHash128&                  expected_hash,
+	                                            MdiHash128*                        out_hash = nullptr,
+	                                            bool*                              out_eligible = nullptr);
 	[[nodiscard]] TextureBinding ResolveTexture(const ShaderRecompiler::IR::ImageResource&   resource,
 	                                            const ShaderRecompiler::IR::DescriptorValue& value);
 

@@ -81,7 +81,7 @@ if(KYTY_CLANG_CL)
 	string(REGEX REPLACE "/MD" "/MT" CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")
 	string(REGEX REPLACE "/MD" "/MT" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
 			
-	set(KYTY_CPP_FLAGS "${KYTY_CPP_FLAGS} /utf-8 /Oy- /clang:-march=x86-64-v3 /clang:-ffp-contract=off /wd4244 /wd4305 /wd4800 /wd4345")
+	set(KYTY_CPP_FLAGS "${KYTY_CPP_FLAGS} /utf-8 /clang:-march=x86-64-v3 /clang:-ffp-contract=off /wd4244 /wd4305 /wd4800 /wd4345 /D_SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING /D_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS")
   
 	if(KYTY_WARNINGS_ARE_ERRORS)
 		#set(KYTY_CPP_FLAGS "${KYTY_CPP_FLAGS} /WX")
@@ -89,9 +89,12 @@ if(KYTY_CLANG_CL)
 	endif()
 
 	add_compile_options("$<$<CONFIG:Release>:/O2>")
+	add_compile_options("$<$<CONFIG:Release>:/Oy>")
 	add_compile_options("$<$<CONFIG:Release>:/DNDEBUG>")
 	add_compile_options("$<$<CONFIG:RelWithDebInfo>:/O2>")
+	add_compile_options("$<$<CONFIG:RelWithDebInfo>:/Oy>")
 	add_compile_options("$<$<CONFIG:RelWithDebInfo>:/DNDEBUG>")
+	add_compile_options("$<$<CONFIG:Debug>:/Oy->")
 
 	set(KYTY_C_FLAGS "${KYTY_CPP_FLAGS}")
 	

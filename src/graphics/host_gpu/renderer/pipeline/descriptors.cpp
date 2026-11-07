@@ -1149,12 +1149,20 @@ bool RenderExecutor::CanFastAppendMdiBindings(const CommandBuffer&              
                                               uint32_t                           draw_dword_count,
                                               std::span<const uint32_t>          draw_dwords,
                                               uint32_t                           user_clip_planes,
-                                              const MdiHash128&                  expected_hash) {
+                                              const MdiHash128&                  expected_hash,
+                                              MdiHash128*                        out_hash,
+                                              bool*                              out_eligible) {
 	(void)pipeline;
 	bool             eligible = false;
 	const MdiHash128 hash =
 	    ComputeMdiBindingsHash(m_context, buffer, bindings, draw_dword_count, draw_dwords,
 	                           user_clip_planes, /*check_fast_ready=*/true, eligible);
+	if (out_hash != nullptr) {
+		*out_hash = hash;
+	}
+	if (out_eligible != nullptr) {
+		*out_eligible = eligible;
+	}
 	return eligible && hash == expected_hash;
 }
 
@@ -1413,11 +1421,16 @@ void RenderExecutor::CommitBindings(CommandBuffer&                     buffer,
 	}
 
 	if (gfx_extra != nullptr && gfx_extra->compute_mdi_info) {
-		const std::span<const uint32_t> draw_span {gfx_extra->draw_dwords.data(),
-		                                           gfx_extra->draw_dword_count};
-		gfx_extra->out_mdi_bindings_hash = ComputeMdiBindingsHash(
-		    m_context, buffer, prepared_bindings, gfx_extra->draw_dword_count, draw_span,
-		    gfx_extra->user_clip_planes, /*check_fast_ready=*/false, gfx_extra->out_can_begin_mdi);
+		if (gfx_extra->has_precomputed_mdi_hash) {
+			gfx_extra->out_mdi_bindings_hash = gfx_extra->precomputed_mdi_bindings_hash;
+			gfx_extra->out_can_begin_mdi     = true;
+		} else {
+			const std::span<const uint32_t> draw_span {gfx_extra->draw_dwords.data(),
+			                                           gfx_extra->draw_dword_count};
+			gfx_extra->out_mdi_bindings_hash = ComputeMdiBindingsHash(
+			    m_context, buffer, prepared_bindings, gfx_extra->draw_dword_count, draw_span,
+			    gfx_extra->user_clip_planes, /*check_fast_ready=*/false, gfx_extra->out_can_begin_mdi);
+		}
 	}
 }
 
