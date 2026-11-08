@@ -6,4 +6,6 @@ _Build/vscode-clang/
 _Build/
 cmake-build-debug/
 _PipelineCache/
+_SaveData/
+_Trophies/
 CMakeUserPresets.json

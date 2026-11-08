@@ -396,6 +396,9 @@ struct PthreadPrivate {
 	uint64_t              cond_sequence = 0;
 	std::condition_variable cond_cv;
 	std::atomic<uint64_t> pending_signal_mask {0};
+	std::atomic_bool      canceled {false};
+	std::atomic<int>      cancel_state {0};
+	std::atomic<int>      cancel_type {0};
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 	uintptr_t guest_host_gs8;
 	uintptr_t guest_host_gs10;
@@ -3289,6 +3292,9 @@ int KYTY_SYSV_ABI PthreadCreate(Pthread* thread, const PthreadAttr* attr,
 		created_thread->guest.thread_id = ++g_pthread_thread_id;
 		created_thread->almost_done     = false;
 		created_thread->detached        = created_thread->attr->detached;
+		created_thread->canceled        = false;
+		created_thread->cancel_state    = 0;
+		created_thread->cancel_type     = 0;
 		created_thread->unique_id       = -1;
 
 		result =
@@ -3379,7 +3385,12 @@ int KYTY_SYSV_ABI PthreadCancel(Pthread thread) {
 		return KERNEL_ERROR_ESRCH;
 	}
 
+	thread->canceled.store(true);
+#if KYTY_PLATFORM != KYTY_PLATFORM_WINDOWS
 	int result = pthread_cancel(thread->p);
+#else
+	int result = 0;
+#endif
 
 	LOGF("\tthread cancel: %s, %d\n", thread->name.c_str(), result);
 
@@ -3418,59 +3429,53 @@ int KYTY_SYSV_ABI PthreadGetaffinity(Pthread thread, KernelCpumask* mask) {
 int KYTY_SYSV_ABI PthreadSetcancelstate(int state, int* old_state) {
 	PRINT_NAME();
 
-	int pstate = PTHREAD_CANCEL_DISABLE;
-
-	switch (state) {
-		case 0: pstate = PTHREAD_CANCEL_ENABLE; break;
-		case 1: pstate = PTHREAD_CANCEL_DISABLE; break;
-		default: EXIT("unknown state: %d", state);
+	if (state != 0 && state != 1) {
+		EXIT("unknown state: %d", state);
 	}
 
-	int result = pthread_setcancelstate(pstate, old_state);
-
-	LOGF("\tthread setcancelstate: %d\n", result);
-
-	if (old_state != nullptr) {
-		switch (*old_state) {
-			case PTHREAD_CANCEL_ENABLE: *old_state = 0; break;
-			case PTHREAD_CANCEL_DISABLE: *old_state = 1; break;
-			default: EXIT("unknown old_state: %d", *old_state);
+	if (g_pthread_self != nullptr) {
+		if (old_state != nullptr) {
+			*old_state = g_pthread_self->cancel_state.load();
+		}
+		g_pthread_self->cancel_state.store(state);
+		if (state == 0 && g_pthread_self->canceled.load() &&
+		    g_pthread_self->cancel_type.load() == 2) {
+			PthreadExit(reinterpret_cast<void*>(-1));
 		}
 	}
 
-	if (result == 0) {
-		return OK;
-	}
-	return KERNEL_ERROR_EINVAL;
+#if KYTY_PLATFORM != KYTY_PLATFORM_WINDOWS
+	int pstate = (state == 0 ? PTHREAD_CANCEL_ENABLE : PTHREAD_CANCEL_DISABLE);
+	pthread_setcancelstate(pstate, nullptr);
+#endif
+
+	return OK;
 }
 
 int KYTY_SYSV_ABI PthreadSetcanceltype(int type, int* old_type) {
 	PRINT_NAME();
 
-	int ptype = PTHREAD_CANCEL_DEFERRED;
-
-	switch (type) {
-		case 0: ptype = PTHREAD_CANCEL_DEFERRED; break;
-		case 2: ptype = PTHREAD_CANCEL_ASYNCHRONOUS; break;
-		default: EXIT("unknown type: %d", type);
+	if (type != 0 && type != 2) {
+		EXIT("unknown type: %d", type);
 	}
 
-	int result = pthread_setcanceltype(ptype, old_type);
-
-	LOGF("\tthread setcanceltype: %d\n", result);
-
-	if (old_type != nullptr) {
-		switch (*old_type) {
-			case PTHREAD_CANCEL_DEFERRED: *old_type = 0; break;
-			case PTHREAD_CANCEL_ASYNCHRONOUS: *old_type = 2; break;
-			default: EXIT("unknown type: %d", *old_type);
+	if (g_pthread_self != nullptr) {
+		if (old_type != nullptr) {
+			*old_type = g_pthread_self->cancel_type.load();
+		}
+		g_pthread_self->cancel_type.store(type);
+		if (type == 2 && g_pthread_self->canceled.load() &&
+		    g_pthread_self->cancel_state.load() == 0) {
+			PthreadExit(reinterpret_cast<void*>(-1));
 		}
 	}
 
-	if (result == 0) {
-		return OK;
-	}
-	return KERNEL_ERROR_EINVAL;
+#if KYTY_PLATFORM != KYTY_PLATFORM_WINDOWS
+	int ptype = (type == 0 ? PTHREAD_CANCEL_DEFERRED : PTHREAD_CANCEL_ASYNCHRONOUS);
+	pthread_setcanceltype(ptype, nullptr);
+#endif
+
+	return OK;
 }
 
 int KYTY_SYSV_ABI PthreadGetprio(Pthread thread, int* prio) {
@@ -3534,7 +3539,14 @@ int KYTY_SYSV_ABI PthreadSetprio(Pthread thread, int prio) {
 void KYTY_SYSV_ABI PthreadTestcancel() {
 	PRINT_NAME();
 
+	if (g_pthread_self != nullptr && g_pthread_self->canceled.load() &&
+	    g_pthread_self->cancel_state.load() == 0) {
+		PthreadExit(reinterpret_cast<void*>(-1));
+	}
+
+#if KYTY_PLATFORM != KYTY_PLATFORM_WINDOWS
 	pthread_testcancel();
+#endif
 }
 
 void KYTY_SYSV_ABI PthreadExit(void* value) {

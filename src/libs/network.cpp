@@ -1098,18 +1098,15 @@ static int ConvertSocketOptionName(int level, int option) {
 			case 0x0020: return SO_BROADCAST;
 			case 0x1001: return SO_SNDBUF;
 			case 0x1002: return SO_RCVBUF;
+			case 0x1006: return SO_RCVTIMEO;
 			case 0x1007: return SO_ERROR;
 			case 0x1105: return SO_SNDTIMEO;
-			default: break;
+			default: return -1;
 		}
 	} else if (level == 6 && option == 1) {
 		return TCP_NODELAY;
 	}
-#if defined(_WIN32)
-	return option;
-#else
 	return -1;
-#endif
 }
 
 static int* P2pSocketOption(P2pEndpoint& endpoint, int option) {

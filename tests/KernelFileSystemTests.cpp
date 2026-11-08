@@ -2187,6 +2187,7 @@ void TestNetCtlHostIpv4() {
 
 template <int Mode>
 void KYTY_SYSV_ABI RecordNpState(int user_id, uint32_t state, void* arg) {
+  [[maybe_unused]] volatile int mode_marker = Mode;
   auto& event = *static_cast<std::array<int, 3>*>(arg);
   ++event[0];
   event[1] = user_id;

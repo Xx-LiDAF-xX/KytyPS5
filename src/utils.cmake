@@ -96,6 +96,9 @@ if(KYTY_CLANG_CL)
 	add_compile_options("$<$<CONFIG:RelWithDebInfo>:/DNDEBUG>")
 	add_compile_options("$<$<CONFIG:Debug>:/Oy->")
 
+	add_link_options("/DELAYLOAD:user32.dll" "/DELAYLOAD:gdi32.dll" "/DELAYLOAD:shell32.dll" "/DELAYLOAD:imm32.dll" "/DELAYLOAD:winmm.dll" "/DELAYLOAD:setupapi.dll" "/DELAYLOAD:ole32.dll" "/DELAYLOAD:oleaut32.dll")
+	link_libraries(delayimp)
+
 	set(KYTY_C_FLAGS "${KYTY_CPP_FLAGS}")
 	
 elseif(CLANG OR GCC)

@@ -1278,10 +1278,25 @@ int KYTY_SYSV_ABI KernelTruncate(const char* path, int64_t length) {
 		return KERNEL_ERROR_EROFS;
 	}
 
+	auto has_non_directory_ancestor = [&]() {
+		for (auto parent = real_name.parent_path(); !parent.empty() && parent != parent.root_path();
+		     parent = parent.parent_path()) {
+			std::error_code ec;
+			const auto pstatus = std::filesystem::status(parent, ec);
+			if (!ec && std::filesystem::exists(pstatus) && !std::filesystem::is_directory(pstatus)) {
+				return true;
+			}
+		}
+		return false;
+	};
+
 	std::error_code error;
 	const auto      status = std::filesystem::status(real_name, error);
 	if (!error) {
 		if (!std::filesystem::exists(status)) {
+			if (has_non_directory_ancestor()) {
+				return KERNEL_ERROR_ENOTDIR;
+			}
 			return KERNEL_ERROR_ENOENT;
 		}
 		if (std::filesystem::is_directory(status)) {
@@ -1292,6 +1307,9 @@ int KYTY_SYSV_ABI KernelTruncate(const char* path, int64_t length) {
 		}
 	}
 	if (error) {
+		if (has_non_directory_ancestor()) {
+			return KERNEL_ERROR_ENOTDIR;
+		}
 		switch (static_cast<std::errc>(error.default_error_condition().value())) {
 			case std::errc::no_such_file_or_directory: return KERNEL_ERROR_ENOENT;
 			case std::errc::not_a_directory: return KERNEL_ERROR_ENOTDIR;
