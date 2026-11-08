@@ -45,6 +45,29 @@ namespace {
 	return static_cast<bool>(aspect) && !(aspect & ~supported);
 }
 
+// FNV-1a over the normalized view key. The entry found by the hash is still verified against the
+// full key, so collisions only cost a probe, never a wrong view.
+[[nodiscard]] uint64_t HashImageViewInfo(const ImageViewInfo& info) noexcept {
+	uint64_t   hash = 0xcbf29ce484222325ull;
+	const auto mix  = [&hash](uint64_t value) noexcept {
+		hash = (hash ^ value) * 0x100000001b3ull;
+	};
+	mix(static_cast<uint32_t>(info.format));
+	mix(static_cast<uint32_t>(info.type));
+	mix(static_cast<vk::ImageAspectFlags::MaskType>(info.aspect));
+	mix(info.base_level);
+	mix(info.level_count);
+	mix(info.min_lod);
+	mix(info.base_layer);
+	mix(info.layer_count);
+	mix(static_cast<uint32_t>(info.mapping.r));
+	mix(static_cast<uint32_t>(info.mapping.g));
+	mix(static_cast<uint32_t>(info.mapping.b));
+	mix(static_cast<uint32_t>(info.mapping.a));
+	mix(static_cast<vk::ImageUsageFlags::MaskType>(info.usage));
+	return hash;
+}
+
 } // namespace
 
 namespace ImageViewOps {
@@ -290,9 +313,27 @@ vk::ImageView Image::FindView(const ImageViewInfo& view_info) {
 		normalized.aspect = vk::ImageAspectFlagBits::eStencil;
 	}
 	normalized.usage = is_storage ? vk::ImageUsageFlagBits::eStorage : vk::ImageUsageFlags {};
-	for (const auto& cached: views) {
-		if (cached.info == normalized) {
-			return cached.view;
+	const size_t view_count = views.size();
+	if (m_last_view_index < view_count && views[m_last_view_index].info == normalized) {
+		return views[m_last_view_index].view;
+	}
+	if (view_count >= ViewIndexThreshold && !m_view_index.empty()) {
+		const auto hash = HashImageViewInfo(normalized);
+		auto       slot = static_cast<size_t>(hash) & (m_view_index.size() - 1);
+		while (m_view_index[slot].index != CachedImageViewIndex::InvalidIndex) {
+			const auto index = m_view_index[slot].index;
+			if (m_view_index[slot].hash == hash && views[index].info == normalized) {
+				m_last_view_index = index;
+				return views[index].view;
+			}
+			slot = (slot + 1) & (m_view_index.size() - 1);
+		}
+	} else {
+		for (size_t index = 0; index < view_count; index++) {
+			if (views[index].info == normalized) {
+				m_last_view_index = static_cast<uint32_t>(index);
+				return views[index].view;
+			}
 		}
 	}
 
@@ -365,7 +406,42 @@ vk::ImageView Image::FindView(const ImageViewInfo& view_info) {
 	    static_cast<vk::ImageAspectFlags::MaskType>(normalized.aspect), normalized.base_level,
 	    normalized.level_count, normalized.base_layer, normalized.layer_count);
 	views.push_back({normalized, view});
+	m_last_view_index = static_cast<uint32_t>(views.size() - 1);
+	IndexView(m_last_view_index);
 	return view;
+}
+
+void Image::IndexView(uint32_t index) {
+	if (m_view_index.empty() && views.size() < ViewIndexThreshold) {
+		return;
+	}
+	const size_t capacity = m_view_index.empty() ? size_t {32} : m_view_index.size();
+	if (m_view_index.empty() || (m_view_index_count + 1) * 2 > capacity) {
+		size_t next_capacity = capacity;
+		while (next_capacity < views.size() * 2) {
+			next_capacity <<= 1;
+		}
+		RebuildViewIndex(next_capacity);
+		return;
+	}
+	InsertViewIndex(HashImageViewInfo(views[index].info), index);
+}
+
+void Image::RebuildViewIndex(size_t capacity) {
+	m_view_index.assign(capacity, CachedImageViewIndex {});
+	m_view_index_count = 0;
+	for (size_t index = 0; index < views.size(); index++) {
+		InsertViewIndex(HashImageViewInfo(views[index].info), static_cast<uint32_t>(index));
+	}
+}
+
+void Image::InsertViewIndex(uint64_t hash, uint32_t index) {
+	size_t slot = static_cast<size_t>(hash) & (m_view_index.size() - 1);
+	while (m_view_index[slot].index != CachedImageViewIndex::InvalidIndex) {
+		slot = (slot + 1) & (m_view_index.size() - 1);
+	}
+	m_view_index[slot] = {hash, index};
+	m_view_index_count++;
 }
 
 } // namespace Libs::Graphics

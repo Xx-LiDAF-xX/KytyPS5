@@ -48,7 +48,7 @@ public:
 		           : offset - LOWER_ADDRESS_SIZE + LibKernel::Memory::kExtendedMemoryBase;
 	}
 
-	static constexpr uint64_t MaxStreamBufferSize = 512 * 1024;
+	static constexpr uint64_t MaxStreamBufferSize = 64 * 1024;
 
 	BufferCache(GraphicContext& graphics, CommandScheduler& scheduler, PageManager& page_manager,
 	            TextureCache& texture_cache);

@@ -223,6 +223,12 @@ struct ImageTestAccess {
                            uint64_t capacity) {
     return Image::CopyRows(row_size, rows, capacity);
   }
+  static size_t ViewIndexCapacity(const Image &image) {
+    return image.m_view_index.size();
+  }
+  static uint32_t ViewIndexCount(const Image &image) {
+    return image.m_view_index_count;
+  }
 };
 
 struct TileManagerTestAccess {
@@ -2778,7 +2784,7 @@ public:
     auto &cache = resources.GetBufferCache();
     constexpr std::array<std::pair<MemoryUsage, uint64_t>, 4> utilities{{
         {MemoryUsage::Upload, 512ull << 20},
-        {MemoryUsage::Stream, 64ull << 20},
+        {MemoryUsage::Stream, 256ull << 20},
         {MemoryUsage::Download, 64ull << 20},
         {MemoryUsage::DeviceLocal, 128ull << 20},
     }};
@@ -4319,6 +4325,47 @@ public:
                 color.views.size() == 7,
             "dynamic view identity omitted mapping, format, mip, layer, type, "
             "or storage usage");
+
+    // A dynamic-mip texture resolves one view per mip per draw, so the view list outgrows a
+    // linear scan. Every view must stay resolvable by its exact key afterwards.
+    auto mip_color_info = color_info;
+    mip_color_info.extent = {512, 8, 1};
+    mip_color_info.pitch = 512 * 4;
+    mip_color_info.resources = {10, 2};
+    Libs::Graphics::Image mip_color(m_runtime_context, scheduler, mip_color_info);
+    std::array<vk::ImageView, 10> mip_level_views{};
+    for (uint32_t level = 0; level < mip_level_views.size(); level++) {
+      auto level_info = sampled;
+      level_info.base_level = level;
+      mip_level_views[level] = mip_color.FindView(level_info);
+    }
+    bool level_views_distinct = true;
+    for (size_t index = 0; index < mip_level_views.size(); index++) {
+      level_views_distinct &= mip_level_views[index] != nullptr;
+      for (size_t other = 0; other < index; other++) {
+        level_views_distinct &= mip_level_views[index] != mip_level_views[other];
+      }
+    }
+    bool level_views_stable = true;
+    for (uint32_t level = 0; level < mip_level_views.size(); level++) {
+      auto level_info = sampled;
+      level_info.base_level = level;
+      level_views_stable &= mip_color.FindView(level_info) == mip_level_views[level];
+    }
+    level_views_stable &= mip_color.FindView(sampled) == mip_level_views[0];
+    auto mip_bgra_info = sampled;
+    mip_bgra_info.mapping = bgra;
+    const auto mip_bgra = mip_color.FindView(mip_bgra_info);
+    level_views_stable &=
+        mip_bgra != nullptr && mip_color.FindView(mip_bgra_info) == mip_bgra;
+    const size_t index_capacity = ImageTestAccess::ViewIndexCapacity(mip_color);
+    Require(name, "mip view index",
+            level_views_distinct && level_views_stable &&
+                mip_color.views.size() >= 10 &&
+                index_capacity >= mip_color.views.size() * 2 &&
+                (index_capacity & (index_capacity - 1)) == 0 &&
+                ImageTestAccess::ViewIndexCount(mip_color) == mip_color.views.size(),
+            "view hash index lost, duplicated, or mis-sized a dynamic mip view");
 
     auto video_out_info = color_info;
     video_out_info.pixel_format = vk::Format::eA2R10G10B10UnormPack32;

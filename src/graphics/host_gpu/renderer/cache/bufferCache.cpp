@@ -392,12 +392,7 @@ void BufferCache::InvalidateMemory(uint64_t vaddr, uint64_t size) {
 	m_memory_tracker.InvalidateRegion(inv_vaddr, inv_size,
 	                                  [this, inv_vaddr, inv_size] { ReadMemory(inv_vaddr, inv_size, true); });
 
-	const bool can_stream_owner =
-	    has_owner && buffer != nullptr && buffer->Size() <= MaxStreamBufferSize &&
-	    !m_texture_cache.FindImageFromRange(buffer->CpuAddress(), buffer->Size());
-	if (!can_stream_owner) {
-		QueueBdaSync(vaddr, size);
-	}
+	QueueBdaSync(vaddr, size);
 }
 
 void BufferCache::ReadMemory(uint64_t vaddr, uint64_t size, bool is_write) {
@@ -615,7 +610,7 @@ std::pair<Buffer*, uint64_t> BufferCache::ObtainBuffer(uint64_t vaddr, uint64_t 
 
 	const bool can_stream = !is_written &&
 	                        (!is_texel_buffer || !m_texture_cache.FindImageFromRange(vaddr, size)) &&
-	                        size <= MaxStreamBufferSize &&
+	                        size <= CACHING_PAGESIZE &&
 	                        !m_memory_tracker.IsRegionGpuModified(vaddr, size) &&
 	                        m_memory_tracker.IsRegionCpuModified(vaddr, size);
 	if (can_stream) {

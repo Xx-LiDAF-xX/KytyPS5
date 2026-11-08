@@ -29,6 +29,15 @@ struct CachedImageView {
 	vk::ImageView view = nullptr;
 };
 
+// Open-addressed index over Image::views. Dynamic-mip textures resolve one view per mip per draw,
+// so the append-only view list can grow far enough that scanning it dominates the lookup.
+struct CachedImageViewIndex {
+	static constexpr uint32_t InvalidIndex = std::numeric_limits<uint32_t>::max();
+
+	uint64_t hash  = 0;
+	uint32_t index = InvalidIndex;
+};
+
 struct ImageUsage {
 	bool render_target = false;
 	bool video_out     = false;
@@ -155,19 +164,27 @@ public:
 private:
 	friend struct ImageTestAccess;
 
+	static constexpr size_t ViewIndexThreshold = 8;
+
 	[[nodiscard]] static vk::ImageAspectFlags FullAspectMask(vk::Format format) noexcept;
 	[[nodiscard]] static uint32_t             CopyRows(uint64_t row_size, uint32_t rows,
 	                                                   uint64_t capacity) noexcept;
 	[[nodiscard]] static std::pair<uint32_t, uint32_t>
 	SanitizeCopyLayers(const Image& source, const Image& destination, uint32_t depth);
+	void IndexView(uint32_t index);
+	void RebuildViewIndex(size_t capacity);
+	void InsertViewIndex(uint64_t hash, uint32_t index);
 
-	GraphicContext&   m_graphics;
-	CommandScheduler& m_scheduler;
-	uint64_t          m_maybe_cpu_hash  = 0;
-	bool              m_cpu_dirty       = false;
-	bool              m_maybe_cpu_dirty = false;
-	bool              m_gpu_modified    = false;
-	bool              m_buffer_modified = false;
+	GraphicContext&                   m_graphics;
+	CommandScheduler&                 m_scheduler;
+	std::vector<CachedImageViewIndex> m_view_index;
+	uint32_t                          m_view_index_count = 0;
+	uint32_t                          m_last_view_index  = CachedImageViewIndex::InvalidIndex;
+	uint64_t                          m_maybe_cpu_hash   = 0;
+	bool                              m_cpu_dirty        = false;
+	bool                              m_maybe_cpu_dirty  = false;
+	bool                              m_gpu_modified     = false;
+	bool                              m_buffer_modified  = false;
 };
 
 namespace ImageOps {
