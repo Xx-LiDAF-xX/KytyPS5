@@ -342,23 +342,16 @@ void BufferCache::InvalidateMemory(uint64_t vaddr, uint64_t size) {
 	if (size == 1) {
 		if (page < PageTable::kPageCount) {
 			const auto page_start = Common::AlignDown(vaddr, TRACKER_PAGE_SIZE);
-			constexpr uint64_t MaxCluster = 512 * 1024;
-			uint64_t cluster_start = Common::AlignDown(vaddr, MaxCluster);
-			uint64_t cluster_end   = cluster_start + MaxCluster;
+			constexpr uint64_t ClusterForward = 64 * 1024;
+			uint64_t cluster_start = page_start;
+			uint64_t cluster_end   = page_start + ClusterForward;
 
 			if (has_owner && buffer != nullptr) {
-				if (buffer->Size() <= MaxCluster) {
-					cluster_start = buffer->CpuAddress();
-					cluster_end   = buffer->CpuAddress() + buffer->Size();
-				} else {
-					cluster_start = std::max(buffer->CpuAddress(), Common::AlignDown(vaddr, MaxCluster));
-					cluster_end   = std::min(buffer->CpuAddress() + buffer->Size(), cluster_start + MaxCluster);
-				}
+				cluster_start = std::max(page_start, buffer->CpuAddress());
+				cluster_end   = std::min(buffer->CpuAddress() + buffer->Size(), page_start + ClusterForward);
 			} else {
-				const auto region_start = Common::AlignDown(vaddr, TRACKER_REGION_SIZE);
-				const auto region_end   = Common::AlignUp(vaddr + 1, TRACKER_REGION_SIZE);
-				cluster_start = std::max(cluster_start, region_start);
-				cluster_end   = std::min(cluster_end, region_end);
+				const auto region_end = Common::AlignUp(vaddr + 1, TRACKER_REGION_SIZE);
+				cluster_end = std::min(cluster_end, region_end);
 			}
 
 			if (cluster_end > cluster_start) {
@@ -411,6 +404,24 @@ void BufferCache::ReadMemory(uint64_t vaddr, uint64_t size, bool is_write) {
 			QueueBdaSync(vaddr, size);
 		}
 	});
+}
+
+BufferId BufferCache::FindExistingBuffer(uint64_t vaddr) const {
+	if (vaddr == 0) {
+		return NULL_BUFFER_ID;
+	}
+	const auto page = vaddr >> PageTable::kPageBits;
+	if (page >= PageTable::kPageCount) {
+		return NULL_BUFFER_ID;
+	}
+	const auto* owner = m_page_table.Find(page);
+	if (owner != nullptr && *owner && *owner != NULL_BUFFER_ID) {
+		const auto& buffer = m_slot_buffers[*owner];
+		if (!buffer.is_deleted && buffer.IsInBounds(vaddr, 1)) {
+			return *owner;
+		}
+	}
+	return NULL_BUFFER_ID;
 }
 
 BufferId BufferCache::FindBuffer(uint64_t vaddr, uint64_t size) {

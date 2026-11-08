@@ -861,6 +861,17 @@ void RenderExecutor::FindBuffers(std::span<PreparedBindings* const> stages) {
 			if (size >= (uint64_t {1} << 30u) || descriptor.NumRecords() == UINT32_MAX) {
 				size = Libs::LibKernel::Memory::ClampRangeSize(address, size);
 			}
+			if (descriptor.NumRecords() == UINT32_MAX && !program.info.buffers[resource].written) {
+				const auto existing_id = cache.FindExistingBuffer(address);
+				if (existing_id != NULL_BUFFER_ID) {
+					const auto& existing = cache.GetBuffer(existing_id);
+					if (address >= existing.CpuAddress() &&
+					    address < existing.CpuAddress() + existing.Size()) {
+						const auto remaining = (existing.CpuAddress() + existing.Size()) - address;
+						size                 = std::min(size, remaining);
+					}
+				}
+			}
 			const auto id = cache.FindBuffer(address, size);
 			if (descriptor.NumRecords() == UINT32_MAX && id != NULL_BUFFER_ID &&
 			    !program.info.buffers[resource].written) {

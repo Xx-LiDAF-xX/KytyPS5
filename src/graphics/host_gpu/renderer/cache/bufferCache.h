@@ -48,7 +48,7 @@ public:
 		           : offset - LOWER_ADDRESS_SIZE + LibKernel::Memory::kExtendedMemoryBase;
 	}
 
-	static constexpr uint64_t MaxStreamBufferSize = 64 * 1024;
+	static constexpr uint64_t MaxStreamBufferSize = 256 * 1024;
 
 	BufferCache(GraphicContext& graphics, CommandScheduler& scheduler, PageManager& page_manager,
 	            TextureCache& texture_cache);
@@ -59,6 +59,7 @@ public:
 	void                   ReadMemory(uint64_t vaddr, uint64_t size, bool is_write = false);
 	[[nodiscard]] Buffer&  GetBuffer(BufferId id) { return m_slot_buffers[id]; }
 	[[nodiscard]] BufferId FindBuffer(uint64_t vaddr, uint64_t size);
+	[[nodiscard]] BufferId FindExistingBuffer(uint64_t vaddr) const;
 	[[nodiscard]] std::pair<Buffer*, uint64_t> ObtainBuffer(uint64_t vaddr, uint64_t size,
 	                                                        bool     is_written,
 	                                                        bool     is_texel_buffer = false,
