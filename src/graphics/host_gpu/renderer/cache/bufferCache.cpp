@@ -361,19 +361,10 @@ void BufferCache::InvalidateMemory(uint64_t vaddr, uint64_t size) {
 				cluster_end   = std::min(cluster_end, region_end);
 			}
 
-			if (cluster_end > cluster_start &&
-			    !m_memory_tracker.IsRegionGpuModified(cluster_start, cluster_end - cluster_start)) {
-				inv_vaddr = cluster_start;
-				inv_size  = cluster_end - cluster_start;
-			} else {
-				uint64_t safe_start = page_start;
-				uint64_t safe_end   = page_start + TRACKER_PAGE_SIZE;
-				const auto forward_limit = std::min(page_start + MaxStreamBufferSize, cluster_end);
-				if (forward_limit > safe_end &&
-				    !m_memory_tracker.IsRegionGpuModified(safe_end, forward_limit - safe_end)) {
-					safe_end = forward_limit;
-				}
-				if (!m_memory_tracker.IsRegionGpuModified(safe_start, safe_end - safe_start)) {
+			if (cluster_end > cluster_start) {
+				const auto [safe_start, safe_end] =
+				    m_memory_tracker.FindNonGpuModifiedRange(page_start, cluster_start, cluster_end);
+				if (safe_end > safe_start) {
 					inv_vaddr = safe_start;
 					inv_size  = safe_end - safe_start;
 				}

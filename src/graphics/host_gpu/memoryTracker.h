@@ -26,6 +26,8 @@ public:
 	[[nodiscard]] bool IsRegionGpuModified(uint64_t vaddr, uint64_t size);
 	void               MarkRegionAsCpuModified(uint64_t vaddr, uint64_t size);
 	void               UnmarkRegionAsGpuModified(uint64_t vaddr, uint64_t size);
+	[[nodiscard]] std::pair<uint64_t, uint64_t>
+	FindNonGpuModifiedRange(uint64_t page_start, uint64_t cluster_start, uint64_t cluster_end);
 	// Removes protection from a range and flushes GPU-owned data when required.
 	template <typename Flush>
 	void InvalidateRegion(uint64_t vaddr, uint64_t size, Flush&& on_flush) noexcept {

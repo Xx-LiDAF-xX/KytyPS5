@@ -131,6 +131,21 @@ public:
 		}
 	}
 
+	template <DirtySource source>
+	[[nodiscard]] std::pair<size_t, size_t> FindCleanPageRange(size_t page_idx,
+	                                                           size_t start_limit,
+	                                                           size_t end_limit) const noexcept {
+		const auto& bits = GetBits<source>();
+		if (bits.Get(page_idx)) {
+			return {page_idx, page_idx + 1};
+		}
+		const auto [first_one, _] = bits.FirstRangeFrom(page_idx);
+		const auto safe_end       = std::min(first_one, end_limit);
+		const auto [__, last_one] = bits.LastRangeFrom(page_idx);
+		const auto safe_start     = std::max(last_one, start_limit);
+		return {safe_start, safe_end};
+	}
+
 	TrackingSpinLock lock;
 
 private:

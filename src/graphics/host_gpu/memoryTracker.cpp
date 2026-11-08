@@ -94,4 +94,35 @@ void MemoryTracker::UnmarkRegionAsGpuModified(uint64_t vaddr, uint64_t size) {
 	});
 }
 
+std::pair<uint64_t, uint64_t> MemoryTracker::FindNonGpuModifiedRange(uint64_t page_start,
+                                                                      uint64_t cluster_start,
+                                                                      uint64_t cluster_end) {
+	ValidateRange(page_start, TRACKER_PAGE_SIZE);
+	const auto region_index = page_start / TRACKER_REGION_SIZE;
+	const auto region_base  = region_index * TRACKER_REGION_SIZE;
+	const auto region_end   = region_base + TRACKER_REGION_SIZE;
+
+	cluster_start = std::max(cluster_start, region_base);
+	cluster_end   = std::min(cluster_end, region_end);
+	if (cluster_start >= cluster_end || page_start < cluster_start || page_start >= cluster_end) {
+		return {page_start, page_start + TRACKER_PAGE_SIZE};
+	}
+
+	auto* manager = m_regions[region_index].load(std::memory_order_acquire);
+	if (manager == nullptr) {
+		return {cluster_start, cluster_end};
+	}
+
+	std::scoped_lock lock(manager->lock);
+	const size_t page_idx           = (page_start - region_base) / TRACKER_PAGE_SIZE;
+	const size_t cluster_start_page = (cluster_start - region_base) / TRACKER_PAGE_SIZE;
+	const size_t cluster_end_page   = (cluster_end - region_base) / TRACKER_PAGE_SIZE;
+
+	const auto [safe_start_page, safe_end_page] =
+	    manager->FindCleanPageRange<DirtySource::Gpu>(page_idx, cluster_start_page, cluster_end_page);
+
+	return {region_base + safe_start_page * TRACKER_PAGE_SIZE,
+	        region_base + safe_end_page * TRACKER_PAGE_SIZE};
+}
+
 } // namespace Libs::Graphics
