@@ -35,7 +35,7 @@
 
 ## Tasks
 
-- [ ] **Task 1: Implement Queue Slicing & Eliminate False Queue-Switch Flushes**
+- [x] **Task 1: Implement Queue Slicing & Eliminate False Queue-Switch Flushes**
   - **Files:** `src/graphics/guest_gpu/graphicsRun.cpp`
   - **Details:**
     - Introduce `constexpr uint32_t MaxQueueSlice = 16u;` and a per-thread slice counter in `GuestGpu::ThreadRun`.
