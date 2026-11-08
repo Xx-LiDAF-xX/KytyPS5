@@ -458,6 +458,8 @@ void GuestGpu::ThreadRun(void* data) {
 	constexpr uint32_t MinCoalesceUs = 8;
 	constexpr uint32_t MaxCoalesceUs = 100;
 	uint32_t           coalesce_us   = 60;
+	constexpr uint32_t MaxQueueSlice = 16u;
+	uint32_t           slice_count   = 0;
 
 	for (;;) {
 		Submission                   submission;
@@ -545,7 +547,10 @@ void GuestGpu::ThreadRun(void* data) {
 				submission  = std::move(queue.front());
 				queue.pop_front();
 				gpu->m_submission_count.fetch_sub(1, std::memory_order_acq_rel);
-				gpu->m_next_queue = (static_cast<uint32_t>(selected_queue) + 1) % QueueCount;
+				if (queue.empty() || ++slice_count >= MaxQueueSlice) {
+					slice_count       = 0;
+					gpu->m_next_queue = (static_cast<uint32_t>(selected_queue) + 1) % QueueCount;
+				}
 				gpu->m_processing = true;
 			}
 		}
@@ -601,17 +606,6 @@ void GuestGpu::ThreadRun(void* data) {
 			}
 
 			needs_flush = !complete || gpu->GetProcessor(submission.queue_id).NeedsFlush();
-			if (!needs_flush) {
-				for (uint32_t offset = 0; offset < QueueCount; offset++) {
-					const auto id = (gpu->m_next_queue + offset) % QueueCount;
-					if (!gpu->m_queues[id].empty() && !gpu->m_queues[id].front().blocked) {
-						if (id != submission.queue_id) {
-							needs_flush = true;
-						}
-						break;
-					}
-				}
-			}
 		}
 
 		if (submission.type == SubmissionType::Commands && needs_flush) {
