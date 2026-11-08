@@ -47,7 +47,7 @@
     - Run CTest suite: all 79 tests must pass (specifically test #50, #51, #57, #58, #59, #60, #66).
     - Commit locally with `feat(gpu): coalesce queue submissions and eliminate cross-queue submit thrashing`.
 
-- [ ] **Task 2: Optimize Buffer Invalidation & Write-Fault Clustering**
+- [x] **Task 2: Optimize Buffer Invalidation & Write-Fault Clustering**
   - **Files:** `src/graphics/host_gpu/renderer/cache/bufferCache.cpp`, `src/graphics/host_gpu/memoryTracker.h`
   - **Details:**
     - In `BufferCache::InvalidateMemory`, inspect clustering when `size == 1`.
@@ -57,7 +57,7 @@
     - Run CTest test #75 (`buffer_cache_dirty_gc`), #79 (`buffer_cache_ranges`), and #41 (`shader_recompiler_compute`).
     - Commit locally with `perf(cache): cluster buffer write-tracking invalidations to reduce SEH page fault traps`.
 
-- [ ] **Task 3: Direct Memory Allocation Audit & Reclamation Safeguards**
+- [x] **Task 3: Direct Memory Allocation Audit & Reclamation Safeguards**
   - **Files:** `src/kernel/memory.cpp`
   - **Details:**
     - Audit `KernelReleaseDirectMemory` and physical memory page tracking to ensure freed physical chunks are actively coalesced.
@@ -66,7 +66,7 @@
     - Run CTest test #52 (`virtual_memory_allocation`).
     - Commit locally with `fix(kernel): ensure released direct memory chunks are coalesced and reusable`.
 
-- [ ] **Task 4: Run Clean Verification and Validate Performance Impact**
+- [x] **Task 4: Run Clean Verification and Validate Performance Impact**
   - **Details:**
     - Re-run all 79 CTest tests and launcher tests.
     - Verify 100% test pass rate across the board.
