@@ -1137,8 +1137,8 @@ void CommandProcessor::TriggerEvent(uint32_t event_type, uint32_t event_index,
 		case 0x0000002c:
 		case 0x0000002e:
 			if (!valid_cache_event_index) {
-				EXIT("unknown event type: 0x%08" PRIx32 ", 0x%08" PRIx32 "\n", event_type,
-				     event_index);
+				LOGF("\t cache writeback event 0x%08" PRIx32 " with index 0x%08" PRIx32 "\n",
+				     event_type, event_index);
 			}
 			break;
 		case 0x0000000d:

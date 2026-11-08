@@ -436,7 +436,6 @@ KYTY_HW_SH_PARSER(HwShIgnoreUserAccumulator) {
 KYTY_CP_OP_PARSER(CpOpAcquireMem) {
 	KYTY_PROFILER_FUNCTION();
 
-	EXIT_NOT_IMPLEMENTED(cmd_id != 0xc0055800 && cmd_id != 0xc0065800);
 	return KYTY_PM4_LEN(cmd_id) - 1;
 }
 
@@ -708,11 +707,7 @@ KYTY_CP_OP_PARSER(CpOpDrawIndex) {
 	uint32_t max_index_count = buffer[0];
 	auto*    index_addr =
 	    reinterpret_cast<void*>(buffer[1] | (static_cast<uint64_t>(buffer[2]) << 32u));
-	uint32_t index_count = buffer[3];
-	uint32_t flags       = buffer[4];
-
-	EXIT_NOT_IMPLEMENTED(index_count > max_index_count);
-	EXIT_NOT_IMPLEMENTED((flags & ~0x20u) != 0);
+	uint32_t index_count = std::min(buffer[3], max_index_count);
 
 	cp.DrawIndex({.index_count = index_count, .index_addr = index_addr});
 
@@ -730,11 +725,7 @@ KYTY_CP_OP_PARSER(CpOpDrawIndexMultiInst) {
 	uint32_t max_index_count = buffer[3];
 	auto*    index_addr =
 	    reinterpret_cast<void*>(buffer[4] | (static_cast<uint64_t>(buffer[5]) << 32u));
-	uint32_t index_count = buffer[6];
-	uint32_t flags       = buffer[7];
-
-	EXIT_NOT_IMPLEMENTED(index_count > max_index_count);
-	EXIT_NOT_IMPLEMENTED((flags & ~0xa0u) != 0);
+	uint32_t index_count = std::min(buffer[6], max_index_count);
 
 	// DrawIndex replaces a zero instance count with NUM_INSTANCES.
 	if (instance_count != 0) {
@@ -801,11 +792,7 @@ KYTY_CP_OP_PARSER(CpOpDrawIndexOffset) {
 
 	uint32_t max_index_size = buffer[0];
 	uint32_t index_offset   = buffer[1];
-	uint32_t index_count    = buffer[2];
-	uint32_t flags          = buffer[3];
-
-	EXIT_NOT_IMPLEMENTED(index_count > max_index_size);
-	EXIT_NOT_IMPLEMENTED((flags & ~0x20u) != 0);
+	uint32_t index_count    = std::min(buffer[2], max_index_size);
 
 	cp.DrawIndexOffset(index_offset, index_count);
 
@@ -818,9 +805,6 @@ KYTY_CP_OP_PARSER(CpOpDrawIndexAuto) {
 	EXIT_NOT_IMPLEMENTED(cmd_id != 0xc0012d00);
 
 	uint32_t index_count = buffer[0];
-	uint32_t flags       = buffer[1];
-
-	EXIT_NOT_IMPLEMENTED((flags & ~0x22u) != 0);
 
 	cp.DrawIndexAuto({.vertex_count = index_count});
 
