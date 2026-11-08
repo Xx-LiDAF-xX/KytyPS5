@@ -794,7 +794,7 @@ void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* 
 	const auto  game_rect     = !Config::StretchEnabled() && aspect_source != nullptr
 	                               ? FitAspect(aspect_source->image.extent, m_extent)
 	                               : vk::Rect2D {{0, 0}, m_extent};
-	if (source == nullptr || game_rect.extent != m_extent) {
+	if (source == nullptr || convert_source || game_rect.extent != m_extent) {
 		const vk::ClearColorValue black {};
 		vk_command.clearColorImage(m_images[m_image_index], vk::ImageLayout::eTransferDstOptimal,
 		                           &black, 1, &to_transfer.subresourceRange);

@@ -552,8 +552,27 @@ RenderState RenderExecutor::AcquireRenderTargets(CommandBuffer& buffer, RenderCo
 	}
 	if (color_count == 0 && !depth.image_id) {
 		const auto& limits = buffer.GetGraphics().GetPhysicalDeviceProperties().limits;
-		state.width        = limits.maxFramebufferWidth;
-		state.height       = limits.maxFramebufferHeight;
+		const auto& ctx    = buffer.GetRegisters();
+		const auto& vp     = ctx.GetScreenViewport();
+		const auto  sc     = calc_final_scissor(vp, ctx.GetScanModeControl(),
+		                                        {limits.maxFramebufferWidth, limits.maxFramebufferHeight}, 0);
+		uint32_t width  = sc.right > sc.left ? static_cast<uint32_t>(sc.right) : 0u;
+		uint32_t height = sc.bottom > sc.top ? static_cast<uint32_t>(sc.bottom) : 0u;
+		const auto& vp0 = vp.viewports[0];
+		const float vp_w = vp0.xscale * 2.0f;
+		const float vp_h = vp0.yscale * 2.0f;
+		if (vp_w > 0.0f && vp_h > 0.0f && vp_w < 16384.0f && vp_h < 16384.0f) {
+			const uint32_t vp_width  = static_cast<uint32_t>(vp_w);
+			const uint32_t vp_height = static_cast<uint32_t>(vp_h);
+			width  = (width != 0) ? std::min(width, vp_width) : vp_width;
+			height = (height != 0) ? std::min(height, vp_height) : vp_height;
+		}
+		if (width == 0 || height == 0 || width > limits.maxFramebufferWidth || height > limits.maxFramebufferHeight) {
+			width  = (width != 0 && width <= limits.maxFramebufferWidth) ? width : 1920u;
+			height = (height != 0 && height <= limits.maxFramebufferHeight) ? height : 1080u;
+		}
+		state.width  = std::min(width, limits.maxFramebufferWidth);
+		state.height = std::min(height, limits.maxFramebufferHeight);
 	}
 	if (state.num_layers == std::numeric_limits<uint32_t>::max()) {
 		state.num_layers = 1;
@@ -963,6 +982,23 @@ static bool ResolvePrimitiveRestart(const CommandBuffer& buffer,
 	       a.stencil_opval_bf == b.stencil_opval_bf;
 }
 
+static bool PreRasterStagesHaveSideEffects(const DrawRenderState& state) {
+	for (const auto& stage: state.VertexStages()) {
+		if (stage.stage.module == nullptr) {
+			continue;
+		}
+		if (HasShaderBufferWrites(stage.stage)) {
+			return true;
+		}
+		for (const auto& image: stage.stage.module->info.info.images) {
+			if (image.resource_class == ShaderRecompiler::IR::ImageResourceClass::Storage) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 bool RenderExecutor::PrepareDrawRenderState(CommandBuffer& buffer, const DrawCallInfo& draw,
                                             DrawRenderState& state) {
 	m_context.GetImageHeap().BeginDraw();
@@ -1031,7 +1067,8 @@ bool RenderExecutor::PrepareDrawRenderState(CommandBuffer& buffer, const DrawCal
 				if (state.depth_info.image_id) {
 					BindRenderTarget(state.depth_info.image_id);
 				}
-				if (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {
+				if (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active &&
+				    !PreRasterStagesHaveSideEffects(state)) {
 					LogFramebufferSkip(draw.Name(), state.color_info[0], state.depth_info, buffer,
 					                   draw.index_count, 0);
 					return false;
@@ -1074,7 +1111,8 @@ bool RenderExecutor::PrepareDrawRenderState(CommandBuffer& buffer, const DrawCal
 		}
 	}
 
-	if (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {
+	if (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active &&
+	    !PreRasterStagesHaveSideEffects(state)) {
 		LogFramebufferSkip(draw.Name(), state.color_info[0], state.depth_info, buffer,
 		                   draw.index_count, 0);
 		return false;
@@ -1483,11 +1521,19 @@ void RenderExecutor::ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallIn
 
 	vk::PipelineStageFlags shader_write_stages = {};
 	for (const auto& stage: vertex_stages) {
-		if (HasShaderBufferWrites(stage.stage)) {
+		if (HasShaderBufferWrites(stage.stage) ||
+		    (stage.stage.module != nullptr &&
+		     std::ranges::any_of(stage.stage.module->info.info.images, [](const auto& img) {
+		         return img.resource_class == ShaderRecompiler::IR::ImageResourceClass::Storage;
+		     }))) {
 			shader_write_stages |= ShaderPipelineStages(NativeShaderStage(stage.logical_stage));
 		}
 	}
-	if (state.ps_active && HasShaderBufferWrites(state.ps_input_info.stage)) {
+	if (state.ps_active && (HasShaderBufferWrites(state.ps_input_info.stage) ||
+	    (state.ps_input_info.stage.module != nullptr &&
+	     std::ranges::any_of(state.ps_input_info.stage.module->info.info.images, [](const auto& img) {
+	         return img.resource_class == ShaderRecompiler::IR::ImageResourceClass::Storage;
+	     })))) {
 		shader_write_stages |= vk::PipelineStageFlagBits::eFragmentShader;
 	}
 
