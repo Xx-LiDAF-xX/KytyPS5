@@ -43,11 +43,24 @@ int32_t OcclusionQueries::BeginQuery(vk::CommandBuffer command) {
 }
 
 void OcclusionQueries::Dump(uint64_t address) {
+	if (address == 0) {
+		return;
+	}
 	// Begins dump to the results, ends 8 bytes into them.
-	if ((address & 8u) == 0) {
+	// Optimistically initialize query counters so guest occlusion culling (e.g. UE4 SceneVisibility)
+	// treats pending bounding boxes as visible rather than falsely culling geometry into voids
+	// before the host GPU finishes executing the query pool.
+	const bool begin = (address & 8u) == 0;
+	if (begin) {
 		m_open++;
-	} else if (m_open != 0) {
-		m_open--;
+		WriteZPassCounters(reinterpret_cast<volatile uint64_t*>(address),
+		                   m_samples + m_uncounted, true);
+	} else {
+		if (m_open != 0) {
+			m_open--;
+		}
+		WriteZPassCounters(reinterpret_cast<volatile uint64_t*>(address),
+		                   m_samples + m_uncounted + 1, false);
 	}
 	if (m_begun - m_read >= QUERY_COUNT - 512) {
 		Publish(true);
@@ -68,11 +81,15 @@ void OcclusionQueries::PublishDumps(bool wait) {
 		}
 	} else {
 		for (size_t i = 0; i < m_dumps.size(); ++i) {
-			if (m_dumps[i].queries == m_read || m_scheduler.IsFree(m_dumps[i].tick)) {
+			if (m_scheduler.IsFree(m_dumps[i].tick)) {
 				ready_count = i + 1;
 			} else {
 				break;
 			}
+		}
+		// Do not retire an unclosed Begin dump that would wipe end to 0 while its End is pending.
+		while (ready_count > 0 && (m_dumps[ready_count - 1].address & 8u) == 0) {
+			--ready_count;
 		}
 		if (ready_count == 0) {
 			return;

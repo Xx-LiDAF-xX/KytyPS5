@@ -826,7 +826,7 @@ void CommandProcessor::SetPredication(uint32_t condition, uint32_t op, uint32_t 
 			return;
 		case 0x01: {
 			EXIT_NOT_IMPLEMENTED(address == nullptr);
-			m_renderer.GetOcclusionQueries().Publish(true);
+			m_renderer.GetOcclusionQueries().Publish(false);
 			// One begin/end pair per DB; bit 63 marks each counter ready.
 			constexpr uint64_t ready_bit = 1ull << 63u;
 			const auto* results = reinterpret_cast<const volatile uint64_t*>(address);
@@ -1061,8 +1061,8 @@ void CommandProcessor::ReleaseMem(uint32_t data_sel, uint32_t interrupt_selector
 		return;
 	}
 
-	// Dumped occlusion counters are written before any end-of-pipe signal reaches the guest.
-	m_renderer.GetOcclusionQueries().Publish(true);
+	// Harvest completed occlusion counters without stalling the CPU on intermediate releases.
+	m_renderer.GetOcclusionQueries().Publish(false);
 
 	// A label beside GPU-written bytes goes to the backing store, so they are not downloaded.
 	// Other labels go through the guest mapping: its fault keeps a clean cached copy current and
