@@ -2252,6 +2252,10 @@ int KYTY_SYSV_ABI KernelAllocateMainDirectMemory(size_t len, size_t alignment, i
 	                                  alignment, memory_type, phys_addr_out);
 }
 
+// Releases direct memory ranges, tears down any active virtual mapping aliases and GPU ranges,
+// and returns freed physical blocks to m_free where adjacent chunks are actively coalesced via
+// AddFreeRange. This preserves contiguous physical headroom when high-headroom titles (e.g. UE4)
+// allocate the bulk of the 12 GiB direct budget upfront.
 static int ReleaseDirectMemoryInternal(int64_t start, size_t len, bool skip_gaps) {
 	std::lock_guard<std::recursive_mutex> memory_operation_lock(g_memory_operation_mutex);
 
