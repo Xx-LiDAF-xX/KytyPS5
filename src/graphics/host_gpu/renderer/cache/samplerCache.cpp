@@ -145,10 +145,10 @@ vk::Sampler SamplerCache::GetSampler(const ShaderSamplerResource& r, bool intege
 	// FILTER_MODE 0-2 equal VkSamplerReductionMode; 3 is undefined, compare samplers average.
 	vk::SamplerReductionModeCreateInfo reduction {};
 	if (m_graphics.sampler_filter_minmax_enabled && !sampler_info.compareEnable &&
-	    r.FilterMode() < 3) {
+	    r.FilterMode() > 0 && r.FilterMode() < 3) {
 		reduction.reductionMode = static_cast<vk::SamplerReductionMode>(r.FilterMode());
+		sampler_info.pNext = &reduction;
 	}
-	sampler_info.pNext = &reduction;
 
 	vk::Sampler vk_sampler = nullptr;
 	const auto  result     = m_graphics.device.createSampler(&sampler_info, nullptr, &vk_sampler);

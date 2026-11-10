@@ -1236,6 +1236,37 @@ void TestMixedSamplerVariantsShareRuntimeDescriptor() {
         "sampler variants retained stale or duplicated descriptors after refresh");
 }
 
+void TestDepthCompareSamplerSeparation() {
+  using namespace Libs::Graphics::ShaderRecompiler::IR;
+  auto program = MixedSamplerProgram();
+  program.info.images[1].depth_compare = true;
+  program.descriptor_sources[1].dwords[1] = Value(static_cast<uint32_t>(
+      Libs::Graphics::Prospero::BufferFormat::k32Float) << 20u);
+
+  auto plan = Extract(program);
+  std::array<uint32_t, 2> user_data{0x11111111u, 0x22222222u};
+  const SrtRuntime runtime{.user_data = user_data};
+  ResourceSnapshot snapshot;
+  ResourceSpecialization specialization;
+  Check(MaterializeResources(plan, runtime, snapshot, specialization),
+        "depth compare sampler materialization failed");
+  ApplyResourceSpecialization(program, specialization);
+  const auto &samplers = program.info.samplers;
+  Check(snapshot.samplers.size() == 2 && samplers.size() == 3 &&
+            samplers[0].snapshot_index == 0 && samplers[1].snapshot_index == 1 &&
+            samplers[2].snapshot_index == 1 &&
+            !samplers[0].depth_compare &&
+            !samplers[1].depth_compare &&
+            samplers[2].depth_compare &&
+            !samplers[1].force_point_filtering &&
+            !samplers[2].force_point_filtering &&
+            !samplers[1].integer_border &&
+            !samplers[2].integer_border &&
+            program.info.sampled_pairs[1].sampler == 1 &&
+            program.info.sampled_pairs[2].sampler == 2,
+        "sampler variants leaked depth_compare or failed to separate");
+}
+
 void TestSignedStorageSpecialization() {
   using namespace Libs::Graphics::ShaderRecompiler::IR;
   using F = Libs::Graphics::Prospero::BufferFormat;
@@ -1515,6 +1546,7 @@ int main() {
   TestBackEdgeReachesPhiPredecessor();
   TestEmptyScalarBufferSpecialization();
   TestMixedSamplerVariantsShareRuntimeDescriptor();
+  TestDepthCompareSamplerSeparation();
   TestSignedStorageSpecialization();
   for (const bool atomic64 : {false, true}) TestUnreachedImageIgnoresSharedDescriptor(atomic64);
   for (const bool mixed : {false, true}) TestIndirectImageSamplerClasses(mixed);
