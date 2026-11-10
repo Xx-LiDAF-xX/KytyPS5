@@ -121,6 +121,8 @@ uint32_t GatherMip(ValueEmitContext& ctx, const IR::Inst& inst, const IR::Memory
 	// T# minimum LOD is in physical mip space and applies after the S# view-relative clamp.
 	lod = EmitGlsl<GLSLstd450FMax, IR::Type::F32>(state, lod, minimum);
 	lod = EmitGlsl<GLSLstd450FClamp, IR::Type::F32>(state, lod, zero, last);
+	lod = Select(state, TypeF32(state), Unary(state, spv::OpIsNan, TypeBool(state), lod),
+	             zero, lod);
 	lod = Binary(state, spv::OpFAdd, TypeF32(state), lod,
 	             Select(state, TypeF32(state), preclamp, zero, rounding));
 	// The clamped value is nonnegative, so conversion performs the integer mip rounding.
@@ -1082,7 +1084,7 @@ void EmitImage(ValueEmitContext& ctx, const IR::Inst& inst) {
 			}
 			// SPIR-V takes MinLod only with implicit LOD or Grad.
 			if (min_lod != 0) {
-				lod     = EmitGlsl<GLSLstd450FMax, IR::Type::F32>(state, lod, min_lod);
+				lod     = EmitMinMaxF32Value(state, lod, min_lod, true);
 				min_lod = 0;
 			}
 			operands[0] = spv::ImageOperandsLodMask;

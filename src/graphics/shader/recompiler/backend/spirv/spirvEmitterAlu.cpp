@@ -204,9 +204,12 @@ uint32_t EmitPackFloat2x16Rtz(EmitterState& state, uint32_t arg0, uint32_t arg1)
 }
 
 uint32_t EmitFPSaturate32(EmitterState& state, uint32_t arg0) {
-	// The clamp modifier runs in DX10 clamp mode: NaN becomes 0, as NClamp's NMax step does.
-	return EmitExt(state, TypeF32(state), GLSLstd450NClamp,
-	               {arg0, ConstantF32(state, 0), ConstantF32(state, 0x3f800000u)});
+	// AMD GCN/RDNA clamp modifier runs in DX10 clamp mode: NaN becomes 0.0f.
+	// On host GPUs (e.g. NVIDIA/Intel), GLSLstd450NClamp propagates NaN instead of clamping to 0.
+	const auto clamped = EmitExt(state, TypeF32(state), GLSLstd450NClamp,
+	                             {arg0, ConstantF32(state, 0), ConstantF32(state, 0x3f800000u)});
+	return Select(state, TypeF32(state), Unary(state, spv::OpIsNan, TypeBool(state), arg0),
+	              ConstantF32(state, 0), clamped);
 }
 
 uint32_t EmitSMulHi(EmitterState& state, uint32_t arg0, uint32_t arg1) {

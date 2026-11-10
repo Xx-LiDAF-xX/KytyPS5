@@ -559,8 +559,8 @@ RenderState RenderExecutor::AcquireRenderTargets(CommandBuffer& buffer, RenderCo
 		uint32_t width  = sc.right > sc.left ? static_cast<uint32_t>(sc.right) : 0u;
 		uint32_t height = sc.bottom > sc.top ? static_cast<uint32_t>(sc.bottom) : 0u;
 		const auto& vp0 = vp.viewports[0];
-		const float vp_w = vp0.xscale * 2.0f;
-		const float vp_h = vp0.yscale * 2.0f;
+		const float vp_w = std::abs(vp0.xscale) * 2.0f;
+		const float vp_h = std::abs(vp0.yscale) * 2.0f;
 		if (vp_w > 0.0f && vp_h > 0.0f && vp_w < 16384.0f && vp_h < 16384.0f) {
 			const uint32_t vp_width  = static_cast<uint32_t>(vp_w);
 			const uint32_t vp_height = static_cast<uint32_t>(vp_h);
