@@ -51,10 +51,12 @@ constexpr uint64_t SmallLinearReadbackTexels = 512 * 512;
 	                           : desc.view_info.format;
 	const bool  cmask    = metadata.kind == ImageMetadataKind::Cmask;
 	if (cmask ? code == 0 : code == 0x20) {
-		// Register clears belong to the color buffer; the texture pipe cannot decode them.
-		return desc.type == TextureCache::BindingType::RenderTarget &&
-		       metadata.clear_register_valid &&
-		       DecodePackedColorClear(format, metadata.clear_word, clear);
+		if (metadata.clear_register_valid &&
+		    DecodePackedColorClear(format, metadata.clear_word, clear)) {
+			return true;
+		}
+		clear = {};
+		return true;
 	}
 	if (cmask) {
 		return false;
@@ -1013,10 +1015,15 @@ void TextureCache::MaterializeColorClear(ImageId id, const ImageDesc& desc,
 	}
 	const auto  range = desc.info.metadata.range;
 	const auto& view  = desc.view_info;
+	ImageDesc   effective_desc = desc;
 	{
 		std::scoped_lock lock {m_lock};
-		auto& image         = m_slot_images[id];
-		image.info.metadata = desc.info.metadata;
+		auto& image = m_slot_images[id];
+		if (image.info.metadata.clear_register_valid && !desc.info.metadata.clear_register_valid) {
+			effective_desc.info.metadata.clear_register_valid = true;
+			effective_desc.info.metadata.clear_word           = image.info.metadata.clear_word;
+		}
+		image.info.metadata = effective_desc.info.metadata;
 		// Native color metadata must not retain a reused HTile clear flag.
 		m_surface_metas.erase(range.address);
 		if (range.size == 0 || view.level_count != 1) {
@@ -1061,7 +1068,7 @@ void TextureCache::MaterializeColorClear(ImageId id, const ImageDesc& desc,
 		uint32_t keys = 0;
 		for (uint32_t key = 0; key < clears.size(); key++) {
 			clears[key].aspectMask = vk::ImageAspectFlagBits::eColor;
-			if (DecodeColorClear(desc, static_cast<uint8_t>(key << 5u),
+			if (DecodeColorClear(effective_desc, static_cast<uint8_t>(key << 5u),
 			                     clears[key].clearValue.color)) {
 				keys |= 1u << key;
 			}
@@ -1136,7 +1143,7 @@ void TextureCache::MaterializeColorClear(ImageId id, const ImageDesc& desc,
 			EXIT("TextureCache: failed to read color metadata backing\n");
 		}
 		vk::ClearValue clear {};
-		if (!DecodeColorClear(desc, code, clear.color)) {
+		if (!DecodeColorClear(effective_desc, code, clear.color)) {
 			continue;
 		}
 		std::vector<uint8_t> bytes(mip.size);
