@@ -169,6 +169,7 @@ struct GraphicsPipelineState {
 	bool             rect_list           = false;
 	bool             mesh                = false;
 	bool             use_depth           = false;
+	bool             rect_list_cached    = false;
 
 	// VS/HS/DS plus a task stage and the two generated rectangle-list stages.
 	std::array<vk::PipelineShaderStageCreateInfo, 8> pre_raster_stages {};
@@ -209,7 +210,8 @@ struct GraphicsPipelineState {
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void BuildGraphicsPipelineState(GraphicContext& graphics, GraphicsPipelineState& state,
                                 const GraphicsPipelineKey&                 key,
-                                const std::array<const ShaderModule*, 4>& stages) {
+                                const std::array<const ShaderModule*, 4>& stages,
+                                PipelineLibraryCache*                      library_cache = nullptr) {
 	const auto& rendering     = key.rendering;
 	const auto& vertex_input  = key.vertex_input;
 	const auto& static_params = key.static_params;
@@ -227,9 +229,26 @@ void BuildGraphicsPipelineState(GraphicContext& graphics, GraphicsPipelineState&
 	if (state.rect_list) {
 		std::span<const RectListParameter> parameters;
 		if (pixel != nullptr) parameters = pixel->rect_parameters;
-		const auto shaders = BuildRectListShaders(parameters, vertex.info.param_export_mask);
-		state.tess_control_module = CompileSPV(shaders.control, graphics.device);
-		state.tess_eval_module    = CompileSPV(shaders.evaluation, graphics.device);
+		if (library_cache != nullptr) {
+			auto it = library_cache->rect_shaders.find(vertex.info.param_export_mask);
+			if (it != library_cache->rect_shaders.end()) {
+				state.tess_control_module = it->second.first;
+				state.tess_eval_module    = it->second.second;
+				state.rect_list_cached    = true;
+			} else {
+				const auto shaders = BuildRectListShaders(parameters, vertex.info.param_export_mask);
+				state.tess_control_module = CompileSPV(shaders.control, graphics.device);
+				state.tess_eval_module    = CompileSPV(shaders.evaluation, graphics.device);
+				library_cache->rect_shaders.emplace(
+				    vertex.info.param_export_mask,
+				    std::make_pair(state.tess_control_module, state.tess_eval_module));
+				state.rect_list_cached = true;
+			}
+		} else {
+			const auto shaders = BuildRectListShaders(parameters, vertex.info.param_export_mask);
+			state.tess_control_module = CompileSPV(shaders.control, graphics.device);
+			state.tess_eval_module    = CompileSPV(shaders.evaluation, graphics.device);
+		}
 	}
 
 	// The fragment stage travels separately: the library split needs the stages before it.
@@ -256,6 +275,14 @@ void BuildGraphicsPipelineState(GraphicContext& graphics, GraphicsPipelineState&
 	if (pixel != nullptr) {
 		state.fragment_stage = {
 		    .stage = vk::ShaderStageFlagBits::eFragment, .module = pixel->module, .pName = "main"};
+	} else if (library_cache != nullptr) {
+		if (library_cache->null_fragment_module == nullptr) {
+			library_cache->null_fragment_module = CompileSPV(kNullFragmentShaderSpirv, graphics.device);
+		}
+		state.null_fragment_module = nullptr;
+		state.fragment_stage       = {.stage  = vk::ShaderStageFlagBits::eFragment,
+		                              .module = library_cache->null_fragment_module,
+		                              .pName  = "main"};
 	} else {
 		state.null_fragment_module = CompileSPV(kNullFragmentShaderSpirv, graphics.device);
 		state.fragment_stage       = {.stage  = vk::ShaderStageFlagBits::eFragment,
@@ -404,11 +431,13 @@ void DestroyTemporaryModules(vk::Device device, GraphicsPipelineState& state) {
 	if (state.task_module != nullptr) {
 		device.destroyShaderModule(state.task_module, nullptr);
 	}
-	if (state.tess_control_module != nullptr) {
-		device.destroyShaderModule(state.tess_control_module, nullptr);
-	}
-	if (state.tess_eval_module != nullptr) {
-		device.destroyShaderModule(state.tess_eval_module, nullptr);
+	if (!state.rect_list_cached) {
+		if (state.tess_control_module != nullptr) {
+			device.destroyShaderModule(state.tess_control_module, nullptr);
+		}
+		if (state.tess_eval_module != nullptr) {
+			device.destroyShaderModule(state.tess_eval_module, nullptr);
+		}
 	}
 	state.null_fragment_module = nullptr;
 	state.task_module          = nullptr;
@@ -554,16 +583,111 @@ vk::Pipeline LinkPipeline(GraphicContext& graphics, vk::PipelineLayout layout,
 // False when the driver rejects the library path; the pipeline is left untouched then so the
 // single-create path can still run.
 bool CreatePipelineFromLibraries(GraphicContext& graphics, PipelineCache::Pipeline& pipeline,
-                                 GraphicsPipelineState& state, vk::PipelineCache driver_cache) {
+                                 GraphicsPipelineState& state, const GraphicsPipelineKey& key,
+                                 vk::PipelineCache driver_cache, PipelineLibraryCache* library_cache) {
 	GraphicsPipelineLibrarySet set;
 	BuildLibraryCreateInfos(state, pipeline.pipeline_layout, set);
 
-	if (graphics.device.createGraphicsPipelines(driver_cache, set.count, set.infos.data(), nullptr,
-	                                            set.handles.data()) != vk::Result::eSuccess) {
-		for (const auto handle: set.handles) {
-			if (handle != nullptr) graphics.device.destroyPipeline(handle, nullptr);
+	VertexInputLibraryKey    vi_key;
+	PreRasterLibraryKey      pr_key;
+	FragmentLibraryKey       fs_key;
+	FragmentOutputLibraryKey fo_key;
+	const bool               has_fragment = state.fragment_stage.module != nullptr;
+	const uint32_t           fo_idx       = has_fragment ? 3 : 2;
+
+	if (library_cache != nullptr) {
+		vi_key.vertex_input = key.vertex_input;
+		for (uint32_t i = 0; i < state.vertex_input.vertexAttributeDescriptionCount; i++) {
+			vi_key.attribute_formats[i] = state.input_attr[i].format;
 		}
-		return false;
+		vi_key.topology                 = key.static_params.topology;
+		vi_key.primitive_restart_enable = key.static_params.primitive_restart_enable;
+
+		pr_key.stage_ids            = {key.stage_ids[0], key.stage_ids[1], key.stage_ids[2]};
+		pr_key.patch_control_points = key.static_params.patch_control_points;
+		pr_key.samples              = key.static_params.samples;
+		pr_key.polygon_mode         = key.static_params.polygon_mode;
+		pr_key.negative_one_to_one  = key.static_params.negative_one_to_one;
+		pr_key.depth_clip_enable    = key.static_params.depth_clip_enable;
+		pr_key.rect_list            = state.rect_list;
+		pr_key.has_task_module      = state.task_module != nullptr;
+		pr_key.provoking_vtx_last   = key.static_params.provoking_vtx_last;
+
+		fs_key.stage_id                 = key.stage_ids[3];
+		fs_key.samples                  = key.static_params.samples;
+		fs_key.sample_shading_enable    = key.static_params.sample_shading_enable;
+		fs_key.alpha_to_coverage_enable = key.static_params.alpha_to_coverage_enable;
+
+		fo_key.rendering = key.rendering;
+		fo_key.samples   = key.static_params.samples;
+		std::memcpy(fo_key.color_mask, key.static_params.color_mask, sizeof(fo_key.color_mask));
+		std::memcpy(fo_key.color_srcblend, key.static_params.color_srcblend, sizeof(fo_key.color_srcblend));
+		std::memcpy(fo_key.color_comb_fcn, key.static_params.color_comb_fcn, sizeof(fo_key.color_comb_fcn));
+		std::memcpy(fo_key.color_destblend, key.static_params.color_destblend, sizeof(fo_key.color_destblend));
+		std::memcpy(fo_key.alpha_srcblend, key.static_params.alpha_srcblend, sizeof(fo_key.alpha_srcblend));
+		std::memcpy(fo_key.alpha_comb_fcn, key.static_params.alpha_comb_fcn, sizeof(fo_key.alpha_comb_fcn));
+		std::memcpy(fo_key.alpha_destblend, key.static_params.alpha_destblend, sizeof(fo_key.alpha_destblend));
+		std::memcpy(fo_key.separate_alpha_blend, key.static_params.separate_alpha_blend, sizeof(fo_key.separate_alpha_blend));
+		std::memcpy(fo_key.blend_enable, key.static_params.blend_enable, sizeof(fo_key.blend_enable));
+
+		auto vi_it = library_cache->vertex_input.find(vi_key);
+		if (vi_it != library_cache->vertex_input.end()) {
+			set.handles[0] = vi_it->second;
+		}
+		auto pr_it = library_cache->pre_raster.find(pr_key);
+		if (pr_it != library_cache->pre_raster.end()) {
+			set.handles[1] = pr_it->second;
+		}
+		if (has_fragment) {
+			auto fs_it = library_cache->fragment.find(fs_key);
+			if (fs_it != library_cache->fragment.end()) {
+				set.handles[2] = fs_it->second;
+			}
+		}
+		auto fo_it = library_cache->fragment_output.find(fo_key);
+		if (fo_it != library_cache->fragment_output.end()) {
+			set.handles[fo_idx] = fo_it->second;
+		}
+	}
+
+	std::array<vk::GraphicsPipelineCreateInfo, 4> missing_infos {};
+	std::array<uint32_t, 4>                       missing_indices {};
+	std::array<vk::Pipeline, 4>                   created_handles {};
+	uint32_t                                      missing_count = 0;
+
+	for (uint32_t i = 0; i < set.count; i++) {
+		if (set.handles[i] == nullptr) {
+			missing_infos[missing_count]   = set.infos[i];
+			missing_indices[missing_count] = i;
+			missing_count++;
+		}
+	}
+
+	if (missing_count > 0) {
+		if (graphics.device.createGraphicsPipelines(driver_cache, missing_count, missing_infos.data(),
+		                                            nullptr, created_handles.data()) != vk::Result::eSuccess) {
+			for (uint32_t i = 0; i < missing_count; i++) {
+				if (created_handles[i] != nullptr) {
+					graphics.device.destroyPipeline(created_handles[i], nullptr);
+				}
+			}
+			return false;
+		}
+		for (uint32_t i = 0; i < missing_count; i++) {
+			const auto idx   = missing_indices[i];
+			set.handles[idx] = created_handles[i];
+			if (library_cache != nullptr) {
+				if (idx == 0) {
+					library_cache->vertex_input.emplace(vi_key, created_handles[i]);
+				} else if (idx == 1) {
+					library_cache->pre_raster.emplace(pr_key, created_handles[i]);
+				} else if (idx == 2 && fo_idx == 3) {
+					library_cache->fragment.emplace(fs_key, created_handles[i]);
+				} else if (idx == fo_idx) {
+					library_cache->fragment_output.emplace(fo_key, created_handles[i]);
+				}
+			}
+		}
 	}
 
 	// Without fast linking there is nothing to gain from a first, unoptimized link.
@@ -571,8 +695,10 @@ bool CreatePipelineFromLibraries(GraphicContext& graphics, PipelineCache::Pipeli
 	const auto linked       = LinkPipeline(graphics, pipeline.pipeline_layout, set, !fast_linking,
 	                                       driver_cache);
 	if (linked == nullptr) {
-		for (const auto handle: set.handles) {
-			graphics.device.destroyPipeline(handle, nullptr);
+		if (library_cache == nullptr) {
+			for (const auto handle: set.handles) {
+				if (handle != nullptr) graphics.device.destroyPipeline(handle, nullptr);
+			}
 		}
 		return false;
 	}
@@ -602,15 +728,16 @@ vk::Pipeline LinkPipelineLibraries(GraphicContext& graphics, vk::PipelineLayout 
 bool CreatePipelineInternal(GraphicContext& graphics, PipelineCache::Pipeline& pipeline,
                             const GraphicsPipelineKey&                 key,
                             const std::array<const ShaderModule*, 4>& stages,
-                            vk::PipelineCache driver_cache, bool allow_pipeline_library) {
+                            vk::PipelineCache driver_cache, bool allow_pipeline_library,
+                            PipelineLibraryCache* library_cache) {
 	GraphicsPipelineState state;
-	BuildGraphicsPipelineState(graphics, state, key, stages);
+	BuildGraphicsPipelineState(graphics, state, key, stages, library_cache);
 	PreparePipelineLayout(graphics, pipeline, stages, state.task_module);
 
 	// Mesh pipelines have no vertex input library, so they stay on the single-create path.
 	const bool libraries =
 	    allow_pipeline_library && !state.mesh &&
-	    CreatePipelineFromLibraries(graphics, pipeline, state, driver_cache);
+	    CreatePipelineFromLibraries(graphics, pipeline, state, key, driver_cache, library_cache);
 	if (!libraries) {
 		CreatePipelineFromState(graphics, pipeline, state, driver_cache);
 	}

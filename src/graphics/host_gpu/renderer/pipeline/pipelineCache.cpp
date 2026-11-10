@@ -270,6 +270,22 @@ std::size_t PipelineCache::GraphicsPipelineKeyHash::operator()(const GraphicsPip
 	return XXH3_64bits(&key, sizeof(key));
 }
 
+std::size_t PreRasterLibraryKeyHash::operator()(const PreRasterLibraryKey& key) const {
+	return XXH3_64bits(&key, sizeof(key));
+}
+
+std::size_t FragmentLibraryKeyHash::operator()(const FragmentLibraryKey& key) const {
+	return XXH3_64bits(&key, sizeof(key));
+}
+
+std::size_t VertexInputLibraryKeyHash::operator()(const VertexInputLibraryKey& key) const {
+	return XXH3_64bits(&key, sizeof(key));
+}
+
+std::size_t FragmentOutputLibraryKeyHash::operator()(const FragmentOutputLibraryKey& key) const {
+	return XXH3_64bits(&key, sizeof(key));
+}
+
 std::span<const uint32_t> PipelineCache::Program::FunctionCode() const {
 	return call_source
 	    ? std::span<const uint32_t>(call_source->linked->code).subspan(call_source->code.size())
@@ -336,14 +352,14 @@ ShaderModule& PipelineCache::CompileModule(Program& program, const ProgramKey& k
 	});
 	m_compiled[static_cast<size_t>(key.stage)]++;
 	// Guest geometry shaders are compiled through the host mesh stage.
-	std::printf("Shaders: VS %u | PS %u | CS %u | GS %u | LS %u | HS %u | TES %u\n",
-	            m_compiled[static_cast<size_t>(ShaderType::Vertex)],
-	            m_compiled[static_cast<size_t>(ShaderType::Pixel)],
-	            m_compiled[static_cast<size_t>(ShaderType::Compute)],
-	            m_compiled[static_cast<size_t>(ShaderType::Mesh)],
-	            m_compiled[static_cast<size_t>(ShaderType::Local)],
-	            m_compiled[static_cast<size_t>(ShaderType::TessellationControl)],
-	            m_compiled[static_cast<size_t>(ShaderType::TessellationEvaluation)]);
+	LOGF("Shaders: VS %u | PS %u | CS %u | GS %u | LS %u | HS %u | TES %u\n",
+	     m_compiled[static_cast<size_t>(ShaderType::Vertex)],
+	     m_compiled[static_cast<size_t>(ShaderType::Pixel)],
+	     m_compiled[static_cast<size_t>(ShaderType::Compute)],
+	     m_compiled[static_cast<size_t>(ShaderType::Mesh)],
+	     m_compiled[static_cast<size_t>(ShaderType::Local)],
+	     m_compiled[static_cast<size_t>(ShaderType::TessellationControl)],
+	     m_compiled[static_cast<size_t>(ShaderType::TessellationEvaluation)]);
 	// The inputs of these come from the stage's static key.
 	if (key.stage == ShaderType::Vertex || key.stage == ShaderType::Local) {
 		module.vertex_formats = VertexInputFormats(*options.input_info.vertex, module.info);
@@ -509,18 +525,47 @@ PipelineCache::~PipelineCache() {
 	}
 	m_link_results.clear();
 	DestroyRetiredPipelines(true);
-	auto destroy = [this](const auto& pipelines) {
+	auto destroy = [this](const auto& pipelines, bool is_graphics) {
 		for (const auto& pipeline: pipelines | std::views::values) {
 			m_graphics.device.destroyPipeline(pipeline.pipeline, nullptr);
-			for (uint32_t i = 0; i < pipeline.library_count; i++) {
-				m_graphics.device.destroyPipeline(pipeline.libraries[i], nullptr);
+			if (!is_graphics) {
+				for (uint32_t i = 0; i < pipeline.library_count; i++) {
+					m_graphics.device.destroyPipeline(pipeline.libraries[i], nullptr);
+				}
 			}
 			m_graphics.device.destroyPipelineLayout(pipeline.pipeline_layout, nullptr);
 			m_graphics.device.destroyDescriptorSetLayout(pipeline.descriptor_set_layout, nullptr);
 		}
 	};
-	destroy(m_graphics_pipelines);
-	destroy(m_compute_pipelines);
+	destroy(m_graphics_pipelines, true);
+	destroy(m_compute_pipelines, false);
+
+	for (const auto& [k, handle]: m_pre_raster_libraries) {
+		if (handle) m_graphics.device.destroyPipeline(handle, nullptr);
+	}
+	m_pre_raster_libraries.clear();
+	for (const auto& [k, handle]: m_fragment_libraries) {
+		if (handle) m_graphics.device.destroyPipeline(handle, nullptr);
+	}
+	m_fragment_libraries.clear();
+	for (const auto& [k, handle]: m_vertex_input_libraries) {
+		if (handle) m_graphics.device.destroyPipeline(handle, nullptr);
+	}
+	m_vertex_input_libraries.clear();
+	for (const auto& [k, handle]: m_fragment_output_libraries) {
+		if (handle) m_graphics.device.destroyPipeline(handle, nullptr);
+	}
+	m_fragment_output_libraries.clear();
+
+	if (m_null_fragment_module) {
+		m_graphics.device.destroyShaderModule(m_null_fragment_module, nullptr);
+		m_null_fragment_module = nullptr;
+	}
+	for (const auto& [mask, mods]: m_rect_shaders) {
+		if (mods.first) m_graphics.device.destroyShaderModule(mods.first, nullptr);
+		if (mods.second) m_graphics.device.destroyShaderModule(mods.second, nullptr);
+	}
+	m_rect_shaders.clear();
 	for (const auto& program: m_program_cache | std::views::values) {
 		for (const auto& module: program.modules) {
 			m_graphics.device.destroyShaderModule(module.module, nullptr);
@@ -1236,8 +1281,9 @@ PipelineCache::Pipeline& PipelineCache::GetGraphicsPipeline(const CommandBuffer&
 		Common::DebugCounters::ScopedTimer timer(Common::DebugCounters::Counter::PipelinesCreated,
 		                                         Common::DebugCounters::Counter::PipelineCreateNs,
 		                                         Common::DebugCounters::Peak::PipelineCreateNs);
+		auto lib_cache = GetLibraryCache();
 		CreatePipelineInternal(m_graphics, pipeline, key, stages, m_driver_cache,
-		                       GraphicsPipelineLibraryEnabled());
+		                       GraphicsPipelineLibraryEnabled(), &lib_cache);
 	}
 	StorePipeline(key);
 	CheckpointDriverCache();

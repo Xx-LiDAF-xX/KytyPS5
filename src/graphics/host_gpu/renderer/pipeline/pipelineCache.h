@@ -111,10 +111,98 @@ struct alignas(4) GraphicsPipelineKey {
 	bool operator==(const GraphicsPipelineKey& other) const;
 };
 
+struct PreRasterLibraryKey {
+	std::array<uint64_t, 3> stage_ids {};
+	uint32_t                patch_control_points = 0;
+	uint32_t                samples              = 1;
+	vk::PolygonMode         polygon_mode         = vk::PolygonMode::eFill;
+	bool                    negative_one_to_one  = false;
+	bool                    depth_clip_enable    = false;
+	bool                    rect_list            = false;
+	bool                    has_task_module      = false;
+	bool                    provoking_vtx_last   = false;
+	uint8_t                 pad[3]               = {};
+
+	bool operator==(const PreRasterLibraryKey& other) const {
+		return std::memcmp(this, &other, sizeof(*this)) == 0;
+	}
+};
+
+struct FragmentLibraryKey {
+	uint64_t stage_id                 = 0;
+	uint32_t samples                  = 1;
+	bool     sample_shading_enable    = false;
+	bool     alpha_to_coverage_enable = false;
+	uint8_t  pad[2]                   = {};
+
+	bool operator==(const FragmentLibraryKey& other) const {
+		return std::memcmp(this, &other, sizeof(*this)) == 0;
+	}
+};
+
+struct VertexInputLibraryKey {
+	PipelineVertexInputState                                vertex_input {};
+	std::array<vk::Format, ShaderVertexInputInfo::RES_MAX>  attribute_formats {};
+	vk::PrimitiveTopology                                   topology                 = vk::PrimitiveTopology::ePointList;
+	bool                                                    primitive_restart_enable = false;
+	uint8_t                                                 pad[3]                   = {};
+
+	bool operator==(const VertexInputLibraryKey& other) const {
+		return std::memcmp(this, &other, sizeof(*this)) == 0;
+	}
+};
+
+struct FragmentOutputLibraryKey {
+	PipelineRenderingState   rendering {};
+	uint32_t                 samples = 1;
+	uint32_t                 color_mask[RENDER_COLOR_ATTACHMENTS_MAX]           = {};
+	uint8_t                  color_srcblend[RENDER_COLOR_ATTACHMENTS_MAX]       = {};
+	uint8_t                  color_comb_fcn[RENDER_COLOR_ATTACHMENTS_MAX]       = {};
+	uint8_t                  color_destblend[RENDER_COLOR_ATTACHMENTS_MAX]      = {};
+	uint8_t                  alpha_srcblend[RENDER_COLOR_ATTACHMENTS_MAX]       = {};
+	uint8_t                  alpha_comb_fcn[RENDER_COLOR_ATTACHMENTS_MAX]       = {};
+	uint8_t                  alpha_destblend[RENDER_COLOR_ATTACHMENTS_MAX]      = {};
+	bool                     separate_alpha_blend[RENDER_COLOR_ATTACHMENTS_MAX] = {};
+	bool                     blend_enable[RENDER_COLOR_ATTACHMENTS_MAX]         = {};
+
+	bool operator==(const FragmentOutputLibraryKey& other) const {
+		return std::memcmp(this, &other, sizeof(*this)) == 0;
+	}
+};
+
 #pragma pack(pop)
 
 // Keys are compared and hashed as bytes.
 static_assert(std::has_unique_object_representations_v<GraphicsPipelineKey>);
+static_assert(std::has_unique_object_representations_v<PreRasterLibraryKey>);
+static_assert(std::has_unique_object_representations_v<FragmentLibraryKey>);
+static_assert(std::has_unique_object_representations_v<VertexInputLibraryKey>);
+static_assert(std::has_unique_object_representations_v<FragmentOutputLibraryKey>);
+
+struct PreRasterLibraryKeyHash {
+	std::size_t operator()(const PreRasterLibraryKey& key) const;
+};
+
+struct FragmentLibraryKeyHash {
+	std::size_t operator()(const FragmentLibraryKey& key) const;
+};
+
+struct VertexInputLibraryKeyHash {
+	std::size_t operator()(const VertexInputLibraryKey& key) const;
+};
+
+struct FragmentOutputLibraryKeyHash {
+	std::size_t operator()(const FragmentOutputLibraryKey& key) const;
+};
+
+struct PipelineLibraryCache {
+	std::unordered_map<PreRasterLibraryKey, vk::Pipeline, PreRasterLibraryKeyHash>& pre_raster;
+	std::unordered_map<FragmentLibraryKey, vk::Pipeline, FragmentLibraryKeyHash>&   fragment;
+	std::unordered_map<VertexInputLibraryKey, vk::Pipeline, VertexInputLibraryKeyHash>& vertex_input;
+	std::unordered_map<FragmentOutputLibraryKey, vk::Pipeline, FragmentOutputLibraryKeyHash>& fragment_output;
+	vk::ShaderModule& null_fragment_module;
+	std::unordered_map<uint32_t, std::pair<vk::ShaderModule, vk::ShaderModule>>& rect_shaders;
+};
 
 // A compiled stage with what pipeline creation needs from it besides the key.
 struct ShaderModule {
@@ -288,6 +376,23 @@ private:
 	std::chrono::steady_clock::time_point m_next_driver_cache_save;
 	bool                          m_driver_cache_dirty = false;
 	std::unordered_map<GraphicsPipelineKey, Pipeline, GraphicsPipelineKeyHash> m_graphics_pipelines;
+	std::unordered_map<PreRasterLibraryKey, vk::Pipeline, PreRasterLibraryKeyHash> m_pre_raster_libraries;
+	std::unordered_map<FragmentLibraryKey, vk::Pipeline, FragmentLibraryKeyHash> m_fragment_libraries;
+	std::unordered_map<VertexInputLibraryKey, vk::Pipeline, VertexInputLibraryKeyHash> m_vertex_input_libraries;
+	std::unordered_map<FragmentOutputLibraryKey, vk::Pipeline, FragmentOutputLibraryKeyHash> m_fragment_output_libraries;
+	vk::ShaderModule m_null_fragment_module = nullptr;
+	std::unordered_map<uint32_t, std::pair<vk::ShaderModule, vk::ShaderModule>> m_rect_shaders;
+
+	PipelineLibraryCache GetLibraryCache() {
+		return {
+			.pre_raster = m_pre_raster_libraries,
+			.fragment = m_fragment_libraries,
+			.vertex_input = m_vertex_input_libraries,
+			.fragment_output = m_fragment_output_libraries,
+			.null_fragment_module = m_null_fragment_module,
+			.rect_shaders = m_rect_shaders,
+		};
+	}
 	Pipeline*                                                                  m_last_graphics_pipeline = nullptr;
 	GraphicsPipelineKey                                                        m_last_graphics_pipeline_key {};
 	uint64_t                                                                   m_last_retired_poll_tick = UINT64_MAX;
@@ -357,7 +462,8 @@ bool CreatePipelineInternal(GraphicContext& graphics, PipelineCache::Pipeline& p
                             const GraphicsPipelineKey&                 key,
                             const std::array<const ShaderModule*, 4>& stages,
                             vk::PipelineCache                          driver_cache,
-                            bool                                       allow_pipeline_library);
+                            bool                                       allow_pipeline_library,
+                            PipelineLibraryCache*                      library_cache = nullptr);
 void CreatePipelineInternal(GraphicContext& graphics, PipelineCache::Pipeline& pipeline,
                             const ShaderModule& module, vk::PipelineCache driver_cache);
 // Links retained pipeline libraries into one pipeline. Returns null when the driver rejects the
