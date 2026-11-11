@@ -1183,9 +1183,308 @@ static void CommitIndexBuffer(vk::CommandBuffer vk_buffer, const PreparedIndexBu
 	vk_buffer.bindIndexBuffer(prepared.buffer, prepared.offset, prepared.type);
 }
 
+// Diagnostic: dumps each distinct vertex-input layout and samples the position attribute.
+// Enabled with KYTY_VERTEX_PROBE=1; independent of --graphics-debug-dump so that DrawAuto
+// is covered and the shader store stays enabled.
+static bool VertexProbeEnabled() {
+	static const bool enabled = std::getenv("KYTY_VERTEX_PROBE") != nullptr;
+	return enabled;
+}
+
+static const char* VertexProbeStageName(ShaderType stage) {
+	switch (stage) {
+		case ShaderType::Vertex: return "vs";
+		case ShaderType::Mesh: return "mesh";
+		case ShaderType::TessellationControl: return "hs";
+		case ShaderType::TessellationEvaluation: return "ds";
+		case ShaderType::Local: return "ls";
+		case ShaderType::Pixel: return "ps";
+		case ShaderType::Compute: return "cs";
+		default: return "?";
+	}
+}
+
+static float HalfToFloat(uint16_t value) {
+	const uint32_t sign     = static_cast<uint32_t>(value & 0x8000u) << 16u;
+	const uint32_t exponent = (value >> 10u) & 0x1Fu;
+	uint32_t       mantissa = value & 0x3FFu;
+	uint32_t       bits     = sign;
+	if (exponent == 0x1Fu) {
+		bits |= 0x7F800000u | (mantissa << 13u);
+	} else if (exponent == 0) {
+		if (mantissa != 0) {
+			uint32_t biased = 113u;
+			while ((mantissa & 0x400u) == 0) {
+				mantissa <<= 1u;
+				biased--;
+			}
+			bits |= (biased << 23u) | ((mantissa & 0x3FFu) << 13u);
+		}
+	} else {
+		bits |= ((exponent + 112u) << 23u) | (mantissa << 13u);
+	}
+	float result = 0.0f;
+	std::memcpy(&result, &bits, sizeof(result));
+	return result;
+}
+
+// R11G11B10_UFLOAT / R10G11B11_UFLOAT: unsigned, 5-bit exponent, 5- or 6-bit mantissa.
+static float DecodeUnsignedFloat(uint32_t field, uint32_t bits) {
+	const uint32_t mantissa_bits = bits - 5u;
+	const uint32_t mantissa_mask = (1u << mantissa_bits) - 1u;
+	const uint32_t mantissa      = field & mantissa_mask;
+	const uint32_t exponent      = field >> mantissa_bits;
+	if (exponent == 0x1Fu) {
+		return mantissa == 0 ? std::numeric_limits<float>::infinity()
+		                     : std::numeric_limits<float>::quiet_NaN();
+	}
+	if (exponent == 0) {
+		return std::ldexp(static_cast<float>(mantissa), -14 - static_cast<int>(mantissa_bits));
+	}
+	return std::ldexp(1.0f + static_cast<float>(mantissa) / static_cast<float>(1u << mantissa_bits),
+	                  static_cast<int>(exponent) - 15);
+}
+
+struct VertexComponent {
+	double value = 0.0;
+	bool   valid = false;
+};
+
+static VertexComponent DecodeVertexComponent(
+    const uint8_t* record, const ShaderRecompiler::Format::BufferFormatInfo& info,
+    uint32_t component) {
+	VertexComponent result;
+	if (record == nullptr || component >= info.component_count) {
+		return result;
+	}
+	const uint32_t bits       = info.component_bits[component];
+	const uint32_t bit_offset = info.component_bit_offset[component];
+	if (bits == 0 || bits > 32) {
+		return result;
+	}
+	uint64_t raw = 0;
+	if (info.packed_bitfield) {
+		uint32_t word = 0;
+		std::memcpy(&word, record, sizeof(word));
+		raw = (word >> bit_offset) & ((uint64_t {1} << bits) - 1u);
+	} else {
+		if ((bits != 8 && bits != 16 && bits != 32) || bit_offset % 8u != 0) {
+			return result;
+		}
+		const uint32_t byte_offset = bit_offset / 8u;
+		if (byte_offset + bits / 8u > info.byte_size) {
+			return result;
+		}
+		std::memcpy(&raw, record + byte_offset, bits / 8u);
+	}
+	const int64_t signed_raw = (raw & (uint64_t {1} << (bits - 1u))) != 0
+	                               ? static_cast<int64_t>(raw) - (int64_t {1} << bits)
+	                               : static_cast<int64_t>(raw);
+	switch (info.type) {
+		case ShaderRecompiler::Format::ComponentType::Float:
+			if (info.packed_bitfield) {
+				if (info.format != Prospero::BufferFormat::k11_11_10Float &&
+				    info.format != Prospero::BufferFormat::k10_11_11Float) {
+					return result;
+				}
+				result.value = DecodeUnsignedFloat(static_cast<uint32_t>(raw), bits);
+			} else if (bits == 16) {
+				result.value = HalfToFloat(static_cast<uint16_t>(raw));
+			} else if (bits == 32) {
+				const auto word = static_cast<uint32_t>(raw);
+				float      value = 0.0f;
+				std::memcpy(&value, &word, sizeof(value));
+				result.value = value;
+			} else {
+				return result;
+			}
+			break;
+		case ShaderRecompiler::Format::ComponentType::Uint:
+		case ShaderRecompiler::Format::ComponentType::Uscaled:
+			result.value = static_cast<double>(raw);
+			break;
+		case ShaderRecompiler::Format::ComponentType::Sint:
+		case ShaderRecompiler::Format::ComponentType::Sscaled:
+			result.value = static_cast<double>(signed_raw);
+			break;
+		case ShaderRecompiler::Format::ComponentType::Unorm:
+			if (bits > 16) {
+				return result;
+			}
+			result.value =
+			    static_cast<double>(raw) / static_cast<double>((uint32_t {1} << bits) - 1u);
+			break;
+		case ShaderRecompiler::Format::ComponentType::Snorm:
+			if (bits > 16) {
+				return result;
+			}
+			result.value =
+			    std::max(-1.0, static_cast<double>(signed_raw) /
+			                       static_cast<double>((int64_t {1} << (bits - 1u)) - 1));
+			break;
+		default: return result;
+	}
+	result.valid = true;
+	return result;
+}
+
+static void LogVertexProbeIfNeeded(const DrawCallInfo& draw, const DrawRenderState& state) {
+	if (!VertexProbeEnabled()) {
+		return;
+	}
+	const auto stages = state.VertexStages();
+	if (stages.empty() || !stages[0].stage || stages[0].stage.module == nullptr) {
+		return;
+	}
+	const auto& input  = stages[0];
+	const auto& module = *input.stage.module;
+
+	std::string signature;
+	char        entry[192] {};
+	std::snprintf(entry, sizeof(entry), "%016" PRIx64 "|%u|%d|%d|%zu|%u",
+	              module.info.shader_hash, static_cast<uint32_t>(state.topology),
+	              input.resources_num, input.buffers_num, stages.size(),
+	              input.tess.input_control_points);
+	signature += entry;
+	for (int i = 0; i < input.resources_num; i++) {
+		const auto& resource    = input.resources[i];
+		const auto& destination = input.resources_dst[i];
+		std::snprintf(entry, sizeof(entry), "|%u,%u,%d,%d,%d,%u", resource.RawFormat(),
+		              resource.Stride(), destination.register_start, destination.registers_num,
+		              destination.buffer_index, destination.fetch_index);
+		signature += entry;
+	}
+	for (int i = 0; i < input.buffers_num; i++) {
+		std::snprintf(entry, sizeof(entry), "|s%u", input.buffers[i].stride);
+		signature += entry;
+	}
+
+	static std::vector<std::string> logged;
+	if (std::find(logged.begin(), logged.end(), signature) != logged.end()) {
+		return;
+	}
+	if (logged.size() >= 64) {
+		return;
+	}
+	const auto probe_id = static_cast<uint32_t>(logged.size());
+	logged.push_back(signature);
+
+	const auto topology = vk::to_string(state.topology);
+	LOGF("VertexProbe[%u]: %s index_count=%u instances=%u hash=%016" PRIx64
+	     " module=%016" PRIx64 " stage=%s logical=%d stages=%zu topology=%s tess_cp=%u "
+	     "dynamic_fetch=%d attrs=%d buffers=%d\n",
+	     probe_id, draw.Name(), draw.index_count, draw.instance_count, module.info.shader_hash,
+	     module.id, VertexProbeStageName(module.info.stage),
+	     static_cast<int>(input.logical_stage), stages.size(), topology.c_str(),
+	     input.tess.input_control_points, input.has_dynamic_vertex_fetch ? 1 : 0,
+	     input.resources_num, input.buffers_num);
+
+	for (int i = 0; i < input.resources_num; i++) {
+		const auto& resource    = input.resources[i];
+		const auto& destination = input.resources_dst[i];
+		if (destination.buffer_index < 0 || destination.buffer_index >= input.buffers_num) {
+			continue;
+		}
+		const auto& buffer = input.buffers[destination.buffer_index];
+		const auto  info   = ShaderRecompiler::Format::GetFormatInfo(resource.Format());
+		const auto  offset = static_cast<uint32_t>(resource.Base48() - buffer.addr);
+		const auto  host   = i < static_cast<int>(module.vertex_formats.size())
+		                         ? vk::to_string(module.vertex_formats[i])
+		                         : std::string("?");
+		LOGF("VertexProbe[%u]:  attr[%d] v%d+%d fmt=%u type=%d comps=%u bits=%u/%u/%u/%u "
+		     "packed=%d bytes=%u host=%s stride=%u offset=%u recs=%u buf=%d bstride=%u "
+		     "baddr=0x%010" PRIx64 " fetch=%u\n",
+		     probe_id, i, destination.register_start, destination.registers_num,
+		     resource.RawFormat(), static_cast<int>(info.type), info.component_count,
+		     info.component_bits[0], info.component_bits[1], info.component_bits[2],
+		     info.component_bits[3], info.packed_bitfield ? 1 : 0, info.byte_size, host.c_str(),
+		     resource.Stride(), offset, resource.NumRecords(), destination.buffer_index,
+		     buffer.stride, buffer.addr,
+		     i < static_cast<int>(module.info.info.vertex_fetch_components.size())
+		         ? module.info.info.vertex_fetch_components[i]
+		         : 0u);
+		if (buffer.stride == 0) {
+			LOGF("VertexProbe[%u]:  WARN attr[%d] constant attribute: buffer stride is zero\n",
+			     probe_id, i);
+		} else if (offset >= buffer.stride) {
+			LOGF("VertexProbe[%u]:  WARN attr[%d] offset %u >= stride %u: reads the next record\n",
+			     probe_id, i, offset, buffer.stride);
+		} else if (info.byte_size != 0 && offset + info.byte_size > buffer.stride) {
+			LOGF("VertexProbe[%u]:  WARN attr[%d] offset %u + %u bytes crosses stride %u\n",
+			     probe_id, i, offset, info.byte_size, buffer.stride);
+		}
+		if (offset % 4u != 0) {
+			LOGF("VertexProbe[%u]:  WARN attr[%d] offset %u is not dword aligned\n", probe_id, i,
+			     offset);
+		}
+	}
+
+	int position_attribute = -1;
+	for (int i = 0; i < input.resources_num; i++) {
+		const auto& destination = input.resources_dst[i];
+		if (destination.register_start == 0) {
+			position_attribute = i;
+			break;
+		}
+		if (destination.register_start < 0 &&
+		    destination.register_start + destination.registers_num > 0) {
+			position_attribute = i;
+		}
+	}
+	if (position_attribute < 0) {
+		return;
+	}
+	const auto& resource    = input.resources[position_attribute];
+	const auto& destination = input.resources_dst[position_attribute];
+	if (destination.buffer_index < 0 || destination.buffer_index >= input.buffers_num) {
+		return;
+	}
+	const auto&  buffer  = input.buffers[destination.buffer_index];
+	const auto   info    = ShaderRecompiler::Format::GetFormatInfo(resource.Format());
+	const auto   offset  = static_cast<uint32_t>(resource.Base48() - buffer.addr);
+	const auto* records = reinterpret_cast<const uint8_t*>(buffer.addr);
+	if (records == nullptr || buffer.num_records == 0) {
+		return;
+	}
+	const auto sample_count = std::min<uint32_t>(buffer.num_records, 4u);
+	for (uint32_t record = 0; record < sample_count; record++) {
+		const auto* bytes = records + offset + static_cast<uint64_t>(record) * buffer.stride;
+		double      values[4] {};
+		bool        valid     = true;
+		bool        finite    = true;
+		bool        huge      = false;
+		for (uint32_t component = 0; component < 4; component++) {
+			const auto decoded = DecodeVertexComponent(bytes, info, component);
+			if (!decoded.valid) {
+				valid = false;
+				continue;
+			}
+			values[component] = decoded.value;
+			if (!std::isfinite(decoded.value)) {
+				finite = false;
+			}
+			if (std::abs(decoded.value) > 1.0e6) {
+				huge = true;
+			}
+		}
+		uint32_t raw[4] = {};
+		for (uint32_t i = 0; i < 4 && (i + 1u) * 4u <= info.byte_size; i++) {
+			std::memcpy(&raw[i], bytes + i * 4u, sizeof(raw[i]));
+		}
+		LOGF("VertexProbe[%u]:  pos attr=%d rec[%u] v=(%.4f, %.4f, %.4f, %.4f) w0=%d "
+		     "valid=%d nonfinite=%d huge=%d raw=%08" PRIx32 " %08" PRIx32 " %08" PRIx32
+		     " %08" PRIx32 "\n",
+		     probe_id, position_attribute, record, values[0], values[1], values[2], values[3],
+		     values[3] == 0.0 ? 1 : 0, valid ? 1 : 0, finite ? 0 : 1, huge ? 1 : 0, raw[0],
+		     raw[1], raw[2], raw[3]);
+	}
+}
+
 static void LogDrawStateIfNeeded(const CommandBuffer& buffer, const DrawCallInfo& draw,
 	                             const DrawRenderState& state, uint32_t index_type_and_size,
                                  const void* index_addr) {
+	LogVertexProbeIfNeeded(draw, state);
+
 	if (!graphics_debug_dump_enabled()) {
 		return;
 	}

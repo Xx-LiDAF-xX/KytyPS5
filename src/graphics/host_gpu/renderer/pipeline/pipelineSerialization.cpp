@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <fmt/format.h>
 #include <ranges>
@@ -67,9 +68,11 @@ std::vector<uint8_t> StoreHeader(const GraphicContext& graphics) {
 	if (stamp == 0) {
 		return {};
 	}
+	// The vertex clamp rewrites the emitted SPIR-V, so its state must split the store.
+	bool vertex_clamp = std::getenv("KYTY_VERTEX_CLAMP") != nullptr;
 	Writer header;
 	IoAll(header, stamp, SpirvProfile(graphics),
-	      graphics.GetPhysicalDeviceProperties().limits.maxComputeSharedMemorySize);
+	      graphics.GetPhysicalDeviceProperties().limits.maxComputeSharedMemorySize, vertex_clamp);
 	return std::move(header.bytes);
 }
 

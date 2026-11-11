@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
+#include <cstdlib>
 #include <optional>
 
 namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter {
@@ -487,6 +488,40 @@ uint32_t ConvertPositionToClipSpace(EmitterState& state, uint32_t position) {
 	return converted;
 }
 
+bool VertexPositionClampEnabled() {
+	static const bool enabled = std::getenv("KYTY_VERTEX_CLAMP") != nullptr;
+	return enabled;
+}
+
+// Diagnostic: hosts expand a single non-finite or huge clip-space vertex into screen-wide
+// faceted triangles. Replacing non-finite components with zero and clamping to 64*|w| keeps
+// such a vertex from covering the frame, so the artifact's source stage becomes visible.
+uint32_t SanitizeVertexPosition(EmitterState& state, uint32_t position) {
+	const auto zero  = ConstantF32Value(state, 0.0f);
+	uint32_t   components[4] {};
+	for (uint32_t i = 0; i < 4; i++) {
+		const auto component = state.builder.AllocateId();
+		state.builder.AddFunction(spv::OpCompositeExtract, TypeF32(state), component, position, i);
+		const auto nan = Unary(state, spv::OpIsNan, TypeBool(state), component);
+		const auto inf = Unary(state, spv::OpIsInf, TypeBool(state), component);
+		const auto bad = Binary(state, spv::OpLogicalOr, TypeBool(state), nan, inf);
+		components[i]  = Select(state, TypeF32(state), bad, zero, component);
+	}
+	// A non-finite w leaves a zero limit, which collapses the vertex to the origin.
+	const auto abs_w = EmitFAbsValue(state, components[3]);
+	const auto limit =
+	    Binary(state, spv::OpFMul, TypeF32(state), abs_w, ConstantF32Value(state, 64.0f));
+	const auto neg_limit = Unary(state, spv::OpFNegate, TypeF32(state), limit);
+	for (uint32_t i = 0; i < 3; i++) {
+		components[i] = EmitGlsl<GLSLstd450FClamp, IR::Type::F32>(state, components[i], neg_limit,
+		                                                         limit);
+	}
+	const auto sanitized = state.builder.AllocateId();
+	state.builder.AddFunction(spv::OpCompositeConstruct, TypeF32Vector(state, 4), sanitized,
+	                          components[0], components[1], components[2], components[3]);
+	return sanitized;
+}
+
 } // namespace
 uint32_t EmitWqmU64(EmitterState& state, uint32_t value) {
 	const auto shifted_one = state.builder.AllocateId();
@@ -638,6 +673,15 @@ void EmitSetAttribute(ValueEmitContext& ctx, const IR::Inst& inst) {
 		if (exp.kind == IR::ExportTargetKind::Position &&
 		    state.input_info.vertex->clip_space.enabled) {
 			value = ConvertPositionToClipSpace(state, value);
+		}
+		if (exp.kind == IR::ExportTargetKind::Position && VertexPositionClampEnabled()) {
+			value = SanitizeVertexPosition(state, value);
+			static std::atomic<uint64_t> last_logged {0};
+			if (last_logged.exchange(state.program.shader_hash, std::memory_order_relaxed) !=
+			    state.program.shader_hash) {
+				LOGF("Shader: vertex clamp: stage=%d hash=%016" PRIx64 "\n",
+				     static_cast<int>(state.program.stage), state.program.shader_hash);
+			}
 		}
 		if (exp.kind == IR::ExportTargetKind::Position && state.user_clip_planes != 0) {
 			EmitUserClipDistances(state, value);

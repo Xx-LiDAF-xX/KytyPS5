@@ -184,12 +184,24 @@ vk::Format NarrowInputFormat(vk::Format format, uint32_t used_components) {
 				case 2: return vk::Format::eR32G32Sfloat;
 				default: return format;
 			}
+		case vk::Format::eR32G32Sfloat:
+			return used_components == 1 ? vk::Format::eR32Sfloat : format;
 		case vk::Format::eR16G16B16A16Sfloat:
 			switch (used_components) {
 				case 1: return vk::Format::eR16Sfloat;
 				case 2: return vk::Format::eR16G16Sfloat;
 				default: return format;
 			}
+		case vk::Format::eR16G16Sfloat:
+			return used_components == 1 ? vk::Format::eR16Sfloat : format;
+		case vk::Format::eR16G16Unorm:
+			return used_components == 1 ? vk::Format::eR16Unorm : format;
+		case vk::Format::eR16G16Snorm:
+			return used_components == 1 ? vk::Format::eR16Snorm : format;
+		case vk::Format::eR16G16Uint:
+			return used_components == 1 ? vk::Format::eR16Uint : format;
+		case vk::Format::eR16G16Sint:
+			return used_components == 1 ? vk::Format::eR16Sint : format;
 		case vk::Format::eR8G8B8A8Unorm:
 			switch (used_components) {
 				case 1: return vk::Format::eR8Unorm;
@@ -210,14 +222,20 @@ vk::Format NarrowInputFormat(vk::Format format, uint32_t used_components) {
 
 vk::Format InputFormat(const ShaderBufferResource& resource, uint32_t used_components) {
 	switch (resource.RawFormat()) {
-		// Temporary: invalid PS5 buffer format 113 (VertexAttribFormat::k16_16SInt).
-		case 113: return NarrowInputFormat(vk::Format::eR32G32B32A32Sfloat, used_components);
-		case 121: return vk::Format::eR16G16Sfloat;
+		// PS5 vertex attribute format 113 is VertexAttribFormat::k16_16SInt.
+		case 113: return NarrowInputFormat(vk::Format::eR16G16Sint, used_components);
+		case 121: return NarrowInputFormat(vk::Format::eR16G16Sfloat, used_components);
 		default: break;
 	}
-	const auto format = VulkanFormat(resource.Format());
+	auto guest_format = resource.Format();
+	auto format       = VulkanFormat(guest_format);
+	if (format == vk::Format::eUndefined) {
+		// Fallback: guest descriptor table may contain an unshifted VertexAttribFormat.
+		guest_format = static_cast<Prospero::BufferFormat>(resource.RawFormat() >> 2u);
+		format       = VulkanFormat(guest_format);
+	}
 	if (format == vk::Format::eUndefined ||
-	    ShaderRecompiler::Format::GetFormatInfo(resource.Format()).component_count == 0) {
+	    ShaderRecompiler::Format::GetFormatInfo(guest_format).component_count == 0) {
 		EXIT("unknown vertex format: fmt = %u\n", resource.RawFormat());
 	}
 	return NarrowInputFormat(format, used_components);

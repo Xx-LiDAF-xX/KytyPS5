@@ -61,7 +61,11 @@ struct ShaderBufferResource {
 	}
 	[[nodiscard]] uint8_t                RawFormat() const { return (fields[3] >> 12u) & 0x7Fu; }
 	[[nodiscard]] Prospero::BufferFormat Format() const {
-		return static_cast<Prospero::BufferFormat>(RawFormat());
+		const auto raw = RawFormat();
+		if (raw > 77u && raw < 128u) {
+			return static_cast<Prospero::BufferFormat>(raw >> 2u);
+		}
+		return static_cast<Prospero::BufferFormat>(raw);
 	}
 	[[nodiscard]] uint8_t OutOfBounds() const { return (fields[3] >> 28u) & 0x3u; }
 	[[nodiscard]] uint8_t Type() const { return (fields[3] >> 30u) & 0x3u; }
