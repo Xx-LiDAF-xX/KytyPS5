@@ -1676,7 +1676,6 @@ void RenderExecutor::ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallIn
 		    m_context.GetBufferCache().ObtainBuffer(index_begin, index_end - index_begin, false);
 		mesh_indices = indices->BufferDeviceAddress() + offset + (index_source.address & 3u);
 	}
-	}
 	std::pair<Buffer*, uint64_t> args_buffer {};
 	if (emit.indirect.address != 0) {
 		const auto size = static_cast<uint64_t>(emit.indirect.count - 1) * emit.indirect.stride +

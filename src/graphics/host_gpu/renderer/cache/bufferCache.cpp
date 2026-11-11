@@ -848,7 +848,6 @@ void BufferCache::QueueBdaSync(uint64_t vaddr, uint64_t size, bool is_write) {
 		m_bda_sync.Add(begin, end - begin);
 		return;
 	}
-	}
 	m_dma_accessed.ForEachInRange(begin, end - begin, [this](uint64_t first, uint64_t last) {
 		m_bda_sync.Add(first, last - first);
 	});
