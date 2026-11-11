@@ -1818,6 +1818,7 @@ void TestVertexBufferGrouping() {
     descriptors[0].UpdateAddress48(base + 8);
     descriptors[1].UpdateAddress48(base + 4);
     descriptors[3].fields[1] = 0; // Constant attributes use their own buffer.
+    input = {};
     (void)PrepareProgram(regs, HW::Context{}, HW::UserConfig{}, input);
     Check(input.resources_num == 4 && input.buffers_num == 3 &&
               input.resources_dst[0].buffer_index == 0 &&
@@ -1833,9 +1834,11 @@ void TestVertexBufferGrouping() {
   }
   // The vertex table metadata is parsed when the shader is mapped.
   user_data.direct_resource_count = 0;
+  input = {};
   (void)PrepareProgram(regs, HW::Context{}, HW::UserConfig{}, input);
   Check(input.fetch_attrib_reg == 2, "a draw reread the vertex metadata of a mapped shader");
   ShaderMapUserData(regs.es_regs.data_addr, mapped);
+  input = {};
   (void)PrepareProgram(regs, HW::Context{}, HW::UserConfig{}, input);
   Check(!input.has_dynamic_vertex_fetch, "remapping a shader kept its previous vertex metadata");
 }
@@ -3464,6 +3467,40 @@ void TestNewShaderRecompilerScalarMemoryBindingDomains() {
             ShaderRecompiler::IR::ResourceKind::ScalarBuffer) == 1u,
         "descriptor scalar load did not remain a live typed buffer operation");
   CheckSpirvBinaryValidates(buffer.spirv);
+
+  // A V# read at a dynamic SRT offset is evaluated on the host and leaves no
+  // GPU address load behind.
+  const uint32_t dynamic_shader[] = {
+      EncodeSmem0(0x02, 12, 4),
+      0u, // s_load_dwordx4 s[12:15], s[8:9], s0
+      EncodeSmem0(0x08, 16, 6),
+      125u << 25u, // s_buffer_load_dword s16, s[12:15], 0x0
+      EncodeVop1(0x01, 0, 16),
+      EncodeExp0(0x00, 0x1),
+      EncodeExp1(0, 0, 0, 0),
+      EncodeSopp(0x01),
+  };
+  std::array<uint32_t, 8> table{};
+  table[4] = 0x2000u;
+  table[6] = 4u;
+  const auto table_address = reinterpret_cast<uint64_t>(table.data());
+  std::array<uint32_t, 12> dynamic_user_data{};
+  dynamic_user_data[0] = 16u;
+  dynamic_user_data[8] = static_cast<uint32_t>(table_address);
+  dynamic_user_data[9] = static_cast<uint32_t>(table_address >> 32u);
+
+  auto dynamic_options = MakeCompileOptions(ShaderType::Pixel);
+  dynamic_options.user_data = dynamic_user_data;
+
+  auto dynamic = RecompileForTest(dynamic_shader, dynamic_options);
+  const auto& dynamic_counts = dynamic.program.bindings.descriptor_counts;
+  Check(dynamic.program.info.buffers.size() == 1u &&
+            dynamic.program.info.buffers[0].live &&
+            !dynamic.program.info.uses_dma &&
+            dynamic_counts[static_cast<size_t>(BindingKind::Buffers)] == 1 &&
+            dynamic_counts[static_cast<size_t>(BindingKind::BdaPagetable)] == 0,
+        "host-evaluated dynamic V# read kept the DMA domain");
+  CheckSpirvBinaryValidates(dynamic.spirv);
 }
 
 void TestImageAddressOperands() {
@@ -7657,6 +7694,8 @@ void TestMeshExportStorage() {
     Check(layout.UsesPushData() == (push_data_start == PushData::MeshDrawDwordCount) &&
               layout.descriptor_counts[static_cast<size_t>(ShaderRecompiler::IR::DescriptorBindingKind::Buffers)] == 1,
           "mesh shader did not retain its user-data placement and buffer offset");
+    Check(!result.program.info.uses_dma && result.program.info.uses_device_address,
+          "mesh index fetch used the guest address domain");
     const auto reg = std::ranges::find(result.program.info.user_data_registers, 13u);
     Check(reg != result.program.info.user_data_registers.end(), "mesh shader lost user s13");
     const auto source = DisassembleSpirvBinary(result.spirv);
@@ -8080,7 +8119,6 @@ void TestEmbeddedVertexFormatSwizzle() {
     mapped.code_size_bytes = sizeof(code);
     ShaderMapUserData(regs.es_regs.data_addr, mapped);
     ShaderVertexInputInfo input{};
-    PrepareProgram(regs, HW::Context{}, HW::UserConfig{}, input);
 #if KYTY_PLATFORM != KYTY_PLATFORM_WINDOWS
     if (&test == cases) {
       for (const auto [word, flag] : {std::pair{1u, 1u << 31u}, std::pair{3u, 1u << 23u}}) {
@@ -8091,6 +8129,7 @@ void TestEmbeddedVertexFormatSwizzle() {
       }
     }
 #endif
+    PrepareProgram(regs, HW::Context{}, HW::UserConfig{}, input);
     Frontend::EmbeddedFetchPlan fetch;
     fetch.loads.push_back({.pc = 0, .attrib_id = 0, .components = test.components});
     Frontend::TranslateOptions options{};
@@ -8256,24 +8295,20 @@ void TestMeshInputAssembly() {
                                    ? test.lane
                                    : inst.Arg(1).U32() == 0 ? test.group : 2;
         inst.ReplaceUsesWith(Value(value));
-      } else if (inst.GetOpcode() == ValueOpcode::LoadAddressU32) {
+      } else if (inst.GetOpcode() == ValueOpcode::LoadDeviceAddressU32) {
         Check(load == nullptr, "mesh index fetch emitted duplicate loads");
         load = &inst;
       }
     }
     ConstantPropagationPass(program.blocks);
     if (test.fast_launch) {
-      Check(load == nullptr && program.memory_info.empty(),
-            "fast launch emitted an ordinary input-assembly index resource");
+      Check(load == nullptr, "fast launch emitted an ordinary input-assembly index fetch");
     } else {
-      Check(load != nullptr && load->Arg(1).Resolve().U32() == test.byte_offset &&
+      Check(load != nullptr && load->Arg(0).Resolve().U32() == (test.address_low & ~3u) &&
+                load->Arg(1).Resolve().U32() == 0x12 &&
+                load->Arg(2).Resolve().U32() == test.byte_offset &&
                 load->Arg(3).Resolve().U1() == test.fetch,
             "mesh index fetch address or active-lane predicate is wrong");
-      const auto *resource = load->Arg(0).ResolveInstruction();
-      Check(resource != nullptr && resource->Arg(0).Resolve().U32() == (test.address_low & ~3u) &&
-                resource->Arg(1).Resolve().U32() == 0x12 &&
-                program.memory_info[load->Flags<MemoryFlags>().index].kind == ResourceKind::Global,
-            "mesh index fetch lost its aligned guest address resource");
       load->ReplaceUsesWith(Value(test.fetch ? 0xabcd0123u : 0u));
       ConstantPropagationPass(program.blocks);
     }
@@ -10660,12 +10695,14 @@ void TestRenderTargetReverseExportMapping() {
       "cache key");
   sh.target_output_mode[0] = 4;
   sh.m_cbShaderMask = 0xf;
+  compiled_info = {};
   PrepareProgram(regs, sh, mappings, compiled_info);
   Check(compiled_info.target_export_mapping[0] == gr32.export_mapping,
       "active reverse MRT mapping was lost before shader specialization");
   const auto first_slot_key = MakeStageStaticKey(compiled_info);
   sh.m_cbShaderMask = 0xf000;
   mappings[3] = gr32.export_mapping;
+  compiled_info = {};
   PrepareProgram(regs, sh, mappings, compiled_info);
   Check(compiled_info.target_shader_mask == sh.m_cbShaderMask &&
             compiled_info.target_export_mapping[0] == gr32.export_mapping &&
@@ -10673,6 +10710,7 @@ void TestRenderTargetReverseExportMapping() {
         "compact MRT ordinal lost its physical export mapping or cache identity");
   const auto sparse_slot_key = MakeStageStaticKey(compiled_info);
   sh.m_cbShaderMask = 0x1000;
+  compiled_info = {};
   PrepareProgram(regs, sh, mappings, compiled_info);
   Check(sparse_slot_key == MakeStageStaticKey(compiled_info),
         "component-only shader mask changes introduced a duplicate shader variant");

@@ -2,6 +2,7 @@
 #define GRAPHICS_GUEST_GPU_COMMAND_PROCESSOR_COMMAND_PROCESSOR_H
 
 #include "common/assert.h"
+#include "common/emulatorConfig.h"
 #include "graphics/guest_gpu/hardwareContext.h"
 #include "graphics/guest_gpu/pssr.h"
 #include "graphics/host_gpu/renderer/render.h"
@@ -83,13 +84,12 @@ public:
 	void DrawIndex(DrawIndexArgs args);
 	void DrawIndexOffset(uint32_t index_offset, uint32_t index_count);
 	void DrawIndexAuto(DrawAutoArgs args);
-	void DrawIndirect(uint32_t data_offset, IndirectDrawRegisters registers,
-	                  uint32_t draw_initiator, bool indexed);
 	void DrawIndirectMulti(uint32_t data_offset, uint32_t max_count_or_count,
 	                       const volatile uint32_t* count_addr, uint32_t stride_in_bytes,
 	                       IndirectDrawRegisters registers, uint32_t draw_initiator, bool indexed);
 	void ReleaseMem(uint32_t data_sel, uint32_t interrupt_selector, void* address, uint64_t data,
-	                uint32_t interrupt_context_id);
+	                uint32_t interrupt_context_id, bool gl2_writeback);
+	void WriteBackImages();
 	void Flip(int handle, int index, int flip_mode, int64_t flip_arg);
 	void PrepareCpuFlip(uint64_t request_id);
 	void DispatchDirect(uint32_t thread_group_x, uint32_t thread_group_y, uint32_t thread_group_z,
@@ -139,6 +139,7 @@ public:
 		return std::clamp(threads != 0 ? threads * 8 : 64u, 32u, 128u);
 	}
 	void RecordDrawCall() noexcept {
+		CountDraw();
 		if (++m_draws_in_batch >= MaxDrawsInBatch()) {
 			m_needs_flush = true;
 		}
@@ -152,6 +153,7 @@ public:
 private:
 	void ProcessPm4(Pm4Execution& execution);
 	void SuspendPm4();
+	void                CountDraw();
 	uint32_t            NumInstances();
 	const void*         IndexAddress(uint32_t first_index) const;
 	CommandScheduler&   GetScheduler() const { return m_renderer.GetCommandScheduler(); }
@@ -172,13 +174,15 @@ private:
 	uint32_t m_num_instances      = 1;
 	uint64_t m_num_instances_addr = 0;
 
-	const int m_interrupt_event_id;
-	uint64_t  m_synthetic_occlusion_counter = 0;
-	bool      m_predicate_skip              = false;
-	bool      m_needs_flush                 = false;
-	bool      m_batch_dirty                 = false;
-	uint32_t  m_draws_in_batch              = 0;
-	uint32_t  m_interrupts_in_batch         = 0;
+	const int      m_interrupt_event_id;
+	const uint32_t m_flush_draws                 = Config::GetFlushDraws();
+	uint32_t       m_draws                       = 0; // Since the buffer start or CountDraw's flush
+	uint64_t       m_synthetic_occlusion_counter = 0;
+	bool           m_predicate_skip              = false;
+	bool           m_needs_flush                 = false;
+	bool           m_batch_dirty                 = false;
+	uint32_t       m_draws_in_batch              = 0;
+	uint32_t       m_interrupts_in_batch         = 0;
 };
 
 } // namespace Libs::Graphics

@@ -212,6 +212,7 @@ void CommandProcessor::ApplyContextStateOperation(ContextStateOperation operatio
 }
 
 void CommandProcessor::BufferInit() {
+	m_draws = 0;
 	GetScheduler().Begin(m_ctx, m_ucfg, m_sh_ctx);
 }
 
@@ -852,6 +853,18 @@ void CommandProcessor::SetPredication(uint32_t condition, uint32_t op, uint32_t 
 	}
 }
 
+// Submits the recorded work every N draws so the host GPU starts before a long buffer ends.
+void CommandProcessor::CountDraw() {
+	if (m_flush_draws == 0) {
+		return;
+	}
+	if (m_draws == m_flush_draws) {
+		GetScheduler().Flush();
+		m_draws = 0;
+	}
+	m_draws++;
+}
+
 void CommandProcessor::DrawIndex(DrawIndexArgs args) {
 	RecordDrawCall();
 	args.index_type_and_size = m_index_type_and_size;
@@ -912,13 +925,6 @@ static bool IndirectDrawOffsets(IndirectDrawRegisters registers, ShaderIndirectO
 		*slot = static_cast<uint8_t>(index);
 	}
 	return true;
-}
-
-void CommandProcessor::DrawIndirect(uint32_t data_offset, IndirectDrawRegisters registers,
-                                    uint32_t draw_initiator, bool indexed) {
-	const auto args_size =
-	    indexed ? sizeof(vk::DrawIndexedIndirectCommand) : sizeof(vk::DrawIndirectCommand);
-	DrawIndirectMulti(data_offset, 1, nullptr, args_size, registers, draw_initiator, indexed);
 }
 
 void CommandProcessor::DrawIndirectMulti(uint32_t data_offset, uint32_t max_count_or_count,
@@ -1031,7 +1037,8 @@ void CommandProcessor::WaitFlipDone(uint32_t video_out_handle, uint32_t display_
 }
 
 void CommandProcessor::ReleaseMem(uint32_t data_sel, uint32_t interrupt_selector, void* address,
-                                  uint64_t data, uint32_t interrupt_context_id) {
+                                  uint64_t data, uint32_t interrupt_context_id,
+                                  bool gl2_writeback) {
 	if (graphics_debug_dump_enabled()) {
 		LOGF("CommandProcessor::ReleaseMem()\n"
 		     "\t data_sel           = %" PRIu32 "\n"
@@ -1050,6 +1057,10 @@ void CommandProcessor::ReleaseMem(uint32_t data_sel, uint32_t interrupt_selector
 	if (address == nullptr || interrupt_selector == 4 ||
 	    (interrupt_selector == 1 && !IsAsyncComputeQueue())) {
 		data_sel = 0;
+	}
+	// A GL2 writeback makes GPU writes CPU-visible even without a signal.
+	if (gl2_writeback) {
+		WriteBackImages();
 	}
 	if (data_sel == 0 && !interrupt) {
 		return;
@@ -1102,6 +1113,14 @@ void CommandProcessor::ReleaseMem(uint32_t data_sel, uint32_t interrupt_selector
 		    m_interrupts_in_batch >= MaxInterruptsInBatch) {
 			m_needs_flush = true;
 		}
+	}
+}
+
+void CommandProcessor::WriteBackImages() {
+	// GPU-written images are copied back without holding any signal: a held signal exposes the host
+	// GPU's speed. Guest accesses to them wait for the copies.
+	if (m_renderer.GetTextureCache().WriteBackImages()) {
+		GetScheduler().Flush();
 	}
 }
 

@@ -436,6 +436,12 @@ KYTY_HW_SH_PARSER(HwShIgnoreUserAccumulator) {
 KYTY_CP_OP_PARSER(CpOpAcquireMem) {
 	KYTY_PROFILER_FUNCTION();
 
+	EXIT_NOT_IMPLEMENTED(cmd_id != 0xc0055800 && cmd_id != 0xc0065800);
+	// GCR_CNTL GL2_WB (bit 15) over the whole GL2 (GL2_RANGE, bits 11-12, zero) makes GPU writes
+	// visible to the CPU.
+	if (cmd_id == 0xc0065800 && (buffer[6] & 0x9800u) == 0x8000u) {
+		cp.WriteBackImages();
+	}
 	return KYTY_PM4_LEN(cmd_id) - 1;
 }
 
@@ -750,9 +756,23 @@ KYTY_CP_OP_PARSER(CpOpDrawIndirect) {
 	    buffer[1] & 0xffffu, buffer[2] & 0xffffu,
 	    indexed && (buffer[2] & (1u << 28u)) != 0 ? buffer[1] >> 16u : Pm4::SH_NOP, Pm4::SH_NOP};
 
-	cp.DrawIndirect(data_offset, registers, draw_initiator, indexed);
+	// Following packets with the same other words, each drawing the record after the previous one,
+	// draw the records of a multi-draw without a draw index.
+	constexpr uint32_t packet_dw = 5;
+	const uint32_t     record_size =
+	    indexed ? sizeof(vk::DrawIndexedIndirectCommand) : sizeof(vk::DrawIndirectCommand);
+	uint32_t count = 1;
+	for (uint32_t at = 4; at + packet_dw < dw; at += packet_dw, count++) {
+		const auto* next = buffer + at;
+		if (next[0] != cmd_id || next[1] != uint64_t {next[-4]} + record_size ||
+		    next[2] != buffer[1] || next[3] != buffer[2] || next[4] != buffer[3]) {
+			break;
+		}
+	}
+	cp.DrawIndirectMulti(data_offset, count, nullptr, record_size, registers, draw_initiator,
+	                     indexed);
 
-	return 4;
+	return 4 + packet_dw * (count - 1);
 }
 
 KYTY_CP_OP_PARSER(CpOpDrawIndirectMulti) {
@@ -1178,11 +1198,13 @@ KYTY_CP_OP_PARSER(CpOpReleaseMem) {
 	EXIT_NOT_IMPLEMENTED(cmd_id != 0xc0064900);
 
 	// The event type, cache actions and destination cache only order GPU work, which the renderer's
-	// resource barriers already order.
+	// resource barriers already order. A GL2 writeback (GCR_CNTL bit 9) also makes shader writes
+	// visible to the CPU.
 	cp.ReleaseMem(
 	    (buffer[1] >> 29u) & 0x7u, (buffer[1] >> 24u) & 0x7u,
 	    reinterpret_cast<void*>((buffer[2] & ~0x3u) | (static_cast<uint64_t>(buffer[3]) << 32u)),
-	    buffer[4] | (static_cast<uint64_t>(buffer[5]) << 32u), buffer[6] & 0x07ffffffu);
+	    buffer[4] | (static_cast<uint64_t>(buffer[5]) << 32u), buffer[6] & 0x07ffffffu,
+	    (buffer[0] & (1u << 21u)) != 0);
 
 	return 7;
 }

@@ -1302,16 +1302,12 @@ IR::Program TranslateProgram(const Decoder::Program& decoded, const CFG::Graph& 
 				const auto index_low    = draw(3);
 				const auto byte_offset  = entry_ir.IAdd(entry_ir.BitwiseAnd(index_low, u32(3)),
 				                                           entry_ir.IMul(input_vertex, index_bytes));
-				const auto index_resource = entry_ir.Emit(
-				    IR::ValueOpcode::GetAddressResource,
-				    {entry_ir.BitwiseAnd(index_low, u32(~3u)), draw(4)});
-				const auto memory_index = static_cast<uint32_t>(result.memory_info.size());
-				result.memory_info.push_back({.kind = IR::ResourceKind::Global});
+				// Indexed draws pass the device address of their indices.
 				const auto packed_index = entry_ir.Emit(
-				    IR::ValueOpcode::LoadAddressU32,
-				    {index_resource, entry_ir.BitwiseAnd(byte_offset, u32(~3u)), u32(0),
-				     entry_ir.LogicalAnd(indexed, entry_ir.ULessThan(local, vertices))},
-				    IR::MemoryFlags {.index = memory_index});
+				    IR::ValueOpcode::LoadDeviceAddressU32,
+				    {entry_ir.BitwiseAnd(index_low, u32(~3u)), draw(4),
+				     entry_ir.BitwiseAnd(byte_offset, u32(~3u)),
+				     entry_ir.LogicalAnd(indexed, entry_ir.ULessThan(local, vertices))});
 				const auto index = IR::U32(entry_ir.Emit(
 				    IR::ValueOpcode::BitFieldUExtract,
 				    {packed_index, entry_ir.IMul(entry_ir.BitwiseAnd(byte_offset, u32(3)), u32(8)),
@@ -1346,7 +1342,11 @@ IR::Program TranslateProgram(const Decoder::Program& decoded, const CFG::Graph& 
 			    entry_ir.ShiftLeftLogical(builtin(IR::StageInputKind::InvocationId),
 			                              IR::U32(IR::Value(8u))));
 		} else if (options.stage == ShaderType::TessellationEvaluation) {
-			entry_ir.SetScalarReg(static_cast<IR::ScalarReg>(3), IR::U32(IR::Value(64u)));
+			// GS_TG_INFO and the merged wave info both count one full wave of vertices.
+			entry_ir.SetScalarReg(static_cast<IR::ScalarReg>(2),
+			                      IR::U32(IR::Value(options.wave_size << 12u)));
+			entry_ir.SetScalarReg(static_cast<IR::ScalarReg>(3),
+			                      IR::U32(IR::Value(options.wave_size)));
 			entry_ir.SetScalarReg(
 			    static_cast<IR::ScalarReg>(4),
 			    IR::U32(entry_ir.Emit(IR::ValueOpcode::TessellationBase, {IR::Value(0u)})));

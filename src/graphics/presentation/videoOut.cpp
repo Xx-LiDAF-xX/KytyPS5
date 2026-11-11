@@ -194,6 +194,7 @@ struct VideoOutConfig {
 	int                                 flip_rate   = 0;
 	uint64_t                            output_mode = VIDEO_OUT_OUTPUT_MODE_DEFAULT;
 	uint64_t                            pre_vblanks = 0;
+	uint64_t                            flip_vblank = 0; // vblank_status.count at the last flip.
 	VideoOutFlipStatus                  flip_status;
 	VideoOutVblankStatus                vblank_status;
 	std::array<VideoOutBuffer, VIDEO_OUT_BUFFER_NUM_MAX>                 buffers;
@@ -489,10 +490,12 @@ static int DeleteVideoOutEvent(int handle, EventQueue::KernelEqueue eq, VideoOut
 	return result == LibKernel::KERNEL_ERROR_ENOENT ? OK : result;
 }
 
+// A flip is due once flip_rate + 1 vblanks have passed since the last flip, so a late frame flips
+// at the next vblank.
 static bool IsFlipDueLocked(const VideoOutConfig& cfg) {
-	const int interval = cfg.flip_rate + 1;
+	const auto interval = static_cast<uint64_t>(cfg.flip_rate) + 1;
 
-	return interval <= 1 || (cfg.vblank_status.count % static_cast<uint64_t>(interval)) == 0;
+	return interval <= 1 || cfg.vblank_status.count - cfg.flip_vblank >= interval;
 }
 
 static bool IsValidBufferIndex(int index) {
@@ -668,6 +671,7 @@ int VideoOutDriver::Impl::Open(int bus_type, int index) {
 	config.flip_status.flipArg       = -1;
 	config.flip_status.currentBuffer = -1;
 	config.pre_vblanks               = 0;
+	config.flip_vblank               = 0;
 	config.vblank_status             = VideoOutVblankStatus();
 
 	return handle;
@@ -1105,7 +1109,9 @@ bool FlipQueue::Flip() {
 	}
 	m_mutex.Unlock();
 
-	// Lock each port in bus order, then present and complete the whole group at one Vblank.
+	// Present and complete the whole group at one Vblank, taking the port locks in bus order. The
+	// present runs without them: Cancel waits for Presenting requests, so their frames and ports
+	// stay valid.
 	std::sort(requests.begin(), requests.begin() + count,
 	          [](const auto& a, const auto& b) { return a.cfg->bus < b.cfg->bus; });
 	bool due = true;
@@ -1113,8 +1119,8 @@ bool FlipQueue::Flip() {
 	size_t                      layer_count = 0;
 	Graphics::Presenter::Frame* hidden      = nullptr; // The main port behind the headset image.
 	for (size_t i = 0; i < count; i++) {
-		auto& r = requests[i];
-		r.cfg->mutex.Lock();
+		auto&             r = requests[i];
+		Common::LockGuard lock(r.cfg->mutex);
 		due &= r.cfg->generation == r.generation;
 		if (r.id == group) {
 			due &= IsFlipDueLocked(*r.cfg);
@@ -1140,6 +1146,9 @@ bool FlipQueue::Flip() {
 		}
 	}
 
+	for (size_t i = 0; i < count; i++) {
+		requests[i].cfg->mutex.Lock();
+	}
 	m_mutex.Lock();
 	for (auto it = m_requests.begin(); it != m_requests.end();) {
 		if (it->group != group) {
@@ -1151,6 +1160,7 @@ bool FlipQueue::Flip() {
 			continue;
 		}
 		auto& r = *it;
+		r.cfg->flip_vblank = r.cfg->vblank_status.count;
 		r.cfg->flip_status.count++;
 		r.cfg->flip_status.processTime              = LibKernel::KernelGetProcessTime();
 		r.cfg->flip_status.processTimeCounter       = LibKernel::KernelGetProcessTimeCounter();
