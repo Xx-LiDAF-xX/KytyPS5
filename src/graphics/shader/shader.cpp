@@ -237,6 +237,12 @@ static void ShaderApplyAttribSemantics(ShaderVertexInputInfo& info,
 			              (buffer_format << 12u) |
 			              DstSel(4, channels > 1u ? 5u : 0u, channels > 2u ? 6u : 0u,
 			                     channels > 3u ? 7u : 1u);
+		} else {
+			const auto hw_format = r.HardwareFormat();
+			if (hw_format != Prospero::BufferFormat::kInvalid) {
+				r.fields[3] = (r.fields[3] & ~(0x7fu << 12u)) |
+				              (static_cast<uint32_t>(hw_format) << 12u);
+			}
 		}
 		if (offset != 0) {
 			r.UpdateAddress48(r.Base48() + offset);

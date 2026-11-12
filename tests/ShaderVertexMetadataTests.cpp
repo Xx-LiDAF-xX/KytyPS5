@@ -1,4 +1,6 @@
 #include "graphics/shader/shaderVertexMetadata.h"
+#include "graphics/shader/recompiler/BufferFormat.h"
+#include "graphics/shader/shaderBindings.h"
 
 #include <array>
 #include <cstdint>
@@ -104,10 +106,53 @@ void TestValidAndInvalidMetadata() {
 	CheckRejected(missing_semantics.mapped, "missing vertex semantic array was accepted");
 }
 
+void TestGfx10BufferFormatDecoding() {
+	using namespace Libs::Graphics::ShaderRecompiler::Format;
+
+	Check(DecodeGfx10BufferFormat(1, 0) == Prospero::BufferFormat::k8UNorm,
+	      "dfmt 1, nfmt 0 should decode to k8UNorm");
+	Check(DecodeGfx10BufferFormat(1, 1) == Prospero::BufferFormat::k8SNorm,
+	      "dfmt 1, nfmt 1 should decode to k8SNorm");
+	Check(DecodeGfx10BufferFormat(2, 0) == Prospero::BufferFormat::k16UNorm,
+	      "dfmt 2, nfmt 0 should decode to k16UNorm");
+	Check(DecodeGfx10BufferFormat(2, 1) == Prospero::BufferFormat::k16SNorm,
+	      "dfmt 2, nfmt 1 should decode to k16SNorm");
+	Check(DecodeGfx10BufferFormat(2, 7) == Prospero::BufferFormat::k16Float,
+	      "dfmt 2, nfmt 7 should decode to k16Float");
+	Check(DecodeGfx10BufferFormat(5, 0) == Prospero::BufferFormat::k16_16UNorm,
+	      "dfmt 5, nfmt 0 should decode to k16_16UNorm");
+	Check(DecodeGfx10BufferFormat(5, 7) == Prospero::BufferFormat::k16_16Float,
+	      "dfmt 5, nfmt 7 should decode to k16_16Float");
+	Check(DecodeGfx10BufferFormat(10, 0) == Prospero::BufferFormat::k8_8_8_8UNorm,
+	      "dfmt 10, nfmt 0 should decode to k8_8_8_8UNorm");
+	Check(DecodeGfx10BufferFormat(12, 0) == Prospero::BufferFormat::k16_16_16_16UNorm,
+	      "dfmt 12, nfmt 0 should decode to k16_16_16_16UNorm");
+	Check(DecodeGfx10BufferFormat(14, 7) == Prospero::BufferFormat::k32_32_32_32Float,
+	      "dfmt 14, nfmt 7 should decode to k32_32_32_32Float");
+
+	// HardwareFormat on ShaderBufferResource
+	ShaderBufferResource res {};
+	// dfmt=2 (16-bit), nfmt=0 (UNORM): (0 << 16) | (2 << 12)
+	res.fields[3] = (0u << 16u) | (2u << 12u);
+	Check(res.HardwareFormat() == Prospero::BufferFormat::k16UNorm,
+	      "res with dfmt 2, nfmt 0 should yield HardwareFormat k16UNorm");
+
+	// dfmt=5 (16_16), nfmt=0 (UNORM): (0 << 16) | (5 << 12)
+	res.fields[3] = (0u << 16u) | (5u << 12u);
+	Check(res.HardwareFormat() == Prospero::BufferFormat::k16_16UNorm,
+	      "res with dfmt 5, nfmt 0 should yield HardwareFormat k16_16UNorm");
+
+	// dfmt=12 (16_16_16_16), nfmt=0 (UNORM): (0 << 16) | (12 << 12)
+	res.fields[3] = (0u << 16u) | (12u << 12u);
+	Check(res.HardwareFormat() == Prospero::BufferFormat::k16_16_16_16UNorm,
+	      "res with dfmt 12, nfmt 0 should yield HardwareFormat k16_16_16_16UNorm");
+}
+
 } // namespace
 
 int main() {
 	TestValidAndInvalidMetadata();
+	TestGfx10BufferFormatDecoding();
 	std::puts("ShaderVertexMetadataTests: all cases passed");
 	return 0;
 }

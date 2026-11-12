@@ -4,6 +4,7 @@
 #include "common/abi.h"
 #include "common/common.h"
 #include "graphics/guest_gpu/gpu_defs.h"
+#include "graphics/shader/recompiler/BufferFormat.h"
 
 namespace Libs::Graphics {
 
@@ -60,9 +61,18 @@ struct ShaderBufferResource {
 		return (fields[0] | (static_cast<uint64_t>(fields[1]) << 32u)) & 0xFFFFFFFFFFFFu;
 	}
 	[[nodiscard]] uint8_t                RawFormat() const { return (fields[3] >> 12u) & 0x7Fu; }
+	[[nodiscard]] Prospero::BufferFormat HardwareFormat() const {
+		const auto dfmt = (fields[3] >> 12u) & 0x0fu;
+		const auto nfmt = (fields[3] >> 16u) & 0x07u;
+		return ShaderRecompiler::Format::DecodeGfx10BufferFormat(dfmt, nfmt);
+	}
 	[[nodiscard]] Prospero::BufferFormat Format() const {
 		const auto raw = RawFormat();
 		if (raw > 77u && raw < 128u) {
+			const auto hw = HardwareFormat();
+			if (hw != Prospero::BufferFormat::kInvalid) {
+				return hw;
+			}
 			return static_cast<Prospero::BufferFormat>(raw >> 2u);
 		}
 		return static_cast<Prospero::BufferFormat>(raw);

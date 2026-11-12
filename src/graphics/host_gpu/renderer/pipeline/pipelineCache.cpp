@@ -186,6 +186,36 @@ vk::Format NarrowInputFormat(vk::Format format, uint32_t used_components) {
 			}
 		case vk::Format::eR32G32Sfloat:
 			return used_components == 1 ? vk::Format::eR32Sfloat : format;
+		case vk::Format::eR32G32B32A32Uint:
+			switch (used_components) {
+				case 1: return vk::Format::eR32Uint;
+				case 2: return vk::Format::eR32G32Uint;
+				case 3: return vk::Format::eR32G32B32Uint;
+				default: return format;
+			}
+		case vk::Format::eR32G32B32Uint:
+			switch (used_components) {
+				case 1: return vk::Format::eR32Uint;
+				case 2: return vk::Format::eR32G32Uint;
+				default: return format;
+			}
+		case vk::Format::eR32G32Uint:
+			return used_components == 1 ? vk::Format::eR32Uint : format;
+		case vk::Format::eR32G32B32A32Sint:
+			switch (used_components) {
+				case 1: return vk::Format::eR32Sint;
+				case 2: return vk::Format::eR32G32Sint;
+				case 3: return vk::Format::eR32G32B32Sint;
+				default: return format;
+			}
+		case vk::Format::eR32G32B32Sint:
+			switch (used_components) {
+				case 1: return vk::Format::eR32Sint;
+				case 2: return vk::Format::eR32G32Sint;
+				default: return format;
+			}
+		case vk::Format::eR32G32Sint:
+			return used_components == 1 ? vk::Format::eR32Sint : format;
 		case vk::Format::eR16G16B16A16Sfloat:
 			switch (used_components) {
 				case 1: return vk::Format::eR16Sfloat;
@@ -194,12 +224,36 @@ vk::Format NarrowInputFormat(vk::Format format, uint32_t used_components) {
 			}
 		case vk::Format::eR16G16Sfloat:
 			return used_components == 1 ? vk::Format::eR16Sfloat : format;
+		case vk::Format::eR16G16B16A16Unorm:
+			switch (used_components) {
+				case 1: return vk::Format::eR16Unorm;
+				case 2: return vk::Format::eR16G16Unorm;
+				default: return format;
+			}
 		case vk::Format::eR16G16Unorm:
 			return used_components == 1 ? vk::Format::eR16Unorm : format;
+		case vk::Format::eR16G16B16A16Snorm:
+			switch (used_components) {
+				case 1: return vk::Format::eR16Snorm;
+				case 2: return vk::Format::eR16G16Snorm;
+				default: return format;
+			}
 		case vk::Format::eR16G16Snorm:
 			return used_components == 1 ? vk::Format::eR16Snorm : format;
+		case vk::Format::eR16G16B16A16Uint:
+			switch (used_components) {
+				case 1: return vk::Format::eR16Uint;
+				case 2: return vk::Format::eR16G16Uint;
+				default: return format;
+			}
 		case vk::Format::eR16G16Uint:
 			return used_components == 1 ? vk::Format::eR16Uint : format;
+		case vk::Format::eR16G16B16A16Sint:
+			switch (used_components) {
+				case 1: return vk::Format::eR16Sint;
+				case 2: return vk::Format::eR16G16Sint;
+				default: return format;
+			}
 		case vk::Format::eR16G16Sint:
 			return used_components == 1 ? vk::Format::eR16Sint : format;
 		case vk::Format::eR8G8B8A8Unorm:
@@ -208,14 +262,32 @@ vk::Format NarrowInputFormat(vk::Format format, uint32_t used_components) {
 				case 2: return vk::Format::eR8G8Unorm;
 				default: return format;
 			}
+		case vk::Format::eR8G8Unorm:
+			return used_components == 1 ? vk::Format::eR8Unorm : format;
 		case vk::Format::eR8G8B8A8Snorm:
-			return used_components == 2 ? vk::Format::eR8G8Snorm : format;
+			switch (used_components) {
+				case 1: return vk::Format::eR8Snorm;
+				case 2: return vk::Format::eR8G8Snorm;
+				default: return format;
+			}
+		case vk::Format::eR8G8Snorm:
+			return used_components == 1 ? vk::Format::eR8Snorm : format;
 		case vk::Format::eR8G8B8A8Uint:
 			switch (used_components) {
 				case 1: return vk::Format::eR8Uint;
 				case 2: return vk::Format::eR8G8Uint;
 				default: return format;
 			}
+		case vk::Format::eR8G8Uint:
+			return used_components == 1 ? vk::Format::eR8Uint : format;
+		case vk::Format::eR8G8B8A8Sint:
+			switch (used_components) {
+				case 1: return vk::Format::eR8Sint;
+				case 2: return vk::Format::eR8G8Sint;
+				default: return format;
+			}
+		case vk::Format::eR8G8Sint:
+			return used_components == 1 ? vk::Format::eR8Sint : format;
 		default: return format;
 	}
 }
@@ -229,6 +301,13 @@ vk::Format InputFormat(const ShaderBufferResource& resource, uint32_t used_compo
 	}
 	auto guest_format = resource.Format();
 	auto format       = VulkanFormat(guest_format);
+	if (format == vk::Format::eUndefined) {
+		const auto hw_format = resource.HardwareFormat();
+		if (hw_format != Prospero::BufferFormat::kInvalid) {
+			guest_format = hw_format;
+			format       = VulkanFormat(guest_format);
+		}
+	}
 	if (format == vk::Format::eUndefined) {
 		// Fallback: guest descriptor table may contain an unshifted VertexAttribFormat.
 		guest_format = static_cast<Prospero::BufferFormat>(resource.RawFormat() >> 2u);

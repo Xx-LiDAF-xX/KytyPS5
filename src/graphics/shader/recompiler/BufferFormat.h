@@ -48,6 +48,146 @@ constexpr uint32_t FormattedConstantBits(const BufferFormatInfo& info, Formatted
 	return info.type == ComponentType::Uint || info.type == ComponentType::Sint ? 1u : 0x3f800000u;
 }
 
+constexpr Prospero::BufferFormat DecodeGfx10BufferFormat(uint32_t dfmt, uint32_t nfmt) {
+	switch (dfmt) {
+		case 1: // 8-bit
+			switch (nfmt) {
+				case 0: return Prospero::BufferFormat::k8UNorm;
+				case 1: return Prospero::BufferFormat::k8SNorm;
+				case 2: return Prospero::BufferFormat::k8UScaled;
+				case 3: return Prospero::BufferFormat::k8SScaled;
+				case 4: return Prospero::BufferFormat::k8UInt;
+				case 5: return Prospero::BufferFormat::k8SInt;
+				default: return Prospero::BufferFormat::kInvalid;
+			}
+		case 2: // 16-bit
+			switch (nfmt) {
+				case 0: return Prospero::BufferFormat::k16UNorm;
+				case 1: return Prospero::BufferFormat::k16SNorm;
+				case 2: return Prospero::BufferFormat::k16UScaled;
+				case 3: return Prospero::BufferFormat::k16SScaled;
+				case 4: return Prospero::BufferFormat::k16UInt;
+				case 5: return Prospero::BufferFormat::k16SInt;
+				case 7: return Prospero::BufferFormat::k16Float;
+				default: return Prospero::BufferFormat::kInvalid;
+			}
+		case 3: // 8_8-bit
+			switch (nfmt) {
+				case 0: return Prospero::BufferFormat::k8_8UNorm;
+				case 1: return Prospero::BufferFormat::k8_8SNorm;
+				case 2: return Prospero::BufferFormat::k8_8UScaled;
+				case 3: return Prospero::BufferFormat::k8_8SScaled;
+				case 4: return Prospero::BufferFormat::k8_8UInt;
+				case 5: return Prospero::BufferFormat::k8_8SInt;
+				default: return Prospero::BufferFormat::kInvalid;
+			}
+		case 4: // 32-bit
+			switch (nfmt) {
+				case 4: return Prospero::BufferFormat::k32UInt;
+				case 5: return Prospero::BufferFormat::k32SInt;
+				case 7: return Prospero::BufferFormat::k32Float;
+				default: return Prospero::BufferFormat::kInvalid;
+			}
+		case 5: // 16_16-bit
+			switch (nfmt) {
+				case 0: return Prospero::BufferFormat::k16_16UNorm;
+				case 1: return Prospero::BufferFormat::k16_16SNorm;
+				case 2: return Prospero::BufferFormat::k16_16UScaled;
+				case 3: return Prospero::BufferFormat::k16_16SScaled;
+				case 4: return Prospero::BufferFormat::k16_16UInt;
+				case 5: return Prospero::BufferFormat::k16_16SInt;
+				case 7: return Prospero::BufferFormat::k16_16Float;
+				default: return Prospero::BufferFormat::kInvalid;
+			}
+		case 6: // 11_11_10
+			switch (nfmt) {
+				case 0: return Prospero::BufferFormat::k11_11_10UNorm;
+				case 1: return Prospero::BufferFormat::k11_11_10SNorm;
+				case 2: return Prospero::BufferFormat::k11_11_10UScaled;
+				case 3: return Prospero::BufferFormat::k11_11_10SScaled;
+				case 4: return Prospero::BufferFormat::k11_11_10UInt;
+				case 5: return Prospero::BufferFormat::k11_11_10SInt;
+				case 7: return Prospero::BufferFormat::k11_11_10Float;
+				default: return Prospero::BufferFormat::kInvalid;
+			}
+		case 7: // 10_11_11
+			switch (nfmt) {
+				case 0: return Prospero::BufferFormat::k10_11_11UNorm;
+				case 1: return Prospero::BufferFormat::k10_11_11SNorm;
+				case 2: return Prospero::BufferFormat::k10_11_11UScaled;
+				case 3: return Prospero::BufferFormat::k10_11_11SScaled;
+				case 4: return Prospero::BufferFormat::k10_11_11UInt;
+				case 5: return Prospero::BufferFormat::k10_11_11SInt;
+				case 7: return Prospero::BufferFormat::k10_11_11Float;
+				default: return Prospero::BufferFormat::kInvalid;
+			}
+		case 8: // 2_10_10_10
+			switch (nfmt) {
+				case 0: return Prospero::BufferFormat::k2_10_10_10UNorm;
+				case 1: return Prospero::BufferFormat::k2_10_10_10SNorm;
+				case 2: return Prospero::BufferFormat::k2_10_10_10UScaled;
+				case 3: return Prospero::BufferFormat::k2_10_10_10SScaled;
+				case 4: return Prospero::BufferFormat::k2_10_10_10UInt;
+				case 5: return Prospero::BufferFormat::k2_10_10_10SInt;
+				default: return Prospero::BufferFormat::kInvalid;
+			}
+		case 9: // 10_10_10_2
+			switch (nfmt) {
+				case 0: return Prospero::BufferFormat::k10_10_10_2UNorm;
+				case 1: return Prospero::BufferFormat::k10_10_10_2SNorm;
+				case 2: return Prospero::BufferFormat::k10_10_10_2UScaled;
+				case 3: return Prospero::BufferFormat::k10_10_10_2SScaled;
+				case 4: return Prospero::BufferFormat::k10_10_10_2UInt;
+				case 5: return Prospero::BufferFormat::k10_10_10_2SInt;
+				case 7: return Prospero::BufferFormat::k10_10_10_2Float;
+				default: return Prospero::BufferFormat::kInvalid;
+			}
+		case 10: // 8_8_8_8
+			switch (nfmt) {
+				case 0: return Prospero::BufferFormat::k8_8_8_8UNorm;
+				case 1: return Prospero::BufferFormat::k8_8_8_8SNorm;
+				case 2: return Prospero::BufferFormat::k8_8_8_8UScaled;
+				case 3: return Prospero::BufferFormat::k8_8_8_8SScaled;
+				case 4: return Prospero::BufferFormat::k8_8_8_8UInt;
+				case 5: return Prospero::BufferFormat::k8_8_8_8SInt;
+				default: return Prospero::BufferFormat::kInvalid;
+			}
+		case 11: // 32_32
+			switch (nfmt) {
+				case 4: return Prospero::BufferFormat::k32_32UInt;
+				case 5: return Prospero::BufferFormat::k32_32SInt;
+				case 7: return Prospero::BufferFormat::k32_32Float;
+				default: return Prospero::BufferFormat::kInvalid;
+			}
+		case 12: // 16_16_16_16
+			switch (nfmt) {
+				case 0: return Prospero::BufferFormat::k16_16_16_16UNorm;
+				case 1: return Prospero::BufferFormat::k16_16_16_16SNorm;
+				case 2: return Prospero::BufferFormat::k16_16_16_16UScaled;
+				case 3: return Prospero::BufferFormat::k16_16_16_16SScaled;
+				case 4: return Prospero::BufferFormat::k16_16_16_16UInt;
+				case 5: return Prospero::BufferFormat::k16_16_16_16SInt;
+				case 7: return Prospero::BufferFormat::k16_16_16_16Float;
+				default: return Prospero::BufferFormat::kInvalid;
+			}
+		case 13: // 32_32_32
+			switch (nfmt) {
+				case 4: return Prospero::BufferFormat::k32_32_32UInt;
+				case 5: return Prospero::BufferFormat::k32_32_32SInt;
+				case 7: return Prospero::BufferFormat::k32_32_32Float;
+				default: return Prospero::BufferFormat::kInvalid;
+			}
+		case 14: // 32_32_32_32
+			switch (nfmt) {
+				case 4: return Prospero::BufferFormat::k32_32_32_32UInt;
+				case 5: return Prospero::BufferFormat::k32_32_32_32SInt;
+				case 7: return Prospero::BufferFormat::k32_32_32_32Float;
+				default: return Prospero::BufferFormat::kInvalid;
+			}
+		default: return Prospero::BufferFormat::kInvalid;
+	}
+}
+
 constexpr Prospero::BufferFormat DecodeTBufferFormat(uint32_t data_format, uint32_t number_format) {
 	return static_cast<Prospero::BufferFormat>(((number_format & 0x7u) << 4u) |
 	                                           (data_format & 0xfu));
