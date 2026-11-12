@@ -1,5 +1,6 @@
 #include "graphics/shader/shaderVertexMetadata.h"
 #include "graphics/shader/recompiler/BufferFormat.h"
+#include "graphics/shader/shader.h"
 #include "graphics/shader/shaderBindings.h"
 
 #include <array>
@@ -146,6 +147,35 @@ void TestGfx10BufferFormatDecoding() {
 	res.fields[3] = (0u << 16u) | (12u << 12u);
 	Check(res.HardwareFormat() == Prospero::BufferFormat::k16_16_16_16UNorm,
 	      "res with dfmt 12, nfmt 0 should yield HardwareFormat k16_16_16_16UNorm");
+
+	// Verify destination swizzle mapping for decoded hardware formats:
+	// Missing channels must default to 0.0 (X001, XY01, XYZ1) and 1.0 for W.
+	const auto swizzle_for_format = [](Prospero::BufferFormat fmt) {
+		const auto info     = GetFormatInfo(fmt);
+		const auto channels = info.component_count;
+		return Libs::Graphics::DstSel(4, channels > 1u ? 5u : 0u, channels > 2u ? 6u : 0u,
+		                              channels > 3u ? 7u : 1u);
+	};
+
+	// 1-channel (k16UNorm) -> X001 (4, 0, 0, 1)
+	const auto swizzle1 = swizzle_for_format(Prospero::BufferFormat::k16UNorm);
+	Check(swizzle1 == Libs::Graphics::DstSel(4, 0, 0, 1),
+	      "1-channel format must produce DstSel(4, 0, 0, 1)");
+
+	// 2-channel (k16_16UNorm) -> XY01 (4, 5, 0, 1)
+	const auto swizzle2 = swizzle_for_format(Prospero::BufferFormat::k16_16UNorm);
+	Check(swizzle2 == Libs::Graphics::DstSel(4, 5, 0, 1),
+	      "2-channel format must produce DstSel(4, 5, 0, 1)");
+
+	// 3-channel (k32_32_32Float) -> XYZ1 (4, 5, 6, 1)
+	const auto swizzle3 = swizzle_for_format(Prospero::BufferFormat::k32_32_32Float);
+	Check(swizzle3 == Libs::Graphics::DstSel(4, 5, 6, 1),
+	      "3-channel format must produce DstSel(4, 5, 6, 1)");
+
+	// 4-channel (k16_16_16_16UNorm) -> XYZW (4, 5, 6, 7)
+	const auto swizzle4 = swizzle_for_format(Prospero::BufferFormat::k16_16_16_16UNorm);
+	Check(swizzle4 == Libs::Graphics::DstSel(4, 5, 6, 7),
+	      "4-channel format must produce DstSel(4, 5, 6, 7)");
 }
 
 } // namespace

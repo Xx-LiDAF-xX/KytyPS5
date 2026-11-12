@@ -238,10 +238,20 @@ static void ShaderApplyAttribSemantics(ShaderVertexInputInfo& info,
 			              DstSel(4, channels > 1u ? 5u : 0u, channels > 2u ? 6u : 0u,
 			                     channels > 3u ? 7u : 1u);
 		} else {
-			const auto hw_format = r.HardwareFormat();
+			auto hw_format = r.HardwareFormat();
+			if (hw_format == Prospero::BufferFormat::kInvalid) {
+				const auto raw = r.RawFormat();
+				if (raw > 77u && raw < 128u) {
+					hw_format = static_cast<Prospero::BufferFormat>(raw >> 2u);
+				}
+			}
 			if (hw_format != Prospero::BufferFormat::kInvalid) {
-				r.fields[3] = (r.fields[3] & ~(0x7fu << 12u)) |
-				              (static_cast<uint32_t>(hw_format) << 12u);
+				const auto info     = ShaderRecompiler::Format::GetFormatInfo(hw_format);
+				const auto channels = info.component_count;
+				r.fields[3] = (r.fields[3] & ~((0x7fu << 12u) | 0xfffu)) |
+				              (static_cast<uint32_t>(hw_format) << 12u) |
+				              DstSel(4, channels > 1u ? 5u : 0u, channels > 2u ? 6u : 0u,
+				                     channels > 3u ? 7u : 1u);
 			}
 		}
 		if (offset != 0) {
