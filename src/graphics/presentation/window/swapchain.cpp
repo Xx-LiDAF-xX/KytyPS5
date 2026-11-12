@@ -725,7 +725,7 @@ void Swapchain::DrawLayer(vk::CommandBuffer command, const Presenter::Layer& lay
 	// The main bus ignores alpha.
 	const uint32_t flags =
 	    (layer.premultiplied_alpha ? 1u : 0u) | (m_hdr_active ? 2u : 0u) | (frame.hdr ? 4u : 0u) |
-	    ((frame.linear || frame.image.format == vk::Format::eR16G16B16A16Sfloat) ? 8u : 0u) |
+	    ((frame.linear || (!frame.hdr && frame.image.format == vk::Format::eR16G16B16A16Sfloat)) ? 8u : 0u) |
 	    (layer.bus == 0 ? 16u : 0u);
 	command.pushConstants(m_overlay_layout, vk::ShaderStageFlagBits::eFragment, 0,
 	                      sizeof(flags), &flags);

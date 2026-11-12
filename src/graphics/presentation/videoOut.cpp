@@ -994,8 +994,7 @@ void FlipQueue::Prepare(uint64_t request_id, Graphics::CommandBuffer& buffer) {
 			}
 			const auto& group   = cfg->groups[surface.group_index];
 			source_info         = group.ImageInfo(surface);
-			hdr                 = IsHdrAllowedForTitle() && m_presenter.IsHdrSupported() &&
-			                      Graphics::IsHdrVideoOutPixelFormat(group.attribute.pixel_format);
+			hdr                 = Graphics::IsHdrVideoOutPixelFormat(group.attribute.pixel_format);
 			linear              = Graphics::IsLinearVideoOutPixelFormat(group.attribute.pixel_format);
 			premultiplied_alpha = (group.attribute.option &
 			                       VIDEO_OUT_BUFFER_ATTRIBUTE_OPTION_ALPHA_PREMULTIPLIED) != 0;
