@@ -211,6 +211,8 @@ file(GLOB kyty_emulator_src CONFIGURE_DEPENDS
 	"${KYTY_SOURCE_DIR}/graphics/host_gpu/renderer/image/*.h"
 	"${KYTY_SOURCE_DIR}/graphics/host_gpu/renderer/pipeline/*.cpp"
 	"${KYTY_SOURCE_DIR}/graphics/host_gpu/renderer/pipeline/*.h"
+	"${KYTY_SOURCE_DIR}/graphics/host_gpu/renderer/upscaler/*.cpp"
+	"${KYTY_SOURCE_DIR}/graphics/host_gpu/renderer/upscaler/*.h"
 	"${KYTY_SOURCE_DIR}/graphics/shader/*.cpp"
 	"${KYTY_SOURCE_DIR}/graphics/shader/*.h"
 	"${KYTY_SOURCE_DIR}/graphics/shader/recompiler/*.cpp"
@@ -317,6 +319,8 @@ add_gpu_blit_shader(gpu_blit_color_to_ms_depth gpu_blit_color_to_ms_depth.frag)
 add_gpu_blit_shader(gpu_video_out_overlay gpu_video_out_overlay.frag)
 add_gpu_blit_shader(gpu_imgui_hdr gpu_video_out_overlay.frag -DIMGUI_HDR=1)
 add_gpu_blit_shader(gpu_pssr_linear gpu_pssr_linear.comp)
+add_gpu_blit_shader(gpu_bvh_mirror gpu_bvh_mirror.comp)
+add_gpu_blit_shader(gpu_bvh_walk gpu_bvh_mirror.comp -DWALK=1)
 # At SPIR-V 1.6 glslang declares a task shader's workgroup size with LocalSizeId, which needs maintenance4.
 add_gpu_blit_shader(gpu_mesh_indirect gpu_mesh_indirect.task --target-env spirv1.5)
 list(APPEND kyty_emulator_src ${gpu_blit_shader_headers})
@@ -349,6 +353,7 @@ set(inc_headers
 	${KYTY_THIRD_PARTY_DIR}/cpuinfo/include
 	${KYTY_THIRD_PARTY_DIR}/renderdoc
 	${KYTY_THIRD_PARTY_DIR}/stb
+	${KYTY_THIRD_PARTY_DIR}/ffx-api
 )
 
 if (KYTY_CLANG_CL)
@@ -619,25 +624,23 @@ target_include_directories(image_page_table_tests PRIVATE ${inc_headers})
 add_kyty_full_emulator_test(shader_recompiler_compute_tests "${KYTY_TESTS_DIR}/ShaderRecompilerComputeTests.cpp")
 
 set(gpu_test_generated_dir "${PROJECT_BINARY_DIR}/gpu_test_shaders")
-set(gpu_test_ms_depth_source
-	"${gpu_tiler_shader_dir}/gpu_test_ms_depth.comp")
-set(gpu_test_ms_depth_spv
-	"${gpu_test_generated_dir}/gpu_test_ms_depth.spv")
-set(gpu_test_ms_depth_header
-	"${gpu_test_generated_dir}/gpu_test_ms_depth_spv.h")
-add_custom_command(
-	OUTPUT "${gpu_test_ms_depth_header}"
-	COMMAND ${CMAKE_COMMAND} -E make_directory "${gpu_test_generated_dir}"
-	COMMAND "${KYTY_GLSLANG_VALIDATOR}" -V --target-env vulkan1.3 -Os
-	        -o "${gpu_test_ms_depth_spv}" "${gpu_test_ms_depth_source}"
-	COMMAND ${CMAKE_COMMAND} -DINPUT=${gpu_test_ms_depth_spv}
-	        -DOUTPUT=${gpu_test_ms_depth_header} -DSYMBOL=GPU_TEST_MS_DEPTH_SPV
-	        -P "${KYTY_SOURCE_DIR}/embed_spirv.cmake"
-	DEPENDS "${gpu_test_ms_depth_source}"
-	VERBATIM
-)
-target_sources(shader_recompiler_compute_tests PRIVATE
-	"${gpu_test_ms_depth_header}")
+foreach(test_shader gpu_test_ms_depth gpu_test_ray_query)
+	set(test_shader_spv "${gpu_test_generated_dir}/${test_shader}.spv")
+	set(test_shader_header "${gpu_test_generated_dir}/${test_shader}_spv.h")
+	string(TOUPPER "${test_shader}_SPV" test_shader_symbol)
+	add_custom_command(
+		OUTPUT "${test_shader_header}"
+		COMMAND ${CMAKE_COMMAND} -E make_directory "${gpu_test_generated_dir}"
+		COMMAND "${KYTY_GLSLANG_VALIDATOR}" -V --target-env vulkan1.3 -Os
+		        -o "${test_shader_spv}" "${gpu_tiler_shader_dir}/${test_shader}.comp"
+		COMMAND ${CMAKE_COMMAND} -DINPUT=${test_shader_spv}
+		        -DOUTPUT=${test_shader_header} -DSYMBOL=${test_shader_symbol}
+		        -P "${KYTY_SOURCE_DIR}/embed_spirv.cmake"
+		DEPENDS "${gpu_tiler_shader_dir}/${test_shader}.comp"
+		VERBATIM
+	)
+	target_sources(shader_recompiler_compute_tests PRIVATE "${test_shader_header}")
+endforeach()
 
 add_kyty_full_emulator_test(virtual_memory_allocation_tests "${KYTY_TESTS_DIR}/VirtualMemoryAllocationTests.cpp")
 add_library(kyty_test_gtest STATIC EXCLUDE_FROM_ALL
@@ -651,9 +654,18 @@ target_link_libraries(net_resolver_tests kyty_test_gtest)
 
 add_executable(dlss_tests EXCLUDE_FROM_ALL
 	"${KYTY_TESTS_DIR}/DlssTests.cpp"
-	"${KYTY_SOURCE_DIR}/graphics/host_gpu/renderer/dlss.cpp")
+	"${KYTY_SOURCE_DIR}/graphics/host_gpu/renderer/upscaler/dlss.cpp")
 target_link_libraries(dlss_tests common Vulkan::Headers SDL3::SDL3-static kyty_test_gtest)
 target_include_directories(dlss_tests PRIVATE ${inc_headers})
+
+if (WIN32)
+	add_executable(fsr_tests EXCLUDE_FROM_ALL
+		"${KYTY_TESTS_DIR}/FsrTests.cpp"
+		"${KYTY_SOURCE_DIR}/graphics/host_gpu/renderer/upscaler/dlss.cpp"
+		"${KYTY_SOURCE_DIR}/graphics/host_gpu/renderer/upscaler/fsr.cpp")
+	target_link_libraries(fsr_tests common Vulkan::Headers SDL3::SDL3-static kyty_test_gtest)
+	target_include_directories(fsr_tests PRIVATE ${inc_headers})
+endif()
 
 add_executable(psml_tests EXCLUDE_FROM_ALL
 	"${KYTY_TESTS_DIR}/PsmlTests.cpp"

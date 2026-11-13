@@ -11,6 +11,7 @@
 #include "gpu_blit_shaders/gpu_blit_fs_triangle_spv.h"
 #include "gpu_blit_shaders/gpu_video_out_overlay_spv.h"
 #include "gpu_test_shaders/gpu_test_ms_depth_spv.h"
+#include "gpu_test_shaders/gpu_test_ray_query_spv.h"
 #include "gpu_tiler_shaders/fault_buffer_process_spv.h"
 #include "graphics/guest_gpu/command_processor/commandProcessor.h"
 #include "graphics/guest_gpu/command_processor/pm4Dispatch.h"
@@ -35,6 +36,7 @@
 #include "graphics/host_gpu/renderer/image/tiler.h"
 #include "graphics/host_gpu/renderer/pipeline/descriptors.h"
 #include "graphics/host_gpu/renderer/pipeline/pipelineCache.h"
+#include "graphics/host_gpu/renderer/rayTracing.h"
 #include "graphics/host_gpu/renderer/debug.h"
 #include "graphics/host_gpu/renderer/render.h"
 #include "graphics/host_gpu/renderer/renderContext.h"
@@ -16827,6 +16829,32 @@ public:
         });
 #endif
       }
+      {
+        // PPSA28180 samples a 512x32 R32 Standard256B chain, which ends at 1x1
+        // in mip 9, with LAST_LEVEL 10; the extra level has no storage.
+        constexpr uint64_t address = base + 0x200000;
+        ShaderRecompiler::IR::DescriptorValue descriptor{};
+        descriptor.dwords = {static_cast<uint32_t>(address >> 8u),
+                             0xc1400000u,
+                             0x0007c07fu,
+                             0x90190facu,
+                             0,
+                             0x00700090u,
+                             0,
+                             0};
+        descriptor.dword_count = 8;
+        const auto chain = RenderExecutorTestAccess::ResolveTexture(
+            executor, sampled_overwide_resource, descriptor);
+        descriptor.dwords[3] += 1u << 16u;
+        const auto past = RenderExecutorTestAccess::ResolveTexture(
+            executor, sampled_overwide_resource, descriptor);
+        Require(name, "LAST_LEVEL past a complete chain",
+                past.image_id == chain.image_id &&
+                    past.desc.info.data.size == chain.desc.info.data.size &&
+                    past.desc.view_info.level_count == 10,
+                "a view past MAX_MIP of a complete chain changed its stored "
+                "layout");
+      }
       auto plain_mipped_storage_binding =
           RenderExecutorTestAccess::ResolveTexture(executor, storage_resource,
                                                    mipped_storage_descriptor);
@@ -23548,6 +23576,7 @@ public:
   }
 
 #include "PssrGpuTests.inc"
+#include "BvhMirrorGpuTests.inc"
 
 private:
   bool m_rasterization_supported = true;
@@ -23755,9 +23784,13 @@ private:
     available_robustness2.pNext = &available_pipeline_robustness;
     vk::PhysicalDeviceMeshShaderFeaturesEXT available_mesh{};
     available_mesh.pNext = &available_robustness2;
+    vk::PhysicalDeviceAccelerationStructureFeaturesKHR available_acceleration_structure{};
+    available_acceleration_structure.pNext = &available_mesh;
+    vk::PhysicalDeviceRayQueryFeaturesKHR available_ray_query{};
+    available_ray_query.pNext = &available_acceleration_structure;
     vk::PhysicalDeviceFeatures2 available_features2{};
     available_features2.sType = vk::StructureType::ePhysicalDeviceFeatures2;
-    available_features2.pNext = &available_mesh;
+    available_features2.pNext = &available_ray_query;
     m_physical_device.getFeatures2(&available_features2);
     vk::PhysicalDeviceRobustness2PropertiesEXT robustness2_properties{};
     vk::PhysicalDeviceProperties2 properties2{};
@@ -23819,6 +23852,10 @@ private:
     Require("VulkanHarness", "graphics",
             available_mesh.meshShader == true && available_mesh.taskShader == true,
             "mesh and task shaders are not supported");
+    Require("VulkanHarness", "ray query",
+            available_acceleration_structure.accelerationStructure == true &&
+                available_ray_query.rayQuery == true,
+            "acceleration structures and ray queries are not supported");
     m_rasterization_supported = available_features.fillModeNonSolid &&
                                 available_features.tessellationShader &&
                                 available_features.drawIndirectFirstInstance &&
@@ -23913,7 +23950,13 @@ private:
     vk::PhysicalDeviceMeshShaderFeaturesEXT mesh{};
     mesh.meshShader = mesh.taskShader = true;
     mesh.pNext = &conditional_rendering;
-    device_info.pNext = &mesh;
+    vk::PhysicalDeviceAccelerationStructureFeaturesKHR acceleration_structure{};
+    acceleration_structure.accelerationStructure = true;
+    acceleration_structure.pNext = &mesh;
+    vk::PhysicalDeviceRayQueryFeaturesKHR ray_query{};
+    ray_query.rayQuery = true;
+    ray_query.pNext = &acceleration_structure;
+    device_info.pNext = &ray_query;
     vk::PhysicalDeviceFeatures device_features{};
     device_features.shaderStorageImageWriteWithoutFormat = true;
     device_features.shaderStorageImageMultisample = available_features.shaderStorageImageMultisample;
@@ -23941,7 +23984,10 @@ private:
         VK_KHR_SHADER_CLOCK_EXTENSION_NAME,
         VK_EXT_IMAGE_VIEW_MIN_LOD_EXTENSION_NAME,
         VK_EXT_CONDITIONAL_RENDERING_EXTENSION_NAME,
-        VK_EXT_MESH_SHADER_EXTENSION_NAME};
+        VK_EXT_MESH_SHADER_EXTENSION_NAME,
+        VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+        VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+        VK_KHR_RAY_QUERY_EXTENSION_NAME};
     if (m_rasterization_supported) {
       device_extensions.push_back(VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME);
       device_extensions.push_back(VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME);
@@ -56882,6 +56928,11 @@ int main(int argc, char **argv) {
     CheckPm4ContextStateOperations(vulkan.RuntimeRenderer());
     return 0;
   }
+  if (argc == 2 && std::strcmp(argv[1], "--bvh-mirror-only") == 0) {
+    VulkanHarness vulkan;
+    vulkan.CheckBvhMirror();
+    return 0;
+  }
   if (argc == 2 && std::strcmp(argv[1], "--pssr-only") == 0) {
     VulkanHarness vulkan;
     vulkan.CheckPssr();
@@ -57274,6 +57325,7 @@ int main(int argc, char **argv) {
   vulkan.CheckNullTextureDescriptors();
   vulkan.CheckBdaPageTableUploads();
   vulkan.CheckBdaSyncUploads();
+  vulkan.CheckBvhMirror();
   vulkan.CheckFaultBufferScan();
   vulkan.CheckFaultRecordsOverflow();
   vulkan.CheckLargeSparseImageUpload();
