@@ -238,20 +238,24 @@ static void ShaderApplyAttribSemantics(ShaderVertexInputInfo& info,
 			              DstSel(4, channels > 1u ? 5u : 0u, channels > 2u ? 6u : 0u,
 			                     channels > 3u ? 7u : 1u);
 		} else {
-			auto hw_format = r.HardwareFormat();
-			if (hw_format == Prospero::BufferFormat::kInvalid) {
-				const auto raw = r.RawFormat();
-				if (raw > 77u && raw < 128u) {
-					hw_format = static_cast<Prospero::BufferFormat>(raw >> 2u);
-				}
-			}
-			if (hw_format != Prospero::BufferFormat::kInvalid) {
-				const auto info     = ShaderRecompiler::Format::GetFormatInfo(hw_format);
-				const auto channels = info.component_count;
-				r.fields[3] = (r.fields[3] & ~((0x7fu << 12u) | 0xfffu)) |
-				              (static_cast<uint32_t>(hw_format) << 12u) |
-				              DstSel(4, channels > 1u ? 5u : 0u, channels > 2u ? 6u : 0u,
-				                     channels > 3u ? 7u : 1u);
+			// The format bits hold either a dense Prospero::BufferFormat enum or the
+			// GFX10 dfmt/nfmt encoding, and the two are indistinguishable per field.
+			// Unassigned dense values and matching component counts decode as hardware;
+			// a valid dense format with a different component count is a guest enum
+			// whose format and swizzle are already meaningful and must be left alone.
+			const auto raw        = r.RawFormat();
+			const auto dense      = static_cast<Prospero::BufferFormat>(raw);
+			const auto hw_format  = r.HardwareFormat();
+			const auto hw_info    = ShaderRecompiler::Format::GetFormatInfo(hw_format);
+			const auto dense_info = ShaderRecompiler::Format::GetFormatInfo(dense);
+			if (hw_info.component_count != 0u &&
+			    (dense_info.component_count == 0u ||
+			     hw_info.component_count == dense_info.component_count)) {
+				// Rewrite the format bits so the fetch prolog reads the decoded format.
+				// The descriptor swizzle stays as authored: hardware expands the source
+				// channels before applying it, so the guest selectors remain valid.
+				r.fields[3] = (r.fields[3] & ~(0x7fu << 12u)) |
+				              (static_cast<uint32_t>(hw_format) << 12u);
 			}
 		}
 		if (offset != 0) {
