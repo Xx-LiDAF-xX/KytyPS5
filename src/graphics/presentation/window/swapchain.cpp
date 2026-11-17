@@ -380,7 +380,8 @@ void Swapchain::Create() {
 	// during creation, the next presentation will detect the newer size.
 	{
 		Common::LockGuard lock(m_window.mutex);
-		m_window_extent = {graphics.screen_width, graphics.screen_height};
+		m_window_extent        = {graphics.screen_width, graphics.screen_height};
+		m_window.surface_dirty = false;
 	}
 	EXIT_IF(m_window_extent.width == 0);
 	EXIT_IF(m_window_extent.height == 0);
@@ -571,7 +572,8 @@ void Swapchain::Recreate(bool surface_lost) {
 
 bool Swapchain::NeedsResize() const {
 	Common::LockGuard lock(m_window.mutex);
-	return m_handle == nullptr || m_window_extent.width != m_window.graphic_ctx.screen_width ||
+	return m_handle == nullptr || m_window.surface_dirty ||
+	       m_window_extent.width != m_window.graphic_ctx.screen_width ||
 	       m_window_extent.height != m_window.graphic_ctx.screen_height;
 }
 
@@ -729,7 +731,7 @@ void Swapchain::DrawLayer(vk::CommandBuffer command, const Presenter::Layer& lay
 	// The main bus ignores alpha.
 	const uint32_t flags =
 	    (layer.premultiplied_alpha ? 1u : 0u) | (m_hdr_active ? 2u : 0u) | (frame.hdr ? 4u : 0u) |
-	    ((frame.linear || (!frame.hdr && frame.image.format == vk::Format::eR16G16B16A16Sfloat)) ? 8u : 0u) |
+	    ((frame.linear || frame.image.format == vk::Format::eR16G16B16A16Sfloat) ? 8u : 0u) |
 	    (layer.bus == 0 ? 16u : 0u);
 	command.pushConstants(m_overlay_layout, vk::ShaderStageFlagBits::eFragment, 0,
 	                      sizeof(flags), &flags);
@@ -760,7 +762,8 @@ void Swapchain::DrawLayer(vk::CommandBuffer command, const Presenter::Layer& lay
 void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* source,
                                       const Presenter::Layer& overlay, bool draw_system_overlay) {
 	auto       vk_command      = command.Handle();
-	const bool convert_source  = source != nullptr && source->hdr != m_hdr_active;
+	const bool convert_source =
+	    source != nullptr && (source->hdr != m_hdr_active || source->linear);
 	const bool blit_source     = source != nullptr && !convert_source;
 	const bool draw_overlay    = overlay.frame != nullptr;
 	const bool draw_attachment = convert_source || draw_overlay || draw_system_overlay;
