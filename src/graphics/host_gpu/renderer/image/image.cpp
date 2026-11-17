@@ -283,8 +283,6 @@ void Image::Upload(std::span<const vk::BufferImageCopy> copies, vk::Buffer buffe
 	dependency.imageMemoryBarrierCount = 0;
 	dependency.pImageMemoryBarriers    = nullptr;
 	command.pipelineBarrier2(dependency);
-	Transit(vk::ImageLayout::eGeneral,
-	        vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eTransferRead, {}, command);
 }
 
 void Image::Download(std::span<const vk::BufferImageCopy> copies, vk::Buffer buffer,
@@ -397,8 +395,6 @@ void Image::CopyImage(Image& source) {
 	Transit(vk::ImageLayout::eTransferDstOptimal, vk::AccessFlagBits2::eTransferWrite, {}, command);
 	command.copyImage(source.backing.image, vk::ImageLayout::eTransferSrcOptimal, backing.image,
 	                  vk::ImageLayout::eTransferDstOptimal, levels, copies.data());
-	Transit(vk::ImageLayout::eGeneral,
-	        vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eTransferRead, {}, command);
 }
 
 void Image::Resolve(Image& source, const ImageSubresourceRange& source_range,
@@ -564,8 +560,6 @@ void Image::CopyImageWithBuffer(Image& source, Buffer& buffer, TileManager& tile
 			}
 		}
 	}
-	Transit(vk::ImageLayout::eGeneral,
-	        vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eTransferRead, {}, command);
 }
 
 void Image::CopyMip(Image& source, uint32_t mip, uint32_t layer) {
@@ -597,8 +591,6 @@ void Image::CopyMip(Image& source, uint32_t mip, uint32_t layer) {
 	               command);
 	command.copyImage(source.backing.image, vk::ImageLayout::eTransferSrcOptimal, backing.image,
 	                  vk::ImageLayout::eTransferDstOptimal, copy_count, copies.data());
-	Transit(vk::ImageLayout::eGeneral,
-	        vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eTransferRead, {}, command);
 }
 
 namespace ImageOps {
@@ -741,7 +733,7 @@ Image::Image(GraphicContext& graphics, CommandScheduler& scheduler, const ImageI
 }
 
 uint64_t Image::HashGuestEdges() const {
-	std::array<uint8_t, TRACKER_PAGE_SIZE * 2> bytes {};
+	std::array<uint8_t, TRACKER_PAGE_SIZE * 2> bytes;
 	const auto                                 range = info.data;
 	const uint64_t head_end =
 	    std::min(range.End(), Common::AlignUp(range.address, TRACKER_PAGE_SIZE));

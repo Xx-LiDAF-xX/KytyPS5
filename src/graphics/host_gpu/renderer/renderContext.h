@@ -15,6 +15,7 @@
 #include "graphics/host_gpu/renderer/pipeline/descriptorHeap.h"
 #include "graphics/host_gpu/renderer/pipeline/imageHeap.h"
 #include "graphics/host_gpu/renderer/pipeline/pipelineCache.h"
+#include "graphics/host_gpu/renderer/rayTracing.h"
 #include "kernel/eventQueue.h"
 
 #include <atomic>
@@ -53,6 +54,7 @@ public:
 	TextureCache&       GetTextureCache() { return m_texture_cache; }
 	RenderExecutor&     GetRenderExecutor() { return m_render_executor; }
 	OcclusionQueries&   GetOcclusionQueries() { return m_occlusion_queries; }
+	RayTracing*         GetRayTracing() { return m_ray_tracing.get(); } // With ray queries only.
 
 	[[nodiscard]] bool HandleFault(PageFaultAccess access, uint64_t fault_vaddr) noexcept;
 	[[nodiscard]] bool InvalidateMemory(uint64_t vaddr, uint64_t size);
@@ -93,6 +95,8 @@ private:
 	std::unique_ptr<GuestGpu> m_gpu;
 	VideoOut::VideoOutDriver* m_video_out = nullptr;
 	bool                      m_fault_process_pending = false;
+
+	std::unique_ptr<RayTracing> m_ray_tracing;
 
 	mutable Common::Mutex                m_interrupt_mutex;
 	std::vector<InterruptEqRegistration> m_interrupt_eqs;
