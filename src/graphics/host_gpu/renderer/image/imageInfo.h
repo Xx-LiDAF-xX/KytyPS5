@@ -44,6 +44,13 @@ struct ImageSubresources {
 	auto     operator<=>(const ImageSubresources&) const = default;
 };
 
+// The level and first layer of a container that a single-level image occupies, or -1.
+struct ImageSubresource {
+	int32_t mip                                       = -1;
+	int32_t layer                                     = -1;
+	bool    operator==(const ImageSubresource&) const = default;
+};
+
 struct ImageSubresourceRange {
 	uint32_t base_level                                      = 0;
 	uint32_t level_count                                     = 1;
@@ -127,18 +134,7 @@ struct ImageInfo {
 		       bytes_per_block == other.bytes_per_block &&
 		       GetColorTransform() == other.GetColorTransform();
 	}
-	[[nodiscard]] int32_t MipOf(const ImageInfo& container) const noexcept {
-		if (container.resources.levels > container.mip_layout.size()) {
-			return -1;
-		}
-		for (uint32_t level = 0; level < container.resources.levels; level++) {
-			if (SliceOf(container, static_cast<int32_t>(level)) >= 0) {
-				return static_cast<int32_t>(level);
-			}
-		}
-		return -1;
-	}
-	[[nodiscard]] int32_t SliceOf(const ImageInfo& container, int32_t mip) const noexcept;
+	[[nodiscard]] ImageSubresource SubresourceOf(const ImageInfo& container) const noexcept;
 };
 
 struct ImageViewInfo {
@@ -308,16 +304,27 @@ inline constexpr uint64_t VIDEO_OUT_PIXEL_FORMAT_B16_G16_R16_A16_FLOAT_FOR_BT210
 	}
 }
 
-[[nodiscard]] constexpr bool IsLinearVideoOutPixelFormat(uint64_t format) {
+// Overlay shader source flags of a VideoOut buffer: PQ (4) and linear (8).
+[[nodiscard]] constexpr uint32_t VideoOutSourceFlags(uint64_t format) {
+	const uint32_t pq = IsHdrVideoOutPixelFormat(format) ? 4u : 0u;
 	switch (format) {
 		case 0x8100000622000000ull:
 		case 0x8100000600000000ull:
 		case 0xc001000622000000ull:
 		case 0xc001000600000000ull:
 		case VIDEO_OUT_PIXEL_FORMAT_R16_G16_B16_A16_FLOAT_FOR_BT2100_PQ:
-		case VIDEO_OUT_PIXEL_FORMAT_B16_G16_R16_A16_FLOAT_FOR_BT2100_PQ: return true;
-		default: return false;
+		case VIDEO_OUT_PIXEL_FORMAT_B16_G16_R16_A16_FLOAT_FOR_BT2100_PQ: return pq | 8u;
+		default: return pq;
 	}
+}
+
+// Linear sources, and PQ sources on an SDR target, are drawn through the overlay shader.
+[[nodiscard]] constexpr bool VideoOutSourceNeedsDraw(uint32_t source_flags, bool hdr_target) {
+	return (source_flags & 8u) != 0 || ((source_flags & 4u) != 0 && !hdr_target);
+}
+
+[[nodiscard]] constexpr bool IsLinearVideoOutPixelFormat(uint64_t format) {
+	return (VideoOutSourceFlags(format) & 8u) != 0;
 }
 
 inline constexpr std::array<VideoOutFormatPolicy, 12> VIDEO_OUT_FORMAT_POLICIES {{

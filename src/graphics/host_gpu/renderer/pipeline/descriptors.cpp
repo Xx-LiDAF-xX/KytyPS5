@@ -877,11 +877,13 @@ void RenderExecutor::FindBuffers(std::span<PreparedBindings* const> stages) {
 				const auto  limit =
 				    uint64_t {graphics.GetPhysicalDeviceProperties().limits.maxStorageBufferRange} -
 				    (graphics.StorageMinAlignment() - 1);
-				size = std::min({size, uint64_t {256} * 1024 * 1024, limit});
-			}
-			// Finite GPU descriptors can span sparse PRT holes; clamp only oversized/sentinel ranges.
-			if (size >= (uint64_t {1} << 30u) || descriptor.NumRecords() == UINT32_MAX) {
-				size = Libs::LibKernel::Memory::ClampRangeSize(address, size);
+				size = Libs::LibKernel::Memory::ClampRangeSize(
+				    address, std::min({size, uint64_t {256} * 1024 * 1024, limit}));
+			} else if (size >= (uint64_t {1} << 30u)) {
+				//  PPSA18026
+				// Finite descriptors can span sparse PRT holes; oversized pool windows are mapped
+				// in pieces, so they end at their last committed range.
+				size = Libs::LibKernel::Memory::ClampRangeSize(address, size, true);
 			}
 			if (descriptor.NumRecords() == UINT32_MAX && !program.info.buffers[resource].written) {
 				const auto existing_id = cache.FindExistingBuffer(address);
@@ -983,7 +985,7 @@ void RenderExecutor::RebindImages(PreparedBindings& prepared) {
 }
 
 void RenderExecutor::PrepareGraphicsBindings(std::span<PreparedBindings* const> stages,
-                                             std::span<RenderColorInfo>         colors,
+                                             DrawTargets&                       targets,
                                              bool                               rebind_buffers) {
 	bool uses_dma        = false;
 	bool uses_image_heap = false;
@@ -1002,7 +1004,7 @@ void RenderExecutor::PrepareGraphicsBindings(std::span<PreparedBindings* const> 
 		RebindImages(*stage);
 	}
 	auto& cache = m_context.GetTextureCache();
-	for (auto& target: colors) {
+	for (auto& target: std::span {targets.colors, targets.color_count}) {
 		EXIT_IF(!target.image_id);
 		auto& old_image = cache.m_slot_images[target.image_id];
 		if (!old_image.registered || old_image.binding.needs_rebind) {
@@ -1011,6 +1013,25 @@ void RenderExecutor::PrepareGraphicsBindings(std::span<PreparedBindings* const> 
 			target.desc.view_info.base_layer = target.guest_array_layer;
 			target.image_id = cache.FindImage(target.desc);
 			BindRenderTarget(target.image_id);
+		}
+	}
+	// A sampled view can grow the depth image into a larger one at the same address.
+	if (auto& depth = targets.depth; depth.image_id) {
+		auto& old_image = cache.m_slot_images[depth.image_id];
+		if (!old_image.registered || old_image.binding.needs_rebind) {
+			old_image.binding = {};
+			depth.image_id    = cache.FindImage(depth.desc);
+			BindRenderTarget(depth.image_id);
+			// Depth found again from a color copy frees the image a binding of this draw holds.
+			for (auto* stage: stages) {
+				for (const auto& binding: stage->images) {
+					const auto* bound = cache.m_slot_images.try_get(binding.image_id);
+					if (binding.image_id &&
+					    (bound == nullptr || !bound->registered || bound->binding.needs_rebind)) {
+						EXIT("TextureCache: depth target rediscovery replaced a bound image\n");
+					}
+				}
+			}
 		}
 	}
 	// Discovery can read back PS5 metadata and submit the scheduler. Reserve draw buffers only

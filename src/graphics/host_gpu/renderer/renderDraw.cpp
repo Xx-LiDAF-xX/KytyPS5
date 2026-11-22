@@ -1294,9 +1294,10 @@ static void LogVertexProbeIfNeeded(const DrawCallInfo& draw, const DrawRenderSta
 		const auto& buffer = input.buffers[destination.buffer_index];
 		const auto  info   = ShaderRecompiler::Format::GetFormatInfo(resource.Format());
 		const auto  offset = static_cast<uint32_t>(resource.Base48() - buffer.addr);
-		const auto  host   = i < static_cast<int>(module.vertex_formats.size())
-		                         ? vk::to_string(module.vertex_formats[i])
-		                         : std::string("?");
+		const auto  host_fmt = VulkanFormat(resource.Format());
+		const auto  host     = host_fmt != vk::Format::eUndefined
+		                           ? vk::to_string(host_fmt)
+		                           : std::string("?");
 		LOGF("VertexProbe[%u]:  attr[%d] v%d+%d fmt=%u type=%d comps=%u bits=%u/%u/%u/%u "
 		     "packed=%d bytes=%u host=%s stride=%u offset=%u recs=%u buf=%d bstride=%u "
 		     "baddr=0x%010" PRIx64 " fetch=%u\n",
@@ -1656,8 +1657,7 @@ void RenderExecutor::ExecutePreparedDraw(CommandBuffer& buffer, const DrawCallIn
 		descriptor_stages[stage_count++] = &bindings.pixel;
 	}
 	const auto stages = std::span {descriptor_stages.data(), stage_count};
-	PrepareGraphicsBindings(stages, std::span {m_targets.colors, m_targets.color_count},
-	                        /*rebind_buffers=*/false);
+	PrepareGraphicsBindings(stages, m_targets, /*rebind_buffers=*/false);
 	PreparedVertexBuffers vertex_bindings;
 	PreparedIndexBuffer   index_binding;
 	vk::DeviceAddress     mesh_indices = 0;

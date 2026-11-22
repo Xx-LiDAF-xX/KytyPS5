@@ -203,12 +203,6 @@ struct VideoOutConfig {
 	std::array<uint64_t, VIDEO_OUT_BUFFER_NUM_MAX> labels {};
 };
 
-static bool IsHdrAllowedForTitle() {
-	int32_t attribute = 0;
-	return !Loader::SystemContentParamSfoGetInt("ATTRIBUTE", &attribute) ||
-	       (attribute & 0x20000000) != 0;
-}
-
 class FlipQueue {
 public:
 	FlipQueue(Graphics::Presenter& presenter, uint32_t width, uint32_t height)
@@ -280,9 +274,6 @@ public:
 	FlipQueue&               GetFlipQueue() { return m_flip_queue; }
 	Graphics::RenderContext& Renderer() const noexcept { return m_renderer; }
 	bool                     IsHdrSupported() const noexcept { return m_presenter.IsHdrSupported(); }
-	bool                     IsHdrActive() const noexcept {
-		return IsHdrAllowedForTitle() && IsHdrSupported();
-	}
 
 	void VblankBegin();
 	void VblankEnd();
@@ -993,8 +984,7 @@ void FlipQueue::Prepare(uint64_t request_id, Graphics::CommandBuffer& buffer) {
 	Graphics::ImageInfo source_info;
 	bool                current = false;
 	bool                premultiplied_alpha = false;
-	bool                hdr                 = false;
-	bool                linear              = false;
+	uint64_t            video_out_format    = 0;
 	bool                headset             = false;
 	{
 		Common::LockGuard lock(cfg->mutex);
@@ -1010,8 +1000,7 @@ void FlipQueue::Prepare(uint64_t request_id, Graphics::CommandBuffer& buffer) {
 			}
 			const auto& group   = cfg->groups[surface.group_index];
 			source_info         = group.ImageInfo(surface);
-			hdr                 = Graphics::IsHdrVideoOutPixelFormat(group.attribute.pixel_format);
-			linear              = Graphics::IsLinearVideoOutPixelFormat(group.attribute.pixel_format);
+			video_out_format    = group.attribute.pixel_format;
 			premultiplied_alpha = (group.attribute.option &
 			                       VIDEO_OUT_BUFFER_ATTRIBUTE_OPTION_ALPHA_PREMULTIPLIED) != 0;
 		}
@@ -1031,7 +1020,7 @@ void FlipQueue::Prepare(uint64_t request_id, Graphics::CommandBuffer& buffer) {
 		frame = &m_presenter.PrepareBlankFrame(m_width, m_height,
 		                                       index == VIDEO_OUT_BUFFER_INDEX_BLACK, &buffer);
 	} else {
-		frame = &m_presenter.PrepareFrame(buffer, source_info, hdr, headset, linear);
+		frame = &m_presenter.PrepareFrame(buffer, source_info, video_out_format, headset);
 		if (headset) {
 			g_headset_mirror = true;
 		}
@@ -1594,18 +1583,6 @@ KYTY_SYSV_ABI int VideoOutGetFlipStatus(int handle, VideoOutFlipStatus* status) 
 	*status = ctx->flip_status;
 	ctx->mutex.Unlock();
 
-	LOGF("\t count = %" PRIu64 "\n"
-	     "\t processTime = %" PRIu64 "\n"
-	     "\t processTimeCounter = %" PRIu64 "\n"
-	     "\t submitProcessTimeCounter = %" PRIu64 "\n"
-	     "\t flipArg = %" PRId64 "\n"
-	     "\t gcQueueNum = %d\n"
-	     "\t flipPendingNum = %d\n"
-	     "\t currentBuffer = %d\n",
-	     status->count, status->processTime, status->processTimeCounter,
-	     status->submitProcessTimeCounter, status->flipArg, status->gcQueueNum,
-	     status->flipPendingNum, status->currentBuffer);
-
 	return OK;
 }
 
@@ -1643,11 +1620,6 @@ KYTY_SYSV_ABI int VideoOutGetVblankStatus(int handle, VideoOutVblankStatus* stat
 	ctx->mutex.Lock();
 	*status = ctx->vblank_status;
 	ctx->mutex.Unlock();
-
-	LOGF("\t count = %" PRIu64 "\n"
-	     "\t processTime = %" PRIu64 "\n"
-	     "\t processTimeCounter = %" PRIu64 "\n",
-	     status->count, status->processTime, status->processTimeCounter);
 
 	return OK;
 }
@@ -1738,13 +1710,15 @@ KYTY_SYSV_ABI int VideoOutGetOutputStatus(int handle, VideoOutOutputStatus* stat
 		return VIDEO_OUT_ERROR_INVALID_HANDLE;
 	}
 
+	int32_t attribute  = 0x20000000; // Without a param file, HDR stays allowed.
 	int32_t attribute3 = 0;
+	Loader::SystemContentParamSfoGetInt("ATTRIBUTE", &attribute);
 	Loader::SystemContentParamSfoGetInt("ATTRIBUTE3", &attribute3);
 	ctx->mutex.Lock();
 	// Primary output reports 4K unless param.json Video-out Info enables resolution detection.
 	status->resolution =
 	    ((attribute3 & 4) != 0 && driver.width < 3840 && driver.height < 2160 ? 1u : 2u);
-	status->dynamicRange = driver.IsHdrActive() ? 2u : 1u;
+	status->dynamicRange = (attribute & 0x20000000) != 0 && driver.IsHdrSupported() ? 2u : 1u;
 	status->refreshRate =
 	    (ctx->output_mode == VIDEO_OUT_OUTPUT_MODE_119_88HZ || Config::GetVblankFrequency() >= 119
 	         ? VIDEO_OUT_REFRESH_RATE_119_88HZ

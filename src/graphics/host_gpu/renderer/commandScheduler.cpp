@@ -183,18 +183,14 @@ void CommandScheduler::PopPendingOperations() {
 	if (earliest == UINT64_MAX || m_submitted_tick.load(std::memory_order_acquire) < earliest) {
 		return;
 	}
-	if (!m_master.IsFree(earliest)) {
-		m_master.Refresh();
-		if (!m_master.IsFree(earliest)) {
-			return;
-		}
+	if (!IsFree(earliest)) {
+		return;
 	}
 	for (;;) {
 		PendingOperation operation;
 		{
 			std::lock_guard lock(m_operation_mutex);
-			if (m_pending_operations.empty() ||
-			    !m_master.IsFree(m_pending_operations.front().tick)) {
+			if (m_pending_operations.empty() || !IsFree(m_pending_operations.front().tick)) {
 				m_earliest_pending_tick.store(m_pending_operations.empty()
 				                                  ? UINT64_MAX
 				                                  : m_pending_operations.front().tick,

@@ -9,6 +9,7 @@
 #include "common/logging/log.h"
 #include "common/stringUtils.h"
 #include "common/threads.h"
+#include "kernel/descriptors.h"
 #include "kernel/memory.h"
 #include "libs/errno.h"
 #include "libs/libs.h"
@@ -32,7 +33,7 @@ namespace Libs::LibKernel::FileSystem {
 
 LIB_NAME("libkernel", "libkernel");
 
-constexpr int      DESCRIPTOR_MIN = 3;
+using Descriptors::DESCRIPTOR_MIN;
 constexpr uint64_t DIR_BLOCK_SIZE = 512;
 
 enum class SpecialFile {
@@ -57,8 +58,8 @@ public:
 	void Mount(const std::filesystem::path& folder, const std::string& point, bool read_only);
 	void Umount(const std::string& folder_or_point);
 
-	[[nodiscard]] std::filesystem::path ResolvePath(const std::string& mounted_name,
-	                                                bool*              read_only = nullptr);
+	[[nodiscard]] std::filesystem::path ResolvePath(std::string_view mounted_name,
+	                                                bool*            read_only = nullptr);
 	[[nodiscard]] bool                  IsMountPoint(const std::string& point);
 
 private:
@@ -207,16 +208,13 @@ int FileDescriptors::CreateDescriptor() {
 	file->sync_writes = false;
 	file->special     = SpecialFile::None;
 
-	int files_num = static_cast<int>(m_files.size());
-	for (int index = 0; index < files_num; index++) {
-		if (m_files[index] == nullptr) {
-			m_files[index] = file;
-			return index + DESCRIPTOR_MIN;
-		}
+	const int  d     = Descriptors::Allocate();
+	const auto index = static_cast<size_t>(d - DESCRIPTOR_MIN);
+	if (index >= m_files.size()) {
+		m_files.resize(index + 1);
 	}
-
-	m_files.push_back(file);
-	return static_cast<int>(m_files.size()) + DESCRIPTOR_MIN - 1;
+	m_files[index] = file;
+	return d;
 }
 
 void FileDescriptors::DeleteDescriptor(int d) {
@@ -235,6 +233,7 @@ void FileDescriptors::DeleteDescriptor(int d) {
 
 	delete m_files[index];
 	m_files[index] = nullptr;
+	Descriptors::Release(d);
 }
 
 File* FileDescriptors::GetFile(int d) {
@@ -308,7 +307,7 @@ void MountPoints::Umount(const std::string& folder_or_point) {
 }
 
 // Guests join mount points and names with extra slashes (e.g. "/addcont0//file").
-static std::string NormalizeGuestPath(const std::string& mounted_name) {
+static std::string NormalizeGuestPath(std::string_view mounted_name) {
 	std::string normalized = Common::FixFilenameSlash(mounted_name);
 	normalized.erase(std::unique(normalized.begin(), normalized.end(),
 	                             [](char a, char b) { return a == '/' && b == '/'; }),
@@ -374,7 +373,7 @@ static bool HasWindowsForbiddenFilenameCharacter(const std::string& relative_pat
 }
 #endif
 
-std::filesystem::path MountPoints::ResolvePath(const std::string& mounted_name, bool* read_only) {
+std::filesystem::path MountPoints::ResolvePath(std::string_view mounted_name, bool* read_only) {
 	Common::LockGuard lock(m_mutex);
 
 	const std::string normalized = NormalizeGuestPath(mounted_name);
@@ -401,7 +400,8 @@ std::filesystem::path MountPoints::ResolvePath(const std::string& mounted_name, 
 
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 		if (HasWindowsForbiddenFilenameCharacter(rel_path)) {
-			::printf("FileSystem: Windows-incompatible guest filename: %s\n", mounted_name.c_str());
+			::printf("FileSystem: Windows-incompatible guest filename: %.*s\n",
+			         static_cast<int>(mounted_name.size()), mounted_name.data());
 		}
 		return p.dir / native_rel_path;
 #else
@@ -1442,12 +1442,10 @@ int KYTY_SYSV_ABI KernelRename(const char* from, const char* to) {
 		return KERNEL_ERROR_EINVAL;
 	}
 
-	auto from_path = std::string(from);
-	auto to_path   = std::string(to);
 	bool from_read_only = false;
 	bool to_read_only   = false;
-	auto real_from      = g_mount_points->ResolvePath(from_path, &from_read_only);
-	auto real_to        = g_mount_points->ResolvePath(to_path, &to_read_only);
+	auto real_from      = g_mount_points->ResolvePath(from, &from_read_only);
+	auto real_to        = g_mount_points->ResolvePath(to, &to_read_only);
 	if (from_read_only || to_read_only) {
 		return KERNEL_ERROR_EROFS;
 	}
@@ -1532,7 +1530,7 @@ int KYTY_SYSV_ABI KernelMkdir(const char* path, uint16_t mode) {
 	     path, mode);
 
 	bool read_only = false;
-	auto real_name = g_mount_points->ResolvePath(std::string(path), &read_only);
+	auto real_name = g_mount_points->ResolvePath(path, &read_only);
 	if (real_name.empty()) {
 		return KERNEL_ERROR_ENOENT;
 	}

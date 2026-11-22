@@ -11,6 +11,7 @@
 #include "graphics/guest_gpu/graphicsRun.h"
 #include "graphics/guest_gpu/hardwareContext.h"
 #include "graphics/host_gpu/renderer/renderContext.h"
+#include "graphics/shader/recompiler/BufferFormat.h"
 #include "graphics/shader/recompiler/ShaderRecompiler.h"
 #include "graphics/shader/recompiler/frontend/decode/ShaderDecoder.h"
 #include "graphics/shader/shaderCompiler.h"
@@ -451,6 +452,24 @@ static void ShaderGetStaticInputInfoCS(const HW::ComputeShaderInfo& regs,
 	info.workgroup_register = regs.cs_regs.user_sgpr;
 }
 
+// The part of each raw buffer format a vertex module depends on: its channel count and, for
+// integer formats, its component type (Float otherwise).
+constexpr auto kVertexFetchFormats = [] {
+	std::array<uint8_t, 128> formats {};
+	for (uint32_t raw = 0; raw < formats.size(); raw++) {
+		const auto format =
+		    ShaderRecompiler::Format::GetFormatInfo(static_cast<Prospero::BufferFormat>(raw));
+		auto type = ShaderRecompiler::Format::ComponentType::Float;
+		if (format.type == ShaderRecompiler::Format::ComponentType::Uint ||
+		    format.type == ShaderRecompiler::Format::ComponentType::Sint) {
+			type = format.type;
+		}
+		formats[raw] =
+		    static_cast<uint8_t>(format.component_count | static_cast<uint32_t>(type) << 3u);
+	}
+	return formats;
+}();
+
 void BuildStageStaticKey(const ShaderVertexInputInfo& info, std::vector<uint32_t>& key) {
 	EXIT_IF(info.resources_num < 0 || info.resources_num > ShaderVertexInputInfo::RES_MAX);
 	key.clear();
@@ -487,12 +506,21 @@ void BuildStageStaticKey(const ShaderVertexInputInfo& info, std::vector<uint32_t
 		                       mesh.vertices_per_group, mesh.max_vertices, mesh.max_primitives,
 		                       mesh.provoking_vertex, static_cast<uint32_t>(mesh.fast_launch)});
 	}
-	key.push_back(info.tess.input_control_points);
-	if (info.tess.input_control_points != 0) {
-		const auto& tess = info.tess;
-		key.insert(key.end(), {tess.output_control_points, tess.ls_stride, tess.hs_stride,
-		                       tess.patch_base, tess.patch_size, tess.domain, tess.partitioning,
-		                       tess.output_topology});
+	// Each tessellation stage keys only the layout fields its module depends on.
+	const auto& tess = info.tess;
+	switch (info.logical_stage) {
+		case ShaderType::Local: key.push_back(tess.ls_stride); break;
+		case ShaderType::TessellationControl:
+			key.insert(key.end(), {tess.input_control_points, tess.output_control_points,
+			                       tess.ls_stride, tess.hs_stride, tess.patch_base,
+			                       tess.patch_size, tess.domain});
+			break;
+		case ShaderType::TessellationEvaluation:
+			key.insert(key.end(), {tess.output_control_points, tess.hs_stride, tess.patch_base,
+			                       tess.patch_size, tess.domain, tess.partitioning,
+			                       tess.output_topology});
+			break;
+		default: break;
 	}
 
 	for (int i = 0; i < info.resources_num; i++) {
@@ -500,7 +528,13 @@ void BuildStageStaticKey(const ShaderVertexInputInfo& info, std::vector<uint32_t
 		const auto& destination = info.resources_dst[i];
 		key.push_back(destination.registers_num);
 		key.push_back(static_cast<uint32_t>(destination.attr_id));
-		key.push_back(resource.fields[3] & 0x7ffffu); // Channels and format used by embedded fetch.
+		// Swizzle, channel count and type class; the pipeline key holds the format itself.
+		const auto resolved_format = static_cast<uint8_t>(resource.Format());
+		key.push_back(resource.DstSelXYZW() |
+		              static_cast<uint32_t>(resolved_format < kVertexFetchFormats.size()
+		                                        ? kVertexFetchFormats[resolved_format]
+		                                        : 0u)
+		                  << 12u);
 	}
 }
 
@@ -558,8 +592,7 @@ void BuildStageStaticKey(const ShaderComputeInputInfo& info, std::vector<uint32_
 	key.push_back(info.thread_ids_num);
 	key.push_back(info.lds_size_dwords);
 	key.push_back(info.scratch_size_dwords);
-	key.push_back(static_cast<uint32_t>(info.dispatch_thread_dimensions) |
-	              (static_cast<uint32_t>(info.async_compute) << 1u));
+	key.push_back(static_cast<uint32_t>(info.dispatch_thread_dimensions));
 	for (int i = 0; i < 3; i++) {
 		key.push_back(info.threads_num[i]);
 		key.push_back(static_cast<uint32_t>(info.group_id[i]));

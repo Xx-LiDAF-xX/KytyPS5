@@ -19,7 +19,7 @@
 
 namespace Libs {
 
-LIB_VERSION("SystemService", 1, "SystemService", 1, 1);
+LIB_NAME("SystemService", "SystemService");
 
 namespace SystemService {
 
@@ -79,9 +79,9 @@ struct SystemServiceEvent {
 static std::mutex          g_event_mutex;
 static std::deque<int32_t> g_events;
 
-void NotifyEntitlementUpdate() {
+void NotifyEvent(int32_t event_type) {
 	std::scoped_lock lock(g_event_mutex);
-	g_events.push_back(0x10000003); // SCE_SYSTEM_SERVICE_EVENT_ENTITLEMENT_UPDATE
+	g_events.push_back(event_type);
 }
 
 struct SystemServiceDisplaySafeAreaInfo {
@@ -290,7 +290,7 @@ static int KYTY_SYSV_ABI SystemServiceLaunchPlayerDialog() {
 
 namespace SystemGesture {
 
-LIB_VERSION("SystemGesture", 1, "SystemGesture", 1, 1);
+LIB_NAME("SystemGesture", "SystemGesture");
 
 constexpr int SYSTEM_GESTURE_INPUT_TOUCH_PAD = 0;
 
