@@ -122,6 +122,9 @@ public:
 		return IsGpuModified() && !IsBufferModified() && !IsCpuDirty();
 	}
 	[[nodiscard]] bool IsTracked() const noexcept { return track_addr != 0 && track_addr_end != 0; }
+	[[nodiscard]] bool IsReadTracked() const noexcept {
+		return read_track_addr != 0 && read_track_addr_end != 0;
+	}
 	[[nodiscard]] uint64_t AccountedSize() const noexcept {
 		return backing.image == nullptr ? 0 : Common::AlignUp(info.data.size, 1024);
 	}
@@ -156,8 +159,10 @@ public:
 	ImageUsage       usage;
 	ImageBinding     binding;
 	bool             registered     = false;
-	uint64_t         track_addr     = 0;
-	uint64_t         track_addr_end = 0;
+	uint64_t         track_addr          = 0;
+	uint64_t         track_addr_end      = 0;
+	uint64_t         read_track_addr     = 0;
+	uint64_t         read_track_addr_end = 0;
 	ImageId          depth_id {};
 	// Stencil associations that refer to this depth image.
 	std::vector<ImageId> stencil_ids;

@@ -73,6 +73,9 @@ public:
 	                                        uint32_t packed_clear);
 	void               InvalidateMemory(uint64_t address, uint64_t size);
 	void               InvalidateMemoryFromGPU(uint64_t address, uint64_t size);
+	// Downloads GPU-written images overlapping the faulting page on demand when read by the CPU;
+	// returns whether any read-tracked image overlapped the page.
+	[[nodiscard]] bool ReadMemory(uint64_t address, uint64_t size);
 	// Writes a copy into whole levels of one layer of a GPU-written image straight into it, and
 	// returns false for any other copy.
 	[[nodiscard]] bool CopyToImage(uint64_t address, uint64_t source, uint64_t size);
@@ -222,6 +225,12 @@ private:
 	void                      UntrackImage(ImageId id);
 	void                      UntrackImageHead(ImageId id);
 	void                      UntrackImageTail(ImageId id);
+	void                      TrackImageRead(ImageId id);
+	void                      UntrackImageRead(ImageId id);
+	void                      UntrackImageReadRange(ImageId id, uint64_t page_begin,
+	                                                uint64_t page_end);
+	void                      QueueReadTrack(ImageId id, const Image& image);
+	void                      ArmPendingReadWatchers();
 	void                      MarkAsMaybeDirty(ImageId id, Image& image);
 	void                      TrackImageDownload(ImageId id, Image& image);
 	[[nodiscard]] static bool SameBacking(const ImageInfo& cached, const ImageInfo& requested,
@@ -242,7 +251,7 @@ private:
 	void DownloadImage(Image& image, Buffer& destination, uint64_t destination_offset,
 	                   uint64_t destination_size, uint32_t levels);
 	void DownloadDepth(Image& image, Buffer& destination, uint64_t destination_offset);
-	void CommitGpuWrite(Image& image);
+	void CommitGpuWrite(ImageId id, Image& image);
 	// Caller holds m_lock. Volume layer ranges select depth slices.
 	void ClearImage(CommandBuffer& command, ImageId id, vk::Format format,
 	                const vk::ImageSubresourceRange& range, const vk::ClearValue& clear);
@@ -275,6 +284,8 @@ private:
 	ImagePageTable                                    m_image_page_table;
 	Common::LeastRecentlyUsedCache<ImageId, uint64_t> m_lru_cache;
 	std::unordered_set<ImageId>                       m_download_images;
+	std::unordered_set<ImageId>                       m_pending_read_track;
+	std::atomic<uint64_t>                             m_read_tracked_count {0};
 	std::mutex                                        m_write_back_mutex;
 	std::vector<WriteBack>                            m_write_backs;
 	std::map<uint64_t, MetaDataInfo>                  m_surface_metas;

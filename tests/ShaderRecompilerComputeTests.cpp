@@ -4550,21 +4550,89 @@ public:
         Require("GpuCommandLane", "storage readback past the download ring",
                 release(1u << 9u, large_address, written),
                 "an image larger than the download ring was not read back");
-        // Without storage readback, an image enrolled for linear readback is
-        // copied back at the suspend point only, without trapping its pages.
+        // Without storage readback, a GL2 release arms on-demand read-fault
+        // readback without eagerly queuing an async write-back; an unread
+        // linear-enrolled image stays pending until ProcessDownloadImages, and
+        // a CPU read after GL2 writeback receives the GPU data on demand.
         TextureCacheTestAccess::SetStorageReadback(texture_cache, false);
         TextureCacheTestAccess::SetLinearReadback(texture_cache, true);
         constexpr uint64_t enrolled_address = fault_base + 0x38000;
         const auto enrolled = shader_write(enrolled_address, {8, 8, 1}, linear);
-        const bool left =
-            release(1u << 9u, enrolled_address, stale) &&
-            TextureCacheTestAccess::PendingDownload(texture_cache, enrolled);
-        texture_cache.ProcessDownloadImages();
-        Require("GpuCommandLane", "linear readback without storage readback",
-                left &&
-                    !TextureCacheTestAccess::WriteBacksPending(texture_cache),
-                "without storage readback, a GL2 release copied an image back "
-                "or a download blocked guest accesses");
+        {
+          uint64_t label = 0;
+          auto packet = make_interrupt_packet(2, 0, &label, label_value, 0);
+          packet[1] |= (1u << 9u) << 12u;
+          Pm4Execution exec;
+          const bool released =
+              processor->Process(exec, packet) == Pm4ProcessResult::Complete &&
+              label == label_value;
+          const bool still_pending =
+              TextureCacheTestAccess::PendingDownload(texture_cache, enrolled) &&
+              !TextureCacheTestAccess::WriteBacksPending(texture_cache);
+          std::array<uint32_t, 4> guest{};
+          std::memcpy(guest.data(),
+                      reinterpret_cast<const void *>(enrolled_address),
+                      sizeof(guest));
+          texture_cache.ProcessDownloadImages();
+          Require("GpuCommandLane", "linear readback without storage readback",
+                  released && still_pending && guest == written &&
+                      !TextureCacheTestAccess::WriteBacksPending(texture_cache),
+                  "without storage readback, a GL2 release either queued an "
+                  "async write-back or failed on-demand readback");
+        }
+        // With all eager readback flags off, a GPU-written tiled render target
+        // stays invisible before GL2 writeback and reads back on demand after
+        // GL2 writeback without blocking unrelated accesses.
+        TextureCacheTestAccess::SetLinearReadback(texture_cache, false);
+        constexpr uint64_t rt_ondemand_address = fault_base + 0x24000;
+        {
+          auto desc = MakeLinearDesc(
+              rt_ondemand_address, 0, vk::Format::eR32G32B32A32Sfloat,
+              Prospero::BufferFormat::k32_32_32_32Float,
+              Prospero::ImageType::kColor2D, {8, 8, 1}, 1, 16, 1);
+          desc.type = TextureCache::BindingType::RenderTarget;
+          desc.info.tile_mode = Prospero::TileMode::kRenderTarget;
+          desc.info.pitch = 0;
+          desc.info.UpdateSize();
+          desc.view_info.usage = vk::ImageUsageFlagBits::eColorAttachment;
+          const auto rt_image = texture_cache.FindImage(desc);
+          (void)texture_cache.FindRenderTarget(rt_image, desc);
+          TextureCacheTestAccess::ClearImage(
+              texture_cache, resources.GetCommandScheduler().Current(),
+              rt_image, {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+              vk::ClearValue{vk::ClearColorValue{texel}});
+          Require("GpuCommandLane", "on-demand tiled render-target readback",
+                  release(0, rt_ondemand_address, stale) &&
+                      release(1u << 9u, rt_ondemand_address, written) &&
+                      !TextureCacheTestAccess::WriteBacksPending(texture_cache),
+                  "tiled render target did not read back on demand after GL2 "
+                  "writeback");
+        }
+        // A CPU write over a read-tracked image drops its read-watcher cleanly
+        // without clobbering the CPU write with stale GPU data.
+        constexpr uint64_t write_over_address = fault_base + 0x28000;
+        {
+          (void)shader_write(write_over_address, {8, 8, 1}, linear);
+          uint64_t label = 0;
+          auto packet = make_interrupt_packet(2, 0, &label, label_value, 0);
+          packet[1] |= (1u << 9u) << 12u;
+          Pm4Execution exec;
+          const bool released =
+              processor->Process(exec, packet) == Pm4ProcessResult::Complete;
+          constexpr std::array<uint32_t, 4> cpu_written{
+              0xdeadbeefu, 0xcafebabeu, 0x12345678u, 0x9abcdef0u};
+          std::memcpy(reinterpret_cast<void *>(write_over_address),
+                      cpu_written.data(), sizeof(cpu_written));
+          std::array<uint32_t, 4> readback{};
+          std::memcpy(readback.data(),
+                      reinterpret_cast<const void *>(write_over_address),
+                      sizeof(readback));
+          Require("GpuCommandLane",
+                  "on-demand readback drops watcher on CPU write",
+                  released && readback == cpu_written,
+                  "CPU write over a read-tracked image did not persist");
+        }
+        TextureCacheTestAccess::SetLinearReadback(texture_cache, true);
         // With storage readback too, linear readback still queues a rewrite,
         // and a GL2 writeback copies it back.
         TextureCacheTestAccess::SetStorageReadback(texture_cache, true);

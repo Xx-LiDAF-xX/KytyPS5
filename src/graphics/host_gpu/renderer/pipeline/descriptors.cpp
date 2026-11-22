@@ -525,8 +525,7 @@ TextureBinding RenderExecutor::ResolveTexture(const ShaderRecompiler::IR::ImageR
 		return {.layout = vk::ImageLayout::eGeneral};
 	}
 
-	const bool cacheable = !storage && !resource.heap && !m_lod_stats &&
-	                       (resource.r128 || !descriptor.MetaCompress()) &&
+	const bool cacheable = !storage && !resource.heap && !m_lod_stats && !descriptor.MetaCompress() &&
 	                       resource.mip_count < 32u && (resource.shader_swizzle >> 20u) == 0u;
 	uint64_t resource_key = 0;
 	size_t   cache_slot   = 0;
@@ -885,25 +884,7 @@ void RenderExecutor::FindBuffers(std::span<PreparedBindings* const> stages) {
 				// in pieces, so they end at their last committed range.
 				size = Libs::LibKernel::Memory::ClampRangeSize(address, size, true);
 			}
-			if (descriptor.NumRecords() == UINT32_MAX && !program.info.buffers[resource].written) {
-				const auto existing_id = cache.FindExistingBuffer(address);
-				if (existing_id != NULL_BUFFER_ID) {
-					const auto& existing = cache.GetBuffer(existing_id);
-					if (address >= existing.CpuAddress() &&
-					    address < existing.CpuAddress() + existing.Size()) {
-						const auto remaining = (existing.CpuAddress() + existing.Size()) - address;
-						size                 = std::min(size, remaining);
-					}
-				}
-			}
 			const auto id = cache.FindBuffer(address, size);
-			if (descriptor.NumRecords() == UINT32_MAX && id != NULL_BUFFER_ID &&
-			    !program.info.buffers[resource].written) {
-				const auto& found_buffer = cache.GetBuffer(id);
-				if (found_buffer.Size() <= BufferCache::MaxStreamBufferSize) {
-					size = std::min(size, found_buffer.Size());
-				}
-			}
 			source = {address, size, id};
 		}
 	}

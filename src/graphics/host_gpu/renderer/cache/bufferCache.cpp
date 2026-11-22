@@ -64,23 +64,9 @@ void BufferCache::WriteDataBuffer(Buffer& buffer, uint64_t address, const void* 
 		EXIT_IF(destination_offset > buffer.Size() || chunk > buffer.Size() - destination_offset);
 		m_scheduler.EndRendering();
 		const auto command = m_scheduler.Current().Handle();
-		constexpr auto BufferPipelineStages2 =
-		    vk::PipelineStageFlagBits2::eVertexInput |
-		    vk::PipelineStageFlagBits2::eVertexShader |
-		    vk::PipelineStageFlagBits2::eFragmentShader |
-		    vk::PipelineStageFlagBits2::eComputeShader |
-		    vk::PipelineStageFlagBits2::eTransfer |
-		    vk::PipelineStageFlagBits2::eDrawIndirect;
-
-		constexpr auto BufferAccessFlags2 =
-		    vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite |
-		    vk::AccessFlagBits2::eTransferRead | vk::AccessFlagBits2::eTransferWrite |
-		    vk::AccessFlagBits2::eUniformRead | vk::AccessFlagBits2::eVertexAttributeRead |
-		    vk::AccessFlagBits2::eIndexRead | vk::AccessFlagBits2::eIndirectCommandRead;
-
 		vk::BufferMemoryBarrier2 before {};
-		before.srcStageMask        = BufferPipelineStages2;
-		before.srcAccessMask       = BufferAccessFlags2;
+		before.srcStageMask        = vk::PipelineStageFlagBits2::eAllCommands;
+		before.srcAccessMask       = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite;
 		before.dstStageMask        = vk::PipelineStageFlagBits2::eTransfer;
 		before.dstAccessMask       = vk::AccessFlagBits2::eTransferWrite;
 		before.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -89,7 +75,7 @@ void BufferCache::WriteDataBuffer(Buffer& buffer, uint64_t address, const void* 
 		before.offset              = destination_offset;
 		before.size                = chunk;
 		vk::DependencyInfo dependency {};
-		dependency.dependencyFlags          = {};
+		dependency.dependencyFlags          = vk::DependencyFlagBits::eByRegion;
 		dependency.bufferMemoryBarrierCount = 1;
 		dependency.pBufferMemoryBarriers    = &before;
 		command.pipelineBarrier2(dependency);
@@ -98,8 +84,8 @@ void BufferCache::WriteDataBuffer(Buffer& buffer, uint64_t address, const void* 
 		auto after          = before;
 		after.srcStageMask  = vk::PipelineStageFlagBits2::eTransfer;
 		after.srcAccessMask = vk::AccessFlagBits2::eTransferWrite;
-		after.dstStageMask  = BufferPipelineStages2;
-		after.dstAccessMask = BufferAccessFlags2;
+		after.dstStageMask  = vk::PipelineStageFlagBits2::eAllCommands;
+		after.dstAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite;
 		dependency.pBufferMemoryBarriers = &after;
 		command.pipelineBarrier2(dependency);
 		bytes += chunk;
@@ -311,62 +297,8 @@ BufferCache::~BufferCache() {
 }
 
 void BufferCache::InvalidateMemory(uint64_t vaddr, uint64_t size) {
-	uint64_t inv_vaddr = vaddr;
-	uint64_t inv_size  = size;
-	bool has_owner = false;
-	const Buffer* buffer = nullptr;
-
-	const auto page = vaddr >> PageTable::kPageBits;
-	if (page < PageTable::kPageCount) {
-		const auto* owner = m_page_table.Find(page);
-		if (owner != nullptr && *owner && *owner != NULL_BUFFER_ID) {
-			buffer = m_slot_buffers.try_get(*owner);
-			if (buffer != nullptr && !buffer->is_deleted) {
-				const auto buf_start = buffer->CpuAddress();
-				const auto buf_end   = buf_start + buffer->Size();
-				if (vaddr >= buf_start && vaddr < buf_end) {
-					has_owner = true;
-				}
-			}
-		}
-	}
-
-	if (size == 1) {
-		if (page < PageTable::kPageCount) {
-			const auto page_start = Common::AlignDown(vaddr, TRACKER_PAGE_SIZE);
-			constexpr uint64_t ClusterForward = 64 * 1024;
-			uint64_t cluster_start = page_start;
-			uint64_t cluster_end   = page_start + ClusterForward;
-
-			if (has_owner && buffer != nullptr) {
-				cluster_start = std::max(page_start, buffer->CpuAddress());
-				cluster_end   = std::min(buffer->CpuAddress() + buffer->Size(), page_start + ClusterForward);
-			} else {
-				const auto region_end = Common::AlignUp(vaddr + 1, TRACKER_REGION_SIZE);
-				cluster_end = std::min(cluster_end, region_end);
-			}
-
-			if (cluster_end > cluster_start) {
-				const auto [safe_start, safe_end] =
-				    m_memory_tracker.FindNonGpuModifiedRange(page_start, cluster_start, cluster_end);
-				if (safe_end > safe_start) {
-					inv_vaddr = safe_start;
-					inv_size  = safe_end - safe_start;
-				}
-			}
-
-			if (inv_size > 1) {
-				if (has_owner) {
-					Common::DebugCounters::Add(Common::DebugCounters::Counter::BufferFaultsClusteredOwner);
-				} else {
-					Common::DebugCounters::Add(Common::DebugCounters::Counter::BufferFaultsClusteredNoOwner);
-				}
-			}
-		}
-	}
-
-	m_memory_tracker.InvalidateRegion(inv_vaddr, inv_size,
-	                                  [this, inv_vaddr, inv_size] { ReadMemory(inv_vaddr, inv_size, true); });
+	m_memory_tracker.InvalidateRegion(vaddr, size,
+	                                  [this, vaddr, size] { ReadMemory(vaddr, size, true); });
 
 	QueueBdaSync(vaddr, size);
 }
@@ -379,6 +311,9 @@ void BufferCache::ReadMemory(uint64_t vaddr, uint64_t size, bool is_write) {
 	}
 	m_scheduler.Context().GetGpu().SendCommandSync([this, vaddr, size, is_write] {
 		if (is_write && !IsRegionRegistered(vaddr, size)) {
+			return;
+		}
+		if (!is_write && !IsRegionGpuModified(vaddr, size)) {
 			return;
 		}
 		auto& buffer = m_slot_buffers[FindBuffer(vaddr, size)];
