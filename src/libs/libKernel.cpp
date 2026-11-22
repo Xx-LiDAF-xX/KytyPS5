@@ -1001,26 +1001,30 @@ static NtQueueApcThreadExFunc GetNtQueueApcThreadEx() {
 static void SignalApcHandler(void* arg1, void* arg2, void* /*arg3*/, PCONTEXT context) {
 	auto*      thread = static_cast<Pthread>(arg1);
 	const auto signum = static_cast<int>(reinterpret_cast<intptr_t>(arg2));
-	if (!PthreadTakePendingSignal(thread, signum)) {
+	if (!PthreadTryEnterSignalHandler(thread)) {
 		return;
 	}
 
-	auto* handler = reinterpret_cast<exception_handler_func_t>(g_exception_handlers[signum]);
-	if (handler != nullptr) {
-		auto ctx = CreateSignalUcontext(context);
-		if (!IsGuestCodeAddress(ctx.uc_mcontext.mc_rip)) {
-			SanitizeNonGuestSignalUcontext(&ctx, thread);
-			std::thread([thread, signum, handler, ctx,
-			             tcb = Loader::RuntimeLinker::GetThreadTcb()]() mutable {
-				Loader::RuntimeLinker::SetThreadTcb(tcb);
-				auto* previous_self = PthreadSwapSelfForSignal(thread);
-				handler(signum, &ctx);
-				PthreadSwapSelfForSignal(previous_self);
-			}).detach();
-			return;
+	for (;;) {
+		while (PthreadTakePendingSignal(thread, signum)) {
+			auto* handler =
+			    reinterpret_cast<exception_handler_func_t>(g_exception_handlers[signum]);
+			if (handler != nullptr) {
+				auto ctx = CreateSignalUcontext(context);
+				if (IsGuestCodeAddress(ctx.uc_mcontext.mc_rip)) {
+					handler(signum, &ctx);
+					ApplySignalUcontext(context, ctx);
+				} else {
+					// Run directly on the target thread without restoring the host frame.
+					SanitizeNonGuestSignalUcontext(&ctx, thread);
+					handler(signum, &ctx);
+				}
+			}
 		}
-		handler(signum, &ctx);
-		ApplySignalUcontext(context, ctx);
+		PthreadLeaveSignalHandler(thread);
+		if (!PthreadHasPendingSignal(thread, signum) || !PthreadTryEnterSignalHandler(thread)) {
+			break;
+		}
 	}
 }
 
@@ -1073,22 +1077,46 @@ static int KYTY_SYSV_ABI KernelRaiseException(Pthread thread, int signum) {
 			return KERNEL_ERROR_EINVAL;
 		}
 		if (target_thread_id == static_cast<uint64_t>(GetCurrentThreadId())) {
-			auto ctx = CreateCurrentGuestCallSignalUcontext(
+			const bool entered = PthreadTryEnterSignalHandler(thread);
+			auto       ctx     = CreateCurrentGuestCallSignalUcontext(
 			    reinterpret_cast<uint64_t>(__builtin_return_address(0)));
 			handler(signum, &ctx);
+			if (entered) {
+				for (;;) {
+					while (PthreadTakePendingSignal(thread, signum)) {
+						auto* pending_handler = reinterpret_cast<exception_handler_func_t>(
+						    g_exception_handlers[signum]);
+						if (pending_handler != nullptr) {
+							auto pending_ctx = CreateCurrentGuestCallSignalUcontext(
+							    reinterpret_cast<uint64_t>(__builtin_return_address(0)));
+							pending_handler(signum, &pending_ctx);
+						}
+					}
+					PthreadLeaveSignalHandler(thread);
+					if (!PthreadHasPendingSignal(thread, signum) ||
+					    !PthreadTryEnterSignalHandler(thread)) {
+						break;
+					}
+				}
+			}
 			return OK;
 		}
 		if (nt_queue_apc_thread_ex == nullptr) {
 			return KERNEL_ERROR_EINVAL;
 		}
 
+		PthreadQueuePendingSignal(thread, signum);
+		if (PthreadInSignalHandler(thread)) {
+			return OK;
+		}
+
 		HANDLE target_thread =
 		    OpenThread(THREAD_SET_CONTEXT, FALSE, static_cast<DWORD>(target_thread_id));
 		if (target_thread == nullptr) {
+			PthreadTakePendingSignal(thread, signum);
 			return KERNEL_ERROR_EINVAL;
 		}
 
-		PthreadQueuePendingSignal(thread, signum);
 		KytyUserApcOption option {};
 		option.UserApcFlags = KytyQueueUserApcFlagsSpecialUserApc;
 

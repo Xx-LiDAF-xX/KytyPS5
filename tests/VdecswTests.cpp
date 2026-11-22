@@ -357,15 +357,16 @@ void TestCombinedDecode() {
 	for (uint32_t packet = 0; packet < 6; ++packet) {
 		CHECK(Decoder::Decode(decoder, BackendInput(packet), {pixels.data, pixels.size}, &output) == Decoder::Result::Ok);
 		if (output.valid) CheckBackendPicture(output, frames++, pixels);
-		CHECK(Decoder::Flush(decoder, {pixels.data, pixels.size}, &output) == Decoder::Result::Ok);
-		CHECK(!output.valid); // Legacy Flush is receive-only; the next AU remains acceptable.
+		CHECK(Decoder::Receive(decoder, {pixels.data, pixels.size}, &output) == Decoder::Result::NoFrame);
 	}
 	CHECK(frames == 4);
-	CHECK(Decoder::Finalize(decoder) == Decoder::Result::Ok);
+	// Flush drains the held frames and restarts the sequence after the last frame leaves.
 	while (frames < 6) {
 		CHECK(Decoder::Flush(decoder, {pixels.data, pixels.size}, &output) == Decoder::Result::Ok);
 		CheckBackendPicture(output, frames++, pixels);
 	}
+	CHECK(Decoder::Flush(decoder, {pixels.data, pixels.size}, &output) == Decoder::Result::Ok);
+	CHECK(!output.valid);
 	Decoder::Destroy(decoder);
 }
 

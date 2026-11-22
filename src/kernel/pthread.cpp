@@ -397,6 +397,7 @@ struct PthreadPrivate {
 	uint64_t              cond_sequence = 0;
 	std::condition_variable cond_cv;
 	std::atomic<uint64_t> pending_signal_mask {0};
+	std::atomic_bool      in_signal_handler {false};
 	std::atomic_bool      canceled {false};
 	std::atomic<int>      cancel_state {0};
 	std::atomic<int>      cancel_type {0};
@@ -3056,7 +3057,7 @@ void PthreadQueuePendingSignal(Pthread thread, int signum) {
 	}
 
 	thread->pending_signal_mask.fetch_or(1ull << static_cast<uint32_t>(signum),
-	                                     std::memory_order_release);
+	                                     std::memory_order_seq_cst);
 }
 
 bool PthreadHasPendingSignal(Pthread thread, int signum) {
@@ -3065,7 +3066,7 @@ bool PthreadHasPendingSignal(Pthread thread, int signum) {
 	}
 
 	const auto mask = 1ull << static_cast<uint32_t>(signum);
-	return (thread->pending_signal_mask.load(std::memory_order_acquire) & mask) != 0;
+	return (thread->pending_signal_mask.load(std::memory_order_seq_cst) & mask) != 0;
 }
 
 bool PthreadTakePendingSignal(Pthread thread, int signum) {
@@ -3074,7 +3075,28 @@ bool PthreadTakePendingSignal(Pthread thread, int signum) {
 	}
 
 	const auto mask = 1ull << static_cast<uint32_t>(signum);
-	return (thread->pending_signal_mask.fetch_and(~mask, std::memory_order_acq_rel) & mask) != 0;
+	return (thread->pending_signal_mask.fetch_and(~mask, std::memory_order_seq_cst) & mask) != 0;
+}
+
+bool PthreadTryEnterSignalHandler(Pthread thread) {
+	if (thread == nullptr) {
+		return false;
+	}
+	return !thread->in_signal_handler.exchange(true, std::memory_order_seq_cst);
+}
+
+void PthreadLeaveSignalHandler(Pthread thread) {
+	if (thread == nullptr) {
+		return;
+	}
+	thread->in_signal_handler.store(false, std::memory_order_seq_cst);
+}
+
+bool PthreadInSignalHandler(Pthread thread) {
+	if (thread == nullptr) {
+		return false;
+	}
+	return thread->in_signal_handler.load(std::memory_order_seq_cst);
 }
 
 bool PthreadGetGuestStack(Pthread thread, uint64_t* stack_addr, uint64_t* stack_size) {
@@ -3245,8 +3267,9 @@ int KYTY_SYSV_ABI PthreadCreate(Pthread* thread, const PthreadAttr* attr,
 		created_thread->arg             = arg;
 		created_thread->guest.thread_id = ++g_pthread_thread_id;
 		created_thread->almost_done     = false;
-		created_thread->detached        = created_thread->attr->detached;
-		created_thread->canceled        = false;
+		created_thread->detached          = created_thread->attr->detached;
+		created_thread->in_signal_handler = false;
+		created_thread->canceled          = false;
 		created_thread->cancel_state    = 0;
 		created_thread->cancel_type     = 0;
 		created_thread->unique_id       = -1;

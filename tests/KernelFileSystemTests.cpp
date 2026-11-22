@@ -130,6 +130,7 @@ SignalExports ResolveSignalExports() {
 
 // Waits until a guest thread's host thread sleeps in a blocking call.
 void WaitUntilSleeping(Libs::LibKernel::Pthread thread) {
+#if defined(__linux__)
   const auto path = "/proc/self/task/" +
                     std::to_string(Libs::LibKernel::PthreadGetHostThreadId(thread)) + "/stat";
   WaitForMutexTest([&] {
@@ -139,6 +140,10 @@ void WaitUntilSleeping(Libs::LibKernel::Pthread thread) {
     const auto state = line.rfind(") ");
     return state != std::string::npos && line[state + 2] == 'S';
   });
+#else
+  (void)thread;
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+#endif
 }
 
 void TestStaticRwlockDestroy() {
