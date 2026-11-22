@@ -114,15 +114,19 @@ struct alignas(4) GraphicsPipelineKey {
 
 struct PreRasterLibraryKey {
 	std::array<uint64_t, 3> stage_ids {};
-	uint32_t                patch_control_points = 0;
-	uint32_t                samples              = 1;
-	vk::PolygonMode         polygon_mode         = vk::PolygonMode::eFill;
-	bool                    negative_one_to_one  = false;
-	bool                    depth_clip_enable    = false;
-	bool                    rect_list            = false;
-	bool                    has_task_module      = false;
-	bool                    provoking_vtx_last   = false;
-	uint8_t                 pad[3]               = {};
+	uint64_t                layout_hash              = 0;
+	uint64_t                rect_params_hash         = 0;
+	uint32_t                patch_control_points     = 0;
+	uint32_t                samples                  = 1;
+	vk::PolygonMode         polygon_mode             = vk::PolygonMode::eFill;
+	bool                    negative_one_to_one      = false;
+	bool                    depth_clip_enable        = false;
+	bool                    rect_list                = false;
+	bool                    has_task_module          = false;
+	bool                    provoking_vtx_last       = false;
+	bool                    sample_shading_enable    = false;
+	bool                    alpha_to_coverage_enable = false;
+	uint8_t                 pad                      = 0;
 
 	bool operator==(const PreRasterLibraryKey& other) const {
 		return std::memcmp(this, &other, sizeof(*this)) == 0;
@@ -131,6 +135,7 @@ struct PreRasterLibraryKey {
 
 struct FragmentLibraryKey {
 	uint64_t stage_id                 = 0;
+	uint64_t layout_hash              = 0;
 	uint32_t samples                  = 1;
 	bool     sample_shading_enable    = false;
 	bool     alpha_to_coverage_enable = false;
@@ -165,6 +170,8 @@ struct FragmentOutputLibraryKey {
 	uint8_t                  alpha_destblend[RENDER_COLOR_ATTACHMENTS_MAX]      = {};
 	bool                     separate_alpha_blend[RENDER_COLOR_ATTACHMENTS_MAX] = {};
 	bool                     blend_enable[RENDER_COLOR_ATTACHMENTS_MAX]         = {};
+	bool                     sample_shading_enable                              = false;
+	bool                     alpha_to_coverage_enable                           = false;
 
 	bool operator==(const FragmentOutputLibraryKey& other) const {
 		return std::memcmp(this, &other, sizeof(*this)) == 0;
@@ -202,7 +209,7 @@ struct PipelineLibraryCache {
 	std::unordered_map<VertexInputLibraryKey, vk::Pipeline, VertexInputLibraryKeyHash>& vertex_input;
 	std::unordered_map<FragmentOutputLibraryKey, vk::Pipeline, FragmentOutputLibraryKeyHash>& fragment_output;
 	vk::ShaderModule& null_fragment_module;
-	std::unordered_map<uint32_t, std::pair<vk::ShaderModule, vk::ShaderModule>>& rect_shaders;
+	std::unordered_map<uint64_t, std::pair<vk::ShaderModule, vk::ShaderModule>>& rect_shaders;
 };
 
 // A compiled stage with what pipeline creation needs from it besides the key.
@@ -385,7 +392,7 @@ private:
 	std::unordered_map<VertexInputLibraryKey, vk::Pipeline, VertexInputLibraryKeyHash> m_vertex_input_libraries;
 	std::unordered_map<FragmentOutputLibraryKey, vk::Pipeline, FragmentOutputLibraryKeyHash> m_fragment_output_libraries;
 	vk::ShaderModule m_null_fragment_module = nullptr;
-	std::unordered_map<uint32_t, std::pair<vk::ShaderModule, vk::ShaderModule>> m_rect_shaders;
+	std::unordered_map<uint64_t, std::pair<vk::ShaderModule, vk::ShaderModule>> m_rect_shaders;
 
 	PipelineLibraryCache GetLibraryCache() {
 		return {

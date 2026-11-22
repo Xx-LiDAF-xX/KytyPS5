@@ -21,6 +21,7 @@
 #include <bit>
 #include <span>
 #include <vector>
+#include <xxhash.h>
 
 namespace Libs::Graphics {
 
@@ -326,6 +327,7 @@ struct GraphicsPipelineState {
 	bool             mesh                = false;
 	bool             use_depth           = false;
 	bool             rect_list_cached    = false;
+	uint64_t         rect_params_hash    = 0;
 
 	// VS/HS/DS plus a task stage and the two generated rectangle-list stages.
 	std::array<vk::PipelineShaderStageCreateInfo, 8> pre_raster_stages {};
@@ -385,8 +387,18 @@ void BuildGraphicsPipelineState(GraphicContext& graphics, GraphicsPipelineState&
 	if (state.rect_list) {
 		std::span<const RectListParameter> parameters;
 		if (pixel != nullptr) parameters = pixel->rect_parameters;
+		std::vector<uint32_t> rect_key_words;
+		rect_key_words.reserve(1u + parameters.size() * 3u);
+		rect_key_words.push_back(vertex.info.param_export_mask);
+		for (const auto& param: parameters) {
+			rect_key_words.push_back(param.input_location);
+			rect_key_words.push_back(param.output_location);
+			rect_key_words.push_back(param.flat ? 1u : 0u);
+		}
+		state.rect_params_hash =
+		    XXH3_64bits(rect_key_words.data(), rect_key_words.size() * sizeof(uint32_t));
 		if (library_cache != nullptr) {
-			auto it = library_cache->rect_shaders.find(vertex.info.param_export_mask);
+			auto it = library_cache->rect_shaders.find(state.rect_params_hash);
 			if (it != library_cache->rect_shaders.end()) {
 				state.tess_control_module = it->second.first;
 				state.tess_eval_module    = it->second.second;
@@ -396,7 +408,7 @@ void BuildGraphicsPipelineState(GraphicContext& graphics, GraphicsPipelineState&
 				state.tess_control_module = CompileSPV(shaders.control, graphics.device);
 				state.tess_eval_module    = CompileSPV(shaders.evaluation, graphics.device);
 				library_cache->rect_shaders.emplace(
-				    vertex.info.param_export_mask,
+				    state.rect_params_hash,
 				    std::make_pair(state.tess_control_module, state.tess_eval_module));
 				state.rect_list_cached = true;
 			}
@@ -562,9 +574,10 @@ void BuildGraphicsPipelineState(GraphicContext& graphics, GraphicsPipelineState&
 
 // The descriptor set layout and pipeline layout every graphics pipeline needs. Built once, so
 // the library path and the monolithic path can never disagree about them.
-void PreparePipelineLayout(GraphicContext& graphics, PipelineCache::Pipeline& pipeline,
-                           const std::array<const ShaderModule*, 4>& stages,
-                           vk::ShaderModule task_module) {
+// Returns a hash identifying layout compatibility for VK_EXT_graphics_pipeline_library caching.
+uint64_t PreparePipelineLayout(GraphicContext& graphics, PipelineCache::Pipeline& pipeline,
+                               const std::array<const ShaderModule*, 4>& stages,
+                               vk::ShaderModule task_module) {
 	std::vector<vk::DescriptorSetLayoutBinding> descriptor_bindings;
 	pipeline.push_stages = vk::ShaderStageFlagBits::eFragment;
 	if (task_module) {
@@ -579,6 +592,20 @@ void PreparePipelineLayout(GraphicContext& graphics, PipelineCache::Pipeline& pi
 		}
 	}
 	CreateLayouts(graphics, pipeline, descriptor_bindings);
+
+	std::vector<uint32_t> hash_words;
+	hash_words.reserve(3u + descriptor_bindings.size() * 4u);
+	hash_words.push_back(static_cast<uint32_t>(pipeline.push_stages));
+	hash_words.push_back((pipeline.uses_image_heap ? 1u : 0u) |
+	                     (pipeline.uses_push_descriptors ? 2u : 0u));
+	hash_words.push_back(static_cast<uint32_t>(descriptor_bindings.size()));
+	for (const auto& binding: descriptor_bindings) {
+		hash_words.push_back(binding.binding);
+		hash_words.push_back(static_cast<uint32_t>(binding.descriptorType));
+		hash_words.push_back(binding.descriptorCount);
+		hash_words.push_back(static_cast<uint32_t>(binding.stageFlags));
+	}
+	return XXH3_64bits(hash_words.data(), hash_words.size() * sizeof(uint32_t));
 }
 
 void DestroyTemporaryModules(vk::Device device, GraphicsPipelineState& state) {
@@ -661,12 +688,13 @@ void BuildLibraryCreateInfos(GraphicsPipelineState& state, vk::PipelineLayout la
 	                   vk::PipelineCreateFlagBits::eRetainLinkTimeOptimizationInfoEXT;
 
 	// Vertex input: the vertex input and input assembly state, and nothing else.
+	// Omitting layout makes this library layout-independent across all pipelines.
 	vk::GraphicsPipelineCreateInfo vertex_input_info {};
 	vertex_input_info.flags               = flags;
 	vertex_input_info.pVertexInputState   = &state.vertex_input;
 	vertex_input_info.pInputAssemblyState = &state.input_assembly;
 	vertex_input_info.pDynamicState       = &state.dynamic_state;
-	vertex_input_info.layout              = layout;
+	vertex_input_info.layout              = nullptr;
 	set.Add(vertex_input_info, 0, vk::GraphicsPipelineLibraryFlagBitsEXT::eVertexInputInterface);
 
 	// Pre-rasterization: the stages before the fragment shader and the state feeding them. The
@@ -700,6 +728,7 @@ void BuildLibraryCreateInfos(GraphicsPipelineState& state, vk::PipelineLayout la
 	}
 
 	// Fragment output: colour blend and the formats the render pass would otherwise carry.
+	// Omitting layout makes this library layout-independent across all pipelines.
 	vk::GraphicsPipelineCreateInfo fragment_output_info {};
 	fragment_output_info.flags             = flags;
 	fragment_output_info.pColorBlendState  = &state.color_blending;
@@ -707,7 +736,7 @@ void BuildLibraryCreateInfos(GraphicsPipelineState& state, vk::PipelineLayout la
 	// Colour write enable belongs to this subset, so its dynamic declaration has to be here; a
 	// linked pipeline only inherits the dynamic states its libraries declare.
 	fragment_output_info.pDynamicState = &state.dynamic_state;
-	fragment_output_info.layout        = layout;
+	fragment_output_info.layout        = nullptr;
 	set.Add(fragment_output_info, next, vk::GraphicsPipelineLibraryFlagBitsEXT::eFragmentOutputInterface);
 	// The formats belong to this subset, so they travel behind the subset description.
 	set.subsets[next].pNext = &state.rendering;
@@ -741,7 +770,8 @@ vk::Pipeline LinkPipeline(GraphicContext& graphics, vk::PipelineLayout layout,
 // single-create path can still run.
 bool CreatePipelineFromLibraries(GraphicContext& graphics, PipelineCache::Pipeline& pipeline,
                                  GraphicsPipelineState& state, const GraphicsPipelineKey& key,
-                                 vk::PipelineCache driver_cache, PipelineLibraryCache* library_cache) {
+                                 uint64_t layout_hash, vk::PipelineCache driver_cache,
+                                 PipelineLibraryCache* library_cache) {
 	GraphicsPipelineLibrarySet set;
 	BuildLibraryCreateInfos(state, pipeline.pipeline_layout, set);
 
@@ -760,23 +790,30 @@ bool CreatePipelineFromLibraries(GraphicContext& graphics, PipelineCache::Pipeli
 		vi_key.topology                 = key.static_params.topology;
 		vi_key.primitive_restart_enable = key.static_params.primitive_restart_enable;
 
-		pr_key.stage_ids            = {key.stage_ids[0], key.stage_ids[1], key.stage_ids[2]};
-		pr_key.patch_control_points = key.static_params.patch_control_points;
-		pr_key.samples              = key.static_params.samples;
-		pr_key.polygon_mode         = key.static_params.polygon_mode;
-		pr_key.negative_one_to_one  = key.static_params.negative_one_to_one;
-		pr_key.depth_clip_enable    = key.static_params.depth_clip_enable;
-		pr_key.rect_list            = state.rect_list;
-		pr_key.has_task_module      = state.task_module != nullptr;
-		pr_key.provoking_vtx_last   = key.static_params.provoking_vtx_last;
+		pr_key.stage_ids                = {key.stage_ids[0], key.stage_ids[1], key.stage_ids[2]};
+		pr_key.layout_hash              = layout_hash;
+		pr_key.rect_params_hash         = state.rect_params_hash;
+		pr_key.patch_control_points     = key.static_params.patch_control_points;
+		pr_key.samples                  = key.static_params.samples;
+		pr_key.polygon_mode             = key.static_params.polygon_mode;
+		pr_key.negative_one_to_one      = key.static_params.negative_one_to_one;
+		pr_key.depth_clip_enable        = key.static_params.depth_clip_enable;
+		pr_key.rect_list                = state.rect_list;
+		pr_key.has_task_module          = state.task_module != nullptr;
+		pr_key.provoking_vtx_last       = key.static_params.provoking_vtx_last;
+		pr_key.sample_shading_enable    = key.static_params.sample_shading_enable;
+		pr_key.alpha_to_coverage_enable = key.static_params.alpha_to_coverage_enable;
 
 		fs_key.stage_id                 = key.stage_ids[3];
+		fs_key.layout_hash              = layout_hash;
 		fs_key.samples                  = key.static_params.samples;
 		fs_key.sample_shading_enable    = key.static_params.sample_shading_enable;
 		fs_key.alpha_to_coverage_enable = key.static_params.alpha_to_coverage_enable;
 
-		fo_key.rendering = key.rendering;
-		fo_key.samples   = key.static_params.samples;
+		fo_key.rendering                = key.rendering;
+		fo_key.samples                  = key.static_params.samples;
+		fo_key.sample_shading_enable    = key.static_params.sample_shading_enable;
+		fo_key.alpha_to_coverage_enable = key.static_params.alpha_to_coverage_enable;
 		std::memcpy(fo_key.color_mask, key.static_params.color_mask, sizeof(fo_key.color_mask));
 		std::memcpy(fo_key.color_srcblend, key.static_params.color_srcblend, sizeof(fo_key.color_srcblend));
 		std::memcpy(fo_key.color_comb_fcn, key.static_params.color_comb_fcn, sizeof(fo_key.color_comb_fcn));
@@ -889,12 +926,13 @@ bool CreatePipelineInternal(GraphicContext& graphics, PipelineCache::Pipeline& p
                             PipelineLibraryCache* library_cache) {
 	GraphicsPipelineState state;
 	BuildGraphicsPipelineState(graphics, state, key, stages, library_cache);
-	PreparePipelineLayout(graphics, pipeline, stages, state.task_module);
+	const uint64_t layout_hash = PreparePipelineLayout(graphics, pipeline, stages, state.task_module);
 
 	// Mesh pipelines have no vertex input library, so they stay on the single-create path.
 	const bool libraries =
 	    allow_pipeline_library && !state.mesh &&
-	    CreatePipelineFromLibraries(graphics, pipeline, state, key, driver_cache, library_cache);
+	    CreatePipelineFromLibraries(graphics, pipeline, state, key, layout_hash, driver_cache,
+	                                library_cache);
 	if (!libraries) {
 		CreatePipelineFromState(graphics, pipeline, state, driver_cache);
 	}
