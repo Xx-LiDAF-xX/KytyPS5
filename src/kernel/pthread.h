@@ -224,6 +224,7 @@ int KYTY_SYSV_ABI  pthread_detach(LibKernel::Pthread thread);
 void KYTY_SYSV_ABI pthread_exit(void* value);
 LibKernel::Pthread KYTY_SYSV_ABI pthread_self();
 int KYTY_SYSV_ABI                pthread_rename_np(LibKernel::Pthread thread, const char* name);
+int KYTY_SYSV_ABI                pthread_cancel(LibKernel::Pthread thread);
 int KYTY_SYSV_ABI                pthread_setcancelstate(int state, int* old_state);
 int KYTY_SYSV_ABI                pthread_setprio(LibKernel::Pthread thread, int prio);
 int KYTY_SYSV_ABI                pthread_getschedparam(LibKernel::Pthread thread, int* policy,

@@ -1576,6 +1576,52 @@ int KYTY_SYSV_ABI NetResolverStartNtoa(int rid, const char* hostname, void* addr
 	return ret;
 }
 
+int KYTY_SYSV_ABI NetResolverStartAton(int rid, const void* addr, char* hostname, int len,
+                                       int timeout, int retry, int flags) {
+	PRINT_NAME();
+
+	LOGF("\t rid     = %d\n"
+	     "\t len     = %d\n"
+	     "\t timeout = %d\n"
+	     "\t retry   = %d\n"
+	     "\t flags   = 0x%08x\n",
+	     rid, len, timeout, retry, flags);
+
+	if (addr == nullptr || hostname == nullptr || len <= 0 || (flags & ~0x00010000) != 0) {
+		return NET_ERROR_EINVAL;
+	}
+
+	EXIT_IF(g_net == nullptr);
+	if (!g_net->ResolverValid(rid)) {
+		return NET_ERROR_EBADF;
+	}
+
+	if (!EnsureSocketBackend()) {
+		return NET_ERROR_ENETDOWN;
+	}
+
+	sockaddr_in sa {};
+	sa.sin_family = AF_INET;
+	std::memcpy(&sa.sin_addr, addr, sizeof(sa.sin_addr));
+
+	char      host_buf[NI_MAXHOST] {};
+	const int ret = ::getnameinfo(reinterpret_cast<const sockaddr*>(&sa), sizeof(sa), host_buf,
+	                              sizeof(host_buf), nullptr, 0, NI_NAMEREQD);
+	if (ret != 0) {
+		if (ret == EAI_NONAME) {
+			return NET_ERROR_RESOLVER_ENOHOST;
+		}
+		return NET_ERROR_RESOLVER_EINTERNAL;
+	}
+
+	const size_t host_len = std::strlen(host_buf);
+	if (host_len + 1 > static_cast<size_t>(len)) {
+		return NET_ERROR_RESOLVER_ENOSPACE;
+	}
+	std::memcpy(hostname, host_buf, host_len + 1);
+	return OK;
+}
+
 int KYTY_SYSV_ABI NetInetPton(int af, const char* src, void* dst) {
 	PRINT_NAME();
 
@@ -2185,6 +2231,32 @@ int KYTY_SYSV_ABI Getsockname(int s, void* addr, uint32_t* addrlen) {
 		std::memcpy(static_cast<uint8_t*>(addr) + 8, &state.p2p->virtual_port, sizeof(uint16_t));
 	}
 	return result;
+}
+
+int KYTY_SYSV_ABI Getpeername(int s, void* addr, uint32_t* addrlen) {
+	PRINT_NAME();
+
+	LOGF("\t s       = %d\n"
+	     "\t addr    = 0x%016" PRIx64 "\n"
+	     "\t addrlen = 0x%016" PRIx64 "\n",
+	     s, reinterpret_cast<uint64_t>(addr), reinterpret_cast<uint64_t>(addrlen));
+
+	NativeSocket socket = INVALID_NATIVE_SOCKET;
+	SocketSlot   state;
+	if (!GetSocketBackend(s, &socket, &state)) {
+		return -1;
+	}
+	if (addr == nullptr || addrlen == nullptr) {
+		return SetGuestSocketError(Posix::POSIX_EFAULT);
+	}
+
+	sockaddr_storage host_addr {};
+	SocketLength     host_addrlen = sizeof(host_addr);
+	if (::getpeername(socket, reinterpret_cast<sockaddr*>(&host_addr), &host_addrlen) != 0) {
+		return SetHostSocketError();
+	}
+
+	return ConvertHostSockaddr(&host_addr, host_addrlen, addr, addrlen);
 }
 
 int KYTY_SYSV_ABI Getsockopt(int s, int level, int optname, void* optval, uint32_t* optlen) {
@@ -3432,6 +3504,33 @@ int KYTY_SYSV_ABI HttpGetResponseContentLength(int request_id, int* result,
 
 	*result = (send_result == OK ? 0 : -1);
 	return send_result;
+}
+
+int KYTY_SYSV_ABI HttpReadData(int request_id, void* data, size_t size) {
+	PRINT_NAME();
+
+	LOGF("\t request_id = %d\n"
+	     "\t data       = 0x%016" PRIx64 "\n"
+	     "\t size       = %" PRIu64 "\n",
+	     request_id, reinterpret_cast<uint64_t>(data), static_cast<uint64_t>(size));
+
+	if (data == nullptr) {
+		return HTTP_ERROR_INVALID_VALUE;
+	}
+
+	EXIT_IF(g_net == nullptr);
+
+	int send_result = HTTP_ERROR_BEFORE_SEND;
+	if (!g_net->HttpGetRequestResponse(Network::Id(request_id), &send_result, nullptr, nullptr,
+	                                   nullptr, nullptr)) {
+		return HTTP_ERROR_INVALID_ID;
+	}
+
+	if (send_result != OK) {
+		return send_result;
+	}
+
+	return 0;
 }
 
 int KYTY_SYSV_ABI HttpCreateConnection(int tmpl_id, const char* server_name, const char* scheme,

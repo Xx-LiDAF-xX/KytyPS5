@@ -76,6 +76,8 @@ int KYTY_SYSV_ABI NetResolverStartNtoa(int rid, const char* hostname, void* addr
 int KYTY_SYSV_ABI NetResolverStartNtoaMultipleRecords(int rid, const char* hostname,
                                                       NetResolverInfo* info, int timeout, int retry,
                                                       int flags);
+int KYTY_SYSV_ABI NetResolverStartAton(int rid, const void* addr, char* hostname, int len,
+                                       int timeout, int retry, int flags);
 int KYTY_SYSV_ABI NetInetPton(int af, const char* src, void* dst);
 const char* KYTY_SYSV_ABI NetInetNtop(int af, const void* src, char* dst, uint32_t size);
 int KYTY_SYSV_ABI         NetEtherNtostr(const NetEtherAddr* n, char* str, size_t len);
@@ -94,6 +96,7 @@ int KYTY_SYSV_ABI         Listen(int s, int backlog);
 int KYTY_SYSV_ABI         Accept(int s, void* addr, uint32_t* addrlen);
 int KYTY_SYSV_ABI         Shutdown(int s, int how);
 int KYTY_SYSV_ABI         Getsockname(int s, void* addr, uint32_t* addrlen);
+int KYTY_SYSV_ABI         Getpeername(int s, void* addr, uint32_t* addrlen);
 int KYTY_SYSV_ABI         Getsockopt(int s, int level, int optname, void* optval, uint32_t* optlen);
 int KYTY_SYSV_ABI Setsockopt(int s, int level, int optname, const void* optval, uint32_t optlen);
 int KYTY_SYSV_ABI Select(int nfds, void* readfds, void* writefds, void* exceptfds,
@@ -157,6 +160,7 @@ int KYTY_SYSV_ABI HttpGetStatusCode(int request_id, int* status_code);
 int KYTY_SYSV_ABI HttpGetAllResponseHeaders(int request_id, char** header, size_t* header_size);
 int KYTY_SYSV_ABI HttpGetResponseContentLength(int request_id, int* result,
                                                uint64_t* content_length);
+int KYTY_SYSV_ABI HttpReadData(int request_id, void* data, size_t size);
 int KYTY_SYSV_ABI HttpsSetSslCallback(int id, HttpsCallback cbfunc, void* user_arg);
 int KYTY_SYSV_ABI HttpsSetMinSslVersion(int id, uint32_t ssl_version);
 int KYTY_SYSV_ABI HttpsDisableOption(int id, uint32_t ssl_flags);

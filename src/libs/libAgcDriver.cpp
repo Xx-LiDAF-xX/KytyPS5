@@ -49,13 +49,21 @@ LIB_DEFINE(InitAgcDriver_1) {
 	LIB_FUNC("7Wa3aeJgeVU", AgcBranchPatchSetThenTarget);
 	LIB_FUNC("n2fD4A+pb+g", AgcCbSetShRegisterRangeDirect);
 	LIB_FUNC("bxGoVxpdSPQ", AgcCbSetShRegisterRangeDirectGetSize);
+	LIB_FUNC("MDLD5Ly94Xk", AgcCbSetUcRegisterRangeDirect);
+	LIB_FUNC("JOWmDrl+j20", AgcCbSetUcRegisterRangeDirectGetSize);
 	LIB_FUNC("UZbQjYAwwXM", AgcCbSetShRegistersDirect);
+	LIB_FUNC("yUBESvCCJ4I", AgcCbSetShRegistersDirectGetSize);
 	LIB_FUNC("03RZmELWWzw", AgcCbSetUcRegistersDirect);
+	LIB_FUNC("TGEZzUWLbrc", AgcCbSetUcRegistersDirectGetSize);
 	LIB_FUNC("wr23dPKyWc0", AgcCbReleaseMem);
 	LIB_FUNC("hL7C0IRpWZI", AgcCbQueueEndOfPipeActionGetSize);
 	LIB_FUNC("T6xuVw0KUJo", AgcDebugRaiseException);
 	LIB_FUNC("JrtiDtKeS38", AgcAcbResetQueue);
+	LIB_FUNC("GPbUp9jXQa8", AgcAcbWaitUntilSafeForRendering);
+	LIB_FUNC("rVOmPz2RBlg", AgcAcbSetWorkloadsActive);
+	LIB_FUNC("opR1JeJZCBU", AgcAcbSetWorkloadComplete);
 	LIB_FUNC("cFazmnXpJOE", AgcAcbEventWrite);
+	LIB_FUNC("Y-5vneiBtzk", AgcAcbEventWriteGetSize);
 	LIB_FUNC("KT-hTp-Ch14", AgcAcbAcquireMem);
 	LIB_FUNC("ewobAQeMo5k", AgcAcbAcquireMemGetSize);
 	LIB_FUNC("qyM2bxYFPAk", AgcAcbCondExec);
@@ -63,13 +71,17 @@ LIB_DEFINE(InitAgcDriver_1) {
 	LIB_FUNC("e1DFTg+Sd8U", AgcAcbJump);
 	LIB_FUNC("b-oySn+G2tE", AgcAcbJumpGetSize);
 	LIB_FUNC("DwICrVxerkY", AgcAcbRewind);
+	LIB_FUNC("0ZOG0jc9nRg", AgcAcbRewindGetSize);
 	LIB_FUNC("htn36gPnBk4", AgcAcbWaitRegMem);
 	LIB_FUNC("q4VuU-QsLOE", AgcAcbMemSemaphore);
+	LIB_FUNC("G0jrLdvEqDw", AgcDcbMemSemaphore);
 	LIB_FUNC("idlaArvdXEs", AgcAcbWaitOnAddressGetSize);
 	LIB_FUNC("-RnpfpxIhec", AgcAcbDmaData);
+	LIB_FUNC("M0ttm8h7SKA", AgcAcbDmaDataGetSize);
 	LIB_FUNC("qzMN2XKGA4k", AgcAcbCopyData);
 	LIB_FUNC("CbQh3DKMSno", AgcAcbCopyDataGetSize);
 	LIB_FUNC("j3EtxFkSIhQ", AgcAcbDispatchIndirect);
+	LIB_FUNC("PxKWV2fVAps", AgcAcbDispatchIndirectGetSize);
 	LIB_FUNC("eZ4+17OQz4Q", AgcAcbWriteData);
 	LIB_FUNC("xAeBOa0A3kk", AgcAcbSetMarker);
 	LIB_FUNC("cpCILPya5Zk", AgcAcbPushMarker);
@@ -80,17 +92,23 @@ LIB_DEFINE(InitAgcDriver_1) {
 	LIB_FUNC("hEK26Wdny6s", AgcDcbSetWorkloadComplete);
 	LIB_FUNC("QhCbS4X9Rl8", AgcDcbSetMarker);
 	LIB_FUNC("pFLArOT53+w", AgcDcbSetShRegisterDirect);
+	LIB_FUNC("QhPDD513V0w", AgcDcbSetShRegisterDirectGetSize);
 	LIB_FUNC("LHFXRrlTPD8", AgcDcbSetCxRegisterDirect);
 	LIB_FUNC("1DeUNpRIDDA", AgcDcbSetCxRegisterDirectGetSize);
 	LIB_FUNC("w4-d0n60hdo", AgcDcbSetUcRegisterDirect);
+	LIB_FUNC("aP1Ki9G3++4", AgcDcbSetUcRegisterDirectGetSize);
 	LIB_FUNC("ZvwO9euwYzc", AgcDcbSetCxRegistersIndirect);
 	LIB_FUNC("GBCh3zCihoU", AgcDcbSetCxRegistersIndirectGetSize);
 	LIB_FUNC("-HOOCn0JY48", AgcDcbSetShRegistersIndirect);
 	LIB_FUNC("nNlUtdDDvZ0", AgcDcbSetShRegistersIndirectGetSize);
 	LIB_FUNC("hvUfkUIQcOE", AgcDcbSetUcRegistersIndirect);
+	LIB_FUNC("UQGTw4xRlcM", AgcDcbSetUcRegistersIndirectGetSize);
 	LIB_FUNC("GIIW2J37e70", AgcDcbSetIndexSize);
+	LIB_FUNC("ca4KPvp0qLQ", AgcDcbSetIndexSizeGetSize);
 	LIB_FUNC("l4fM9K-Lyks", AgcDcbSetIndexBuffer);
+	LIB_FUNC("j4emHHndCPY", AgcDcbSetIndexBufferGetSize);
 	LIB_FUNC("8N2tmT3jmC8", AgcDcbSetIndexCount);
+	LIB_FUNC("mljzuGDZRQ4", AgcDcbSetIndexCountGetSize);
 	LIB_FUNC("tSBxhAPyytQ", AgcDcbSetNumInstances);
 	LIB_FUNC("6DFuRKT4C9w", AgcDcbSetNumInstancesGetSize);
 	LIB_FUNC("q88lQ+GP5Yk", AgcDcbDrawIndex);
@@ -106,8 +124,11 @@ LIB_DEFINE(InitAgcDriver_1) {
 	LIB_FUNC("1q1titRBL6o", AgcDcbDrawIndirect);
 	LIB_FUNC("cxPZ4Wgvdj8", AgcDcbDrawIndirectGetSize);
 	LIB_FUNC("kUlvghKs-mA", AgcDcbDrawIndirectMulti);
+	LIB_FUNC("pYoKs3lPy88", AgcDcbDrawIndirectMultiGetSize);
 	LIB_FUNC("t1vNu082-jM", AgcDcbDrawIndexIndirect);
+	LIB_FUNC("mStuvI0zOtc", AgcDcbDrawIndexIndirectGetSize);
 	LIB_FUNC("ypVBz4uPKcQ", AgcDcbDrawIndexIndirectMulti);
+	LIB_FUNC("r98I08t+LOg", AgcDcbDrawIndexIndirectMultiGetSize);
 	LIB_FUNC("CtB+A9-VxO0", AgcDcbDispatchIndirect);
 	LIB_FUNC("w8HVkEeXPv8", AgcDcbDispatchIndirectGetSize);
 	LIB_FUNC("aJf+j5yntiU", AgcDcbEventWrite);
@@ -117,6 +138,7 @@ LIB_DEFINE(InitAgcDriver_1) {
 	LIB_FUNC("1rZSWUv1IRc", AgcDcbCopyData);
 	LIB_FUNC("b5u0Jzm8TF8", AgcDcbCopyDataGetSize);
 	LIB_FUNC("WmAc2MEj6Io", AgcDcbDmaData);
+	LIB_FUNC("2ccJz9LQI+w", AgcDcbDmaDataGetSize);
 	LIB_FUNC("xSAR0LTcRKM", AgcDcbJump);
 	LIB_FUNC("VEGu4dixjUg", AgcDcbJumpGetSize);
 	LIB_FUNC("QIXCsbipds0", AgcDcbRewindGetSize);
@@ -134,11 +156,13 @@ LIB_DEFINE(InitAgcDriver_1) {
 	LIB_FUNC("i1jyy49AjXU", AgcDcbWriteData);
 	LIB_FUNC("p9tI+yTvx68", AgcDcbWriteDataGetSize);
 	LIB_FUNC("vuSXe69VILM", AgcDcbGetLodStats);
+	LIB_FUNC("rUuVjyR+Rd4", AgcDcbGetLodStatsGetSize);
 	LIB_FUNC("VmW0Tdpy420", AgcDcbWaitRegMem);
 	LIB_FUNC("43WJ08sSugE", AgcDcbWaitOnAddressGetSize);
 	LIB_FUNC("+kSrjIVxKFE", AgcDcbPushMarker);
 	LIB_FUNC("H7uZqCoNuWk", AgcDcbPopMarker);
 	LIB_FUNC("u2T2DiA5hRI", AgcDcbStallCommandBufferParser);
+	LIB_FUNC("+u6dKSLWM2o", AgcDcbStallCommandBufferParserGetSize);
 	LIB_FUNC("3KDcnM3lrcU", AgcWaitRegMemPatchAddress);
 	LIB_FUNC("7nOoijNPvEU", AgcWaitRegMemPatchReference);
 	LIB_FUNC("n485EBnIWmk", AgcWaitRegMemPatchCompareFunction);
@@ -177,6 +201,7 @@ LIB_DEFINE(InitAgcDriver_1) {
 	LIB_FUNC("XlNp7jzGiPo", AgcDriverSetTFRing);
 	LIB_FUNC("MM4IZSEYytQ", AgcDriverSetHsOffchipParam);
 	LIB_FUNC("Ddwk4gLT5j0", AgcDriverIsCaptureInProgress);
+	LIB_FUNC("Xq5WmbwPTnQ", AgcDriverTriggerCapture);
 	LIB_FUNC("U9ueyEhSkF4", AgcDriverRegisterDefaultOwner);
 	LIB_FUNC("F0ZXt5q0ZTA", Agc::AgcDriverGetDefaultOwner);
 	LIB_FUNC("F0Y42t-3e18", Agc::AgcDriverInitResourceRegistration);
@@ -184,9 +209,12 @@ LIB_DEFINE(InitAgcDriver_1) {
 	LIB_FUNC("uJziRsODk1c", Agc::AgcDriverGetResourceRegistrationMaxNameLength);
 	LIB_FUNC("X-Nm5KLREeg", Agc::AgcDriverRegisterOwner);
 	LIB_FUNC("W5z4eZrjEas", Agc::AgcDriverRegisterResource);
+	LIB_FUNC("LepGrgk77sM", Agc::AgcDriverGetOwnerName);
+	LIB_FUNC("M9yBzRKkjPc", Agc::AgcDriverGetResourceName);
 	LIB_FUNC("ZLJk9r2+2Aw", Agc::AgcDriverUnregisterOwnerAndResources);
 	LIB_FUNC("pWLG7WOpVcw", Agc::AgcDriverUnregisterResource);
 	LIB_FUNC("3AyTaWcF-H8", Agc::AgcDriverRegisterWorkloadStream);
+	LIB_FUNC("n5ElQVYsU1A", Agc::AgcDriverUnregisterWorkloadStream);
 }
 
 } // namespace Graphics::AgcDriver

@@ -184,6 +184,7 @@ int KYTY_SYSV_ABI KernelAvailableFlexibleMemorySize(size_t* size);
 int KYTY_SYSV_ABI KernelConfiguredFlexibleMemorySize(size_t* size);
 int KYTY_SYSV_ABI KernelMprotect(const void* addr, size_t len, int prot);
 int KYTY_SYSV_ABI KernelMtypeprotect(const void* addr, size_t len, int type, int prot);
+int KYTY_SYSV_ABI KernelMlock(const void* addr, size_t len);
 int KYTY_SYSV_ABI KernelWriteRemapIntoPrtCommand(uint32_t* record, uint64_t prt_vaddr,
                                                  uint64_t old_vaddr, uint64_t size, int prot,
                                                  int prot_mask, uint64_t* record_size);

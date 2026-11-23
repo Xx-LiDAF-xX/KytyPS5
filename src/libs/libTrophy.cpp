@@ -527,6 +527,12 @@ static int KYTY_SYSV_ABI NpTrophy2RegisterUnlockCallback(void* callback, void* u
 	return 0;
 }
 
+static int KYTY_SYSV_ABI NpTrophy2UnregisterUnlockCallback() {
+	PRINT_NAME();
+
+	return 0;
+}
+
 static int KYTY_SYSV_ABI NpTrophy2AbortHandle(int handle) {
 	PRINT_NAME();
 
@@ -562,6 +568,7 @@ LIB_DEFINE(InitNet_1_NpTrophy2) {
 	LIB_FUNC("6IjXJUy6ZnA", LibNpTrophy2::NpTrophy2GetGroupIcon);
 	LIB_FUNC("-9LLVU0uvs8", LibNpTrophy2::NpTrophy2GetTrophyIcon);
 	LIB_FUNC("sUXGfNMalIo", LibNpTrophy2::NpTrophy2RegisterUnlockCallback);
+	LIB_FUNC("wVqxM58sIKs", LibNpTrophy2::NpTrophy2UnregisterUnlockCallback);
 	LIB_FUNC("fYapWA9xVmA", LibNpTrophy2::NpTrophy2AbortHandle);
 	LIB_FUNC("d8P11CI40KE", LibNpTrophy2::NpTrophy2DestroyHandle);
 	LIB_FUNC("sysY2FHYff4", LibNpTrophy2::NpTrophy2DestroyContext);

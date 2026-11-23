@@ -4048,6 +4048,12 @@ int KYTY_SYSV_ABI pthread_rename_np(LibKernel::Pthread thread, const char* name)
 	return POSIX_PTHREAD_CALL(LibKernel::PthreadRename(thread, name));
 }
 
+int KYTY_SYSV_ABI pthread_cancel(LibKernel::Pthread thread) {
+	PRINT_NAME();
+
+	return POSIX_PTHREAD_CALL(LibKernel::PthreadCancel(thread));
+}
+
 int KYTY_SYSV_ABI pthread_setcancelstate(int state, int* old_state) {
 	PRINT_NAME();
 

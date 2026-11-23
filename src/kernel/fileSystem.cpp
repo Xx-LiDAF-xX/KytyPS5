@@ -1590,6 +1590,29 @@ int KYTY_SYSV_ABI KernelRmdir(const char* path) {
 	return OK;
 }
 
+int KYTY_SYSV_ABI KernelChmod(const char* path, uint16_t mode) {
+	PRINT_NAME();
+
+	if (path == nullptr) {
+		return KERNEL_ERROR_EINVAL;
+	}
+
+	LOGF("\t path = %s\n"
+	     "\t mode = %04" PRIx16 "\n",
+	     path, mode);
+
+	bool       read_only = false;
+	const auto real_name = g_mount_points->ResolvePath(path, &read_only);
+	if (real_name.empty() || !Common::File::GetInfo(real_name)) {
+		return KERNEL_ERROR_ENOENT;
+	}
+	if (read_only) {
+		return KERNEL_ERROR_EROFS;
+	}
+
+	return OK;
+}
+
 int KYTY_SYSV_ABI KernelCheckReachability(const char* path) {
 	PRINT_NAME();
 

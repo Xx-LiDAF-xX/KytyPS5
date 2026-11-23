@@ -3013,6 +3013,39 @@ int KYTY_SYSV_ABI KernelMtypeprotect(const void* addr, size_t len, int type, int
 	return ProtectMemory(addr, len, prot);
 }
 
+int KYTY_SYSV_ABI KernelMlock(const void* addr, size_t len) {
+	PRINT_NAME();
+
+	std::lock_guard<std::recursive_mutex> memory_operation_lock(g_memory_operation_mutex);
+
+	const auto vaddr = reinterpret_cast<uint64_t>(addr);
+	LOGF("\t addr = 0x%016" PRIx64 "\n"
+	     "\t len  = 0x%016" PRIx64 "\n",
+	     vaddr, static_cast<uint64_t>(len));
+
+	constexpr uint64_t PAGE_SIZE    = 0x4000;
+	const auto         aligned_addr = vaddr & ~(PAGE_SIZE - 1);
+	const auto         page_offset  = vaddr - aligned_addr;
+	if (len > UINT64_MAX - (PAGE_SIZE - 1) - page_offset) {
+		return KERNEL_ERROR_EINVAL;
+	}
+	const auto aligned_len = (len + page_offset + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+	if (aligned_len == 0) {
+		return OK;
+	}
+
+	if (!g_guest_address_space->Owns(aligned_addr, aligned_len)) {
+		return KERNEL_ERROR_ENOMEM;
+	}
+
+	std::lock_guard state(g_memory_state_mutex);
+	if (g_virtual_ranges->ClampRangeSize(aligned_addr, aligned_len, false) != aligned_len) {
+		return KERNEL_ERROR_ENOMEM;
+	}
+
+	return OK;
+}
+
 int KYTY_SYSV_ABI KernelBatchMap2(KernelBatchMapEntry* entries, int num_entries,
                                   int* num_entries_out, int flags) {
 	PRINT_NAME();

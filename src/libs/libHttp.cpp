@@ -463,6 +463,7 @@ LIB_DEFINE(InitNet_1_Http) {
 	LIB_FUNC("0a2TBNfE3BU", Http::HttpGetStatusCode);
 	LIB_FUNC("aCYPMSUIaP8", Http::HttpGetAllResponseHeaders);
 	LIB_FUNC("yuO2H2Uvnos", Http::HttpGetResponseContentLength);
+	LIB_FUNC("P5pdoykPYTk", Http::HttpReadData);
 	LIB_FUNC("Tc-hAYDKtQc", Http::HttpSetResolveTimeOut);
 	LIB_FUNC("K1d1LqZRQHQ", Http::HttpSetResolveRetry);
 	LIB_FUNC("0S9tTH0uqTU", Http::HttpSetConnectTimeOut);

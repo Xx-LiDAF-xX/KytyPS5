@@ -132,6 +132,10 @@ int KYTY_SYSV_ABI NetGetsockname(int s, void* addr, uint32_t* addrlen) {
 	return FinishSocketCall(Net::Getsockname(s, addr, addrlen));
 }
 
+int KYTY_SYSV_ABI NetGetpeername(int s, void* addr, uint32_t* addrlen) {
+	return FinishSocketCall(Net::Getpeername(s, addr, addrlen));
+}
+
 int KYTY_SYSV_ABI NetPoolCreate(const char* name, int size, int flags) {
 	return FinishNetCall(Net::NetPoolCreate(name, size, flags));
 }
@@ -166,6 +170,12 @@ int KYTY_SYSV_ABI NetResolverStartNtoaMultipleRecords(int rid, const char* hostn
                                                       int retry, int flags) {
 	return FinishNetCall(
 	    Net::NetResolverStartNtoaMultipleRecords(rid, hostname, info, timeout, retry, flags));
+}
+
+int KYTY_SYSV_ABI NetResolverStartAton(int rid, const void* addr, char* hostname, int len,
+                                       int timeout, int retry, int flags) {
+	return FinishNetCall(
+	    Net::NetResolverStartAton(rid, addr, hostname, len, timeout, retry, flags));
 }
 
 int KYTY_SYSV_ABI NetInetPton(int af, const char* src, void* dst) {
@@ -276,12 +286,14 @@ LIB_DEFINE(InitNet_1_Net) {
 	LIB_FUNC("AzqoBha7js4", LibNet::NetResolverAbort);
 	LIB_FUNC("Nd91WaWmG2w", LibNet::NetResolverStartNtoa);
 	LIB_FUNC("RCCY01Xd+58", LibNet::NetResolverStartNtoaMultipleRecords);
+	LIB_FUNC("Apb4YDxKsRI", LibNet::NetResolverStartAton);
 	LIB_FUNC("8Kcp5d-q1Uo", LibNet::NetInetPton);
 	LIB_FUNC("9vA2aW+CHuA", LibNet::NetInetNtop);
 	LIB_FUNC("v6M4txecCuo", LibNet::NetEtherNtostr);
 	LIB_FUNC("6Oc0bLsIYe0", LibNet::NetGetMacAddress);
 	LIB_FUNC("hLuXdjHnhiI", LibNet::NetGetSockInfo);
 	LIB_FUNC("hoOAofhhRvE", LibNet::NetGetsockname);
+	LIB_FUNC("TCkRD0DWNLg", LibNet::NetGetpeername);
 	LIB_FUNC("SF47kB2MNTo", LibNet::NetEpollCreate);
 	LIB_FUNC("ZVw46bsasAk", LibNet::NetEpollControl);
 	LIB_FUNC("drjIbDbA7UQ", LibNet::NetEpollWait);

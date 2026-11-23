@@ -174,6 +174,33 @@ void TestTemplateWithoutUserAgent() {
   Shutdown();
 }
 
+void TestHttpReadData(const Loader::SymbolDatabase &symbols) {
+  using HttpReadDataFn = int(KYTY_SYSV_ABI *)(int, void *, size_t);
+  const auto read_data = GetHttpFunction<HttpReadDataFn>(symbols, "P5pdoykPYTk");
+  CHECK(read_data != nullptr);
+  if (read_data == nullptr) {
+    return;
+  }
+
+  using namespace Libs::Network;
+  Initialize();
+  const int pool = Net::NetPoolCreate("http_read", 0x10000, 0);
+  const int ssl = Ssl::SslInit(0x10000);
+  const int http = Http::HttpInit(pool, ssl, 0x10000);
+  const int tmpl = Http::HttpCreateTemplate(http, "KytyTest", 2, 0);
+  const int conn = Http::HttpCreateConnection(tmpl, "example.invalid", "https", 443, 0);
+  const int req = Http::HttpCreateRequest(conn, 0, "/", 0);
+  CHECK(req > 0);
+
+  char buf[16]{};
+  CHECK(read_data(req, nullptr, sizeof(buf)) == static_cast<int>(0x804311feu));
+  CHECK(read_data(-1, buf, sizeof(buf)) == static_cast<int>(0x80431100u));
+  CHECK(read_data(req, buf, sizeof(buf)) == static_cast<int>(0x80431065u));
+  CHECK(Http::HttpSendRequest(req, nullptr, 0) == static_cast<int>(0x80431068u));
+  CHECK(read_data(req, buf, sizeof(buf)) == static_cast<int>(0x80431068u));
+  Shutdown();
+}
+
 } // namespace
 
 int main() {
@@ -189,5 +216,6 @@ int main() {
   TestEmptyUri(parse);
   TestPresentQuery(parse);
   TestTemplateWithoutUserAgent();
+  TestHttpReadData(symbols);
   return failures == 0 ? 0 : 1;
 }

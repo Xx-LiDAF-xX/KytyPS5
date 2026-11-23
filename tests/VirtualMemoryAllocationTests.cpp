@@ -6175,6 +6175,50 @@ void TestGuestTlsGetAddrUsesPerThreadBlocks() {
 	std::printf("[host]    %-48s ok\n", test);
 }
 
+void TestMlockValidatesCommittedRanges() {
+	using namespace Libs::LibKernel::Memory;
+	const char*        test = "MlockValidatesCommittedRanges";
+	constexpr uint64_t page = SceKernelPageSize;
+
+	void* committed = nullptr;
+	CheckOk(test,
+	        KernelMapNamedFlexibleMemory(&committed, 2 * page, SceKernelProtCpuRw, 0, "mlock_flex"),
+	        "map flexible range for mlock");
+	const auto base = reinterpret_cast<uint64_t>(committed);
+	CheckOk(test, KernelMlock(committed, 2 * page), "mlock full committed range");
+	CheckOk(test, KernelMlock(reinterpret_cast<void*>(base + 123), page),
+	        "mlock unaligned interior committed range");
+	CheckOk(test, KernelMlock(committed, 0), "mlock zero length");
+	Check(test, KernelMlock(committed, UINT64_MAX) == Libs::LibKernel::KERNEL_ERROR_EINVAL,
+	      "mlock overflow length did not return EINVAL");
+	Check(test,
+	      KernelMlock(reinterpret_cast<void*>(0x10000), page) == Libs::LibKernel::KERNEL_ERROR_ENOMEM,
+	      "mlock unowned address did not return ENOMEM");
+
+	void* reserved = nullptr;
+	CheckOk(test, KernelReserveVirtualRange(&reserved, 2 * page, 0, page),
+	        "reserve uncommitted range for mlock");
+	Check(test, KernelMlock(reserved, page) == Libs::LibKernel::KERNEL_ERROR_ENOMEM,
+	      "mlock reserved-only range did not return ENOMEM");
+
+	void* partial = reserved;
+	CheckOk(test,
+	        KernelMapNamedFlexibleMemory(&partial, page, SceKernelProtCpuRw,
+	                                     SceKernelMapFixed, "mlock_partial"),
+	        "commit first half of reserved range");
+	CheckOk(test, KernelMlock(partial, page), "mlock committed first page");
+	Check(test, KernelMlock(partial, 2 * page) == Libs::LibKernel::KERNEL_ERROR_ENOMEM,
+	      "mlock spanning into uncommitted page did not return ENOMEM");
+
+	CheckOk(test, KernelMunmap(reinterpret_cast<uint64_t>(reserved), 2 * page),
+	        "unmap partial reservation");
+	CheckOk(test, KernelMunmap(base, 2 * page), "unmap flexible mlock range");
+	Check(test, KernelMlock(committed, page) == Libs::LibKernel::KERNEL_ERROR_ENOMEM,
+	      "mlock after munmap did not return ENOMEM");
+
+	std::printf("[host]    %-48s ok\n", test);
+}
+
 int RunTrinityTests();
 
 int main(int argc, char** argv) {
@@ -6225,6 +6269,7 @@ int main(int argc, char** argv) {
 		RunTest(TestFixedReserveReplacesPartialDirectMapping);
 		RunTest(TestMemoryPoolMultiRangeDecommit);
 		RunTest(TestProgramMemoryAllocationAndProtection);
+		RunTest(TestMlockValidatesCommittedRanges);
 		return g_failed_tests == 0 ? 0 : 1;
 	}
 	if (argc == 2 && std::strcmp(argv[1], "--backing-transfers-only") == 0) {
@@ -6329,6 +6374,7 @@ int main(int argc, char** argv) {
 	RunTest(TestMunmapRoundsToPages);
 	RunTest(TestRangeNamesCoverWholePages);
 	RunTest(TestMprotectSkipsUncommittedRanges);
+	RunTest(TestMlockValidatesCommittedRanges);
 	RunTest(TestFixedReplacementGpuUnmaps);
 	RunTest(TestFixedReserveValidatesBeforeUnmapping);
 	RunTest(TestDirectMapQueryOffsetAndPartialMunmap);

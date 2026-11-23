@@ -44,10 +44,12 @@
 #elif defined(__APPLE__)
 #include <csignal>
 #include <pthread.h>
+#include <sys/resource.h>
 #include <sys/ucontext.h>
 #else
 #include <csignal>
 #include <pthread.h>
+#include <sys/resource.h>
 #include <ucontext.h>
 #endif
 
@@ -2058,6 +2060,109 @@ int KYTY_SYSV_ABI getsockname(int s, void* addr, uint32_t* addrlen) {
 	return Network::Net::Getsockname(s, addr, addrlen);
 }
 
+int KYTY_SYSV_ABI getpeername(int s, void* addr, uint32_t* addrlen) {
+	PRINT_NAME();
+	return Network::Net::Getpeername(s, addr, addrlen);
+}
+
+struct Rusage {
+	LibKernel::KernelTimeval ru_utime;
+	LibKernel::KernelTimeval ru_stime;
+	int64_t                  ru_maxrss;
+	int64_t                  ru_ixrss;
+	int64_t                  ru_idrss;
+	int64_t                  ru_isrss;
+	int64_t                  ru_minflt;
+	int64_t                  ru_majflt;
+	int64_t                  ru_nswap;
+	int64_t                  ru_inblock;
+	int64_t                  ru_oublock;
+	int64_t                  ru_msgsnd;
+	int64_t                  ru_msgrcv;
+	int64_t                  ru_nsignals;
+	int64_t                  ru_nvcsw;
+	int64_t                  ru_nivcsw;
+};
+
+static_assert(sizeof(Rusage) == 144);
+
+int KYTY_SYSV_ABI getrusage(int who, Rusage* rusage) {
+	PRINT_NAME();
+
+	if (rusage == nullptr) {
+		*GetErrorAddr() = POSIX_EFAULT;
+		return -1;
+	}
+
+	constexpr int GUEST_RUSAGE_SELF     = 0;
+	constexpr int GUEST_RUSAGE_CHILDREN = -1;
+	constexpr int GUEST_RUSAGE_THREAD   = 1;
+
+	if (who != GUEST_RUSAGE_SELF && who != GUEST_RUSAGE_CHILDREN && who != GUEST_RUSAGE_THREAD) {
+		*GetErrorAddr() = POSIX_EINVAL;
+		return -1;
+	}
+
+	std::memset(rusage, 0, sizeof(*rusage));
+
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+	if (who == GUEST_RUSAGE_SELF || who == GUEST_RUSAGE_THREAD) {
+		FILETIME creation_time {};
+		FILETIME exit_time {};
+		FILETIME kernel_time {};
+		FILETIME user_time {};
+		const BOOL ok = (who == GUEST_RUSAGE_SELF)
+		                    ? GetProcessTimes(GetCurrentProcess(), &creation_time, &exit_time,
+		                                      &kernel_time, &user_time)
+		                    : GetThreadTimes(GetCurrentThread(), &creation_time, &exit_time,
+		                                     &kernel_time, &user_time);
+		if (ok != 0) {
+			auto filetime_to_timeval = [](const FILETIME& ft) -> LibKernel::KernelTimeval {
+				const uint64_t ticks =
+				    (static_cast<uint64_t>(ft.dwHighDateTime) << 32u) | ft.dwLowDateTime;
+				return {static_cast<int64_t>(ticks / 10000000ull),
+				        static_cast<int64_t>((ticks % 10000000ull) / 10ull)};
+			};
+			rusage->ru_utime = filetime_to_timeval(user_time);
+			rusage->ru_stime = filetime_to_timeval(kernel_time);
+		}
+	}
+#else
+	int host_who = RUSAGE_SELF;
+	if (who == GUEST_RUSAGE_CHILDREN) {
+		host_who = RUSAGE_CHILDREN;
+	}
+#ifdef RUSAGE_THREAD
+	else if (who == GUEST_RUSAGE_THREAD) {
+		host_who = RUSAGE_THREAD;
+	}
+#endif
+	struct ::rusage host_usage {};
+	if (::getrusage(host_who, &host_usage) == 0) {
+		rusage->ru_utime.tv_sec  = static_cast<int64_t>(host_usage.ru_utime.tv_sec);
+		rusage->ru_utime.tv_usec = static_cast<int64_t>(host_usage.ru_utime.tv_usec);
+		rusage->ru_stime.tv_sec  = static_cast<int64_t>(host_usage.ru_stime.tv_sec);
+		rusage->ru_stime.tv_usec = static_cast<int64_t>(host_usage.ru_stime.tv_usec);
+		rusage->ru_maxrss        = static_cast<int64_t>(host_usage.ru_maxrss);
+		rusage->ru_ixrss         = static_cast<int64_t>(host_usage.ru_ixrss);
+		rusage->ru_idrss         = static_cast<int64_t>(host_usage.ru_idrss);
+		rusage->ru_isrss         = static_cast<int64_t>(host_usage.ru_isrss);
+		rusage->ru_minflt        = static_cast<int64_t>(host_usage.ru_minflt);
+		rusage->ru_majflt        = static_cast<int64_t>(host_usage.ru_majflt);
+		rusage->ru_nswap         = static_cast<int64_t>(host_usage.ru_nswap);
+		rusage->ru_inblock       = static_cast<int64_t>(host_usage.ru_inblock);
+		rusage->ru_oublock       = static_cast<int64_t>(host_usage.ru_oublock);
+		rusage->ru_msgsnd        = static_cast<int64_t>(host_usage.ru_msgsnd);
+		rusage->ru_msgrcv        = static_cast<int64_t>(host_usage.ru_msgrcv);
+		rusage->ru_nsignals      = static_cast<int64_t>(host_usage.ru_nsignals);
+		rusage->ru_nvcsw         = static_cast<int64_t>(host_usage.ru_nvcsw);
+		rusage->ru_nivcsw        = static_cast<int64_t>(host_usage.ru_nivcsw);
+	}
+#endif
+
+	return 0;
+}
+
 int KYTY_SYSV_ABI getsockopt(int s, int level, int optname, void* optval, uint32_t* optlen) {
 	PRINT_NAME();
 	return Network::Net::Getsockopt(s, level, optname, optval, optlen);
@@ -2224,6 +2329,7 @@ LIB_DEFINE(InitLibKernel_1_Posix) {
 	LIB_FUNC_POSIX_KERNEL("FJrT5LuUBAU", Posix::pthread_exit);
 	LIB_FUNC("EotR8a3ASf4", Posix::pthread_self);
 	LIB_FUNC("9vyP6Z7bqzc", Posix::pthread_rename_np);
+	LIB_FUNC_POSIX_KERNEL("0D4-FVvEikw", Posix::pthread_cancel);
 	LIB_FUNC_POSIX_KERNEL("lZzFeSxPl08", Posix::pthread_setcancelstate);
 	LIB_FUNC("a2P9wYGeZvc", Posix::pthread_setprio);
 	LIB_FUNC("FIs3-UQT9sg", Posix::pthread_getschedparam);
@@ -2283,6 +2389,8 @@ LIB_DEFINE(InitLibKernel_1_Posix) {
 	LIB_FUNC_POSIX_KERNEL("TUuiYS2kE8s", Posix::shutdown);
 	LIB_FUNC_POSIX_KERNEL("3e+4Iv7IJ8U", Posix::accept);
 	LIB_FUNC_POSIX_KERNEL("RenI1lL1WFk", Posix::getsockname);
+	LIB_FUNC_POSIX_KERNEL("TXFFFiNldU8", Posix::getpeername);
+	LIB_FUNC_POSIX_KERNEL("hHlZQUnlxSM", Posix::getrusage);
 	LIB_FUNC_POSIX_KERNEL("6O8EwYOgH9Y", Posix::getsockopt);
 	LIB_FUNC_POSIX_KERNEL("fFxGkxF2bVo", Posix::setsockopt);
 	LIB_FUNC_POSIX_KERNEL("T8fER+tIGgk", Posix::select);
@@ -2303,6 +2411,7 @@ LIB_NAME("Coredump", "libkernel");
 
 static uint64_t g_coredump_handler         = 0;
 static uint64_t g_coredump_handler_context = 0;
+static int      g_coredump_user_data_type  = 0;
 
 int KYTY_SYSV_ABI sceCoredumpRegisterCoredumpHandler(uint64_t handler, size_t stack_size,
                                                      uint64_t context) {
@@ -2324,6 +2433,16 @@ int KYTY_SYSV_ABI sceCoredumpUnregisterCoredumpHandler() {
 
 	g_coredump_handler         = 0;
 	g_coredump_handler_context = 0;
+
+	return OK;
+}
+
+int KYTY_SYSV_ABI sceCoredumpSetUserDataType(int type) {
+	PRINT_NAME();
+
+	g_coredump_user_data_type = type;
+
+	LOGF("\t type = %d\n", type);
 
 	return OK;
 }
@@ -2865,10 +2984,10 @@ int32_t KYTY_SYSV_ABI FiberGetThreadFramePointerAddress(uint64_t* addr_frame_poi
 
 } // namespace Fiber
 
-int chmod(const char* path, int mode) {
+int KYTY_SYSV_ABI chmod(const char* path, int mode) {
 	PRINT_NAME();
 
-	return OK;
+	return POSIX_CALL(LibKernel::FileSystem::KernelChmod(path, static_cast<uint16_t>(mode)));
 }
 
 int KYTY_SYSV_ABI KernelAioInitializeImpl(void* param, int32_t size) {
@@ -3158,6 +3277,7 @@ namespace Coredump {
 LIB_DEFINE(InitCoredump_1) {
 	LIB_FUNC("8zLSfEfW5AU", Coredump::sceCoredumpRegisterCoredumpHandler);
 	LIB_FUNC("fFkhOgztiCA", Coredump::sceCoredumpUnregisterCoredumpHandler);
+	LIB_FUNC("Uxqkdta7wEg", Coredump::sceCoredumpSetUserDataType);
 }
 
 } // namespace Coredump
@@ -3183,6 +3303,7 @@ LIB_DEFINE(InitLibKernel_1_FS) {
 	LIB_FUNC("j2AIqSqJP0w", FileSystem::KernelGetdents);
 	LIB_FUNC("1-LFLmRFxxM", FileSystem::KernelMkdir);
 	LIB_FUNC("naInUjYt3so", FileSystem::KernelRmdir);
+	LIB_FUNC("fgIsQ10xYVA", FileSystem::KernelChmod);
 	LIB_FUNC("uWyW3v98sU4", FileSystem::KernelCheckReachability);
 }
 
@@ -3216,6 +3337,7 @@ LIB_DEFINE(InitLibKernel_1_Mem) {
 	LIB_FUNC("n1-v6FgU7MQ", Memory::KernelConfiguredFlexibleMemorySize);
 	LIB_FUNC("vSMAm3cxYTY", Memory::KernelMprotect);
 	LIB_FUNC("9bfdLIyuwCY", Memory::KernelMtypeprotect);
+	LIB_FUNC("3k6kx-zOOSQ", Memory::KernelMlock);
 	LIB_FUNC("RPAHEYSOt1s", Memory::KernelWriteRemapIntoPrtCommand);
 	LIB_FUNC("vnKYv2NuO5U", Memory::KernelWriteUnmapToPrtCommand);
 	LIB_FUNC("2SKEx6bSq-4", Memory::KernelBatchMap);

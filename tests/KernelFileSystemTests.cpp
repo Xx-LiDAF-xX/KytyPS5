@@ -61,6 +61,10 @@ void InitSystemService_1(Loader::SymbolDatabase *symbols);
 void InitAppContent_1(Loader::SymbolDatabase *symbols);
 }
 
+namespace Libs::Coredump {
+void InitCoredump_1(Loader::SymbolDatabase *symbols);
+}
+
 namespace Libs::LibAmpr {
 void InitAmpr_1(Loader::SymbolDatabase *symbols);
 }
@@ -3055,6 +3059,78 @@ void CheckSocketWakeup() {
         "closed descriptor fails without clearing input fd_set");
 }
 
+void TestChmodGetrusageCoredumpAndPosixExports(const std::filesystem::path &root) {
+  namespace Kernel = Libs::LibKernel;
+  Loader::SymbolDatabase symbols;
+  Libs::InitLibKernel_1(&symbols);
+  Libs::Coredump::InitCoredump_1(&symbols);
+  const auto find = [&](const char *nid) {
+    const auto *symbol = symbols.FindByNid(nid, Loader::SymbolType::Func);
+    Check(symbol != nullptr, "expected kernel/posix/coredump export resolves");
+    return symbol->vaddr;
+  };
+
+  using KernelChmodFn = int(KYTY_SYSV_ABI *)(const char *, uint16_t);
+  using PosixChmodFn = int(KYTY_SYSV_ABI *)(const char *, int);
+  using PthreadCancelFn = int(KYTY_SYSV_ABI *)(Kernel::Pthread);
+  using CoredumpSetTypeFn = int(KYTY_SYSV_ABI *)(int);
+  struct GuestRusage {
+    Kernel::KernelTimeval ru_utime;
+    Kernel::KernelTimeval ru_stime;
+    int64_t counters[14];
+  };
+  static_assert(sizeof(GuestRusage) == 144);
+  using GetrusageFn = int(KYTY_SYSV_ABI *)(int, GuestRusage *);
+
+  const auto kernel_chmod = reinterpret_cast<KernelChmodFn>(find("fgIsQ10xYVA"));
+  const auto posix_chmod = reinterpret_cast<PosixChmodFn>(find("z0dtnPxYgtg"));
+  const auto posix_cancel = reinterpret_cast<PthreadCancelFn>(find("0D4-FVvEikw"));
+  const auto posix_getpeername = find("TXFFFiNldU8");
+  const auto getrusage = reinterpret_cast<GetrusageFn>(find("hHlZQUnlxSM"));
+  const auto coredump_set_type = reinterpret_cast<CoredumpSetTypeFn>(find("Uxqkdta7wEg"));
+  Check(posix_getpeername != 0, "Posix::getpeername resolves");
+
+  const int fd = FileSystem::KernelOpen("/savedata0/chmod_test.dat", 0x602, 0666);
+  Check(fd >= 3 && FileSystem::KernelClose(fd) == OK, "create chmod fixture");
+  Check(kernel_chmod("/savedata0/chmod_test.dat", 0644) == OK &&
+            posix_chmod("/savedata0/chmod_test.dat", 0644) == 0,
+        "chmod succeeds on writable files");
+  Check(kernel_chmod("/savedata0/missing_chmod.dat", 0644) == Kernel::KERNEL_ERROR_ENOENT &&
+            posix_chmod("/savedata0/missing_chmod.dat", 0644) == -1 &&
+            *Libs::Posix::GetErrorAddr() == Libs::Posix::POSIX_ENOENT,
+        "chmod rejects missing paths with ENOENT");
+  Check(kernel_chmod(nullptr, 0644) == Kernel::KERNEL_ERROR_EINVAL &&
+            posix_chmod(nullptr, 0644) == -1 &&
+            *Libs::Posix::GetErrorAddr() == Libs::Posix::POSIX_EINVAL,
+        "chmod rejects null paths with EINVAL");
+
+  const auto ro_dir = root / "chmod_ro";
+  std::filesystem::create_directories(ro_dir);
+  {
+    std::ofstream out(ro_dir / "ro.dat");
+    out << "ro";
+  }
+  FileSystem::Mount(ro_dir, "/chmod_ro", true);
+  Check(kernel_chmod("/chmod_ro/ro.dat", 0644) == Kernel::KERNEL_ERROR_EROFS &&
+            posix_chmod("/chmod_ro/ro.dat", 0644) == -1 &&
+            *Libs::Posix::GetErrorAddr() == Libs::Posix::POSIX_EROFS,
+        "chmod rejects read-only mounts with EROFS");
+  FileSystem::Umount("/chmod_ro");
+
+  GuestRusage usage{};
+  Check(getrusage(0, &usage) == 0 && getrusage(-1, &usage) == 0 && getrusage(1, &usage) == 0,
+        "getrusage succeeds for SELF, CHILDREN, and THREAD");
+  Check(getrusage(99, &usage) == -1 &&
+            *Libs::Posix::GetErrorAddr() == Libs::Posix::POSIX_EINVAL,
+        "getrusage rejects invalid who with EINVAL");
+  Check(getrusage(0, nullptr) == -1 &&
+            *Libs::Posix::GetErrorAddr() == Libs::Posix::POSIX_EFAULT,
+        "getrusage rejects null buffer with EFAULT");
+  Check(posix_cancel(nullptr) == Libs::Posix::POSIX_EINVAL,
+        "Posix::pthread_cancel returns POSIX EINVAL for null handle");
+  Check(coredump_set_type(1) == OK, "sceCoredumpSetUserDataType returns OK");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -3128,6 +3204,7 @@ int main(int argc, char** argv) {
   CheckSaveRename(temporary.Path(), "first-save");
   CheckSaveRename(temporary.Path(), "replacement-save");
   CheckSocketWakeup();
+  TestChmodGetrusageCoredumpAndPosixExports(temporary.Path());
   FileSystem::Shutdown();
   CheckEtherAddressFormatting();
 #if defined(__linux__)

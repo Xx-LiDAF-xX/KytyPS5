@@ -16,6 +16,10 @@ namespace Libs::LibSsl {
 void InitNet_1_Ssl(Loader::SymbolDatabase *symbols);
 }
 
+namespace Libs::LibNpTrophy2 {
+void InitNet_1_NpTrophy2(Loader::SymbolDatabase *symbols);
+}
+
 namespace {
 
 namespace Network = Libs::Network;
@@ -127,6 +131,76 @@ TEST_F(NetResolverTest, SslMemoryPoolStatsReportInitPoolSize) {
   EXPECT_EQ(get_stats(ssl, nullptr), Network::SSL_ERROR_INVALID_VALUE);
   EXPECT_EQ(get_stats(ssl, &stats), Network::SSL_ERROR_INVALID_ID);
   EXPECT_EQ(stats.pool_size, 0u);
+}
+
+TEST_F(NetResolverTest, AtonValidatesArgumentsAndResolvesLoopback) {
+  using StartAton = int(KYTY_SYSV_ABI *)(int, const void *, char *, int, int,
+                                         int, int);
+  const auto aton = Function<StartAton>("Apb4YDxKsRI");
+  ASSERT_NE(aton, nullptr);
+
+  const uint32_t loopback = 0x0100007fu; // 127.0.0.1 in network byte order.
+  char hostname[256]{};
+  EXPECT_EQ(aton(rid, nullptr, hostname, sizeof(hostname), 0, 0, 0),
+            Network::NET_ERROR_EINVAL);
+  EXPECT_EQ(aton(rid, &loopback, nullptr, sizeof(hostname), 0, 0, 0),
+            Network::NET_ERROR_EINVAL);
+  EXPECT_EQ(aton(rid, &loopback, hostname, 0, 0, 0, 0),
+            Network::NET_ERROR_EINVAL);
+  EXPECT_EQ(aton(rid + 1, &loopback, hostname, sizeof(hostname), 0, 0, 0),
+            Network::NET_ERROR_EBADF);
+
+  const int result = aton(rid, &loopback, hostname, sizeof(hostname), 0, 0, 0);
+  if (result == 0) {
+    EXPECT_NE(hostname[0], '\0');
+    EXPECT_EQ(aton(rid, &loopback, hostname, 1, 0, 0, 0),
+              Network::NET_ERROR_RESOLVER_ENOSPACE);
+  } else {
+    EXPECT_EQ(result, Network::NET_ERROR_RESOLVER_ENOHOST);
+  }
+}
+
+TEST_F(NetResolverTest, GetpeernameReportsConnectedPeer) {
+  using GetpeernameFn = int(KYTY_SYSV_ABI *)(int, void *, uint32_t *);
+  const auto getpeername = Function<GetpeernameFn>("TCkRD0DWNLg");
+  ASSERT_NE(getpeername, nullptr);
+
+  const int server = Network::Net::Socket(2, 1, 6);
+  const int client = Network::Net::Socket(2, 1, 6);
+  ASSERT_GE(server, 0);
+  ASSERT_GE(client, 0);
+
+  uint8_t addr[16]{};
+  uint32_t addrlen = sizeof(addr);
+  EXPECT_EQ(getpeername(client, addr, &addrlen), Network::NET_ERROR_ENOTCONN);
+
+  addr[0] = 16;
+  addr[1] = 2;
+  addr[4] = 127;
+  addr[7] = 1;
+  ASSERT_EQ(Network::Net::Bind(server, addr, sizeof(addr)), 0);
+  ASSERT_EQ(Network::Net::Listen(server, 1), 0);
+
+  uint8_t bound[16]{};
+  uint32_t bound_len = sizeof(bound);
+  ASSERT_EQ(Network::Net::Getsockname(server, bound, &bound_len), 0);
+  ASSERT_EQ(Network::Net::Connect(client, bound, bound_len), 0);
+
+  uint8_t peer[16]{};
+  uint32_t peer_len = sizeof(peer);
+  ASSERT_EQ(getpeername(client, peer, &peer_len), 0);
+  EXPECT_EQ(peer_len, 16u);
+  EXPECT_EQ(peer[1], 2);
+  EXPECT_EQ(std::memcmp(peer + 2, bound + 2, 6), 0);
+
+  EXPECT_EQ(Network::Net::SocketClose(client), 0);
+  EXPECT_EQ(Network::Net::SocketClose(server), 0);
+
+  Libs::LibNpTrophy2::InitNet_1_NpTrophy2(&symbols);
+  using UnregisterCallbackFn = int(KYTY_SYSV_ABI *)();
+  const auto unregister_cb = Function<UnregisterCallbackFn>("wVqxM58sIKs");
+  ASSERT_NE(unregister_cb, nullptr);
+  EXPECT_EQ(unregister_cb(), 0);
 }
 
 } // namespace

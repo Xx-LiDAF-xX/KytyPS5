@@ -1,4 +1,5 @@
 #include "libs/agc.h"
+#include "graphics/shader/shader.h"
 #include "loader/symbolDatabase.h"
 
 #include <gtest/gtest.h>
@@ -172,9 +173,72 @@ TEST(Agc, AcbUserDataHasNoR) {
 	EXPECT_EQ(acb.dw, dcb.dw);
 	EXPECT_EQ(Agc::AgcWaitRegMemPatchReference(acb.dw.data(), 2), 0);
 
-	Packet<11> semaphore;
-	Agc::AgcAcbMemSemaphore(semaphore.Buf(), &label, 0, 0, 7);
-	EXPECT_EQ((std::array {semaphore.dw[0], semaphore.dw[8]}), (std::array {0xc0027900u, 0xc0017900u}));
+	Packet<11> acb_sem;
+	Packet<11> dcb_sem;
+	Agc::AgcAcbMemSemaphore(acb_sem.Buf(), &label, 0, 0, 7);
+	Agc::AgcDcbMemSemaphore(dcb_sem.Buf(), &label, 0, 0, 7);
+	EXPECT_EQ((std::array {acb_sem.dw[0], acb_sem.dw[8]}), (std::array {0xc0027900u, 0xc0017900u}));
+	EXPECT_EQ((std::array {dcb_sem.dw[0], dcb_sem.dw[8]}), (std::array {0xc0027904u, 0xc0017904u}));
+	dcb_sem.dw[0] = acb_sem.dw[0];
+	dcb_sem.dw[8] = acb_sem.dw[8];
+	EXPECT_EQ(dcb_sem.dw, acb_sem.dw);
+}
+
+TEST(Agc, RegisterRangeAndPacketGetSizes) {
+	const std::array<uint32_t, 3> values {0x11u, 0x22u, 0x33u};
+	Packet<5> uc_range;
+	EXPECT_EQ(Agc::AgcCbSetUcRegisterRangeDirect(uc_range.Buf(), 0x123u, values.data(),
+	                                             static_cast<uint32_t>(values.size())),
+	          uc_range.dw.data());
+	EXPECT_EQ(uc_range.dw, (std::array<uint32_t, 5> {0xc0037900u, 0x123u, 0x11u, 0x22u, 0x33u}));
+	EXPECT_EQ(Agc::AgcCbSetUcRegisterRangeDirectGetSize(3u), 20u);
+
+	const std::array<ShaderRegister, 4> regs {{
+	    {0x10u, 1u}, {0x11u, 2u}, {0x20u, 3u}, {0x21u, 4u},
+	}};
+	EXPECT_EQ(Agc::AgcCbSetShRegistersDirectGetSize(regs.data(), 4u), 32u);
+	EXPECT_EQ(Agc::AgcCbSetUcRegistersDirectGetSize(regs.data(), 4u), 32u);
+	EXPECT_EQ(Agc::AgcCbSetShRegistersDirectGetSize(nullptr, 0u), 0u);
+	EXPECT_EQ(Agc::AgcDcbSetShRegisterDirectGetSize(), 12u);
+	EXPECT_EQ(Agc::AgcDcbSetUcRegisterDirectGetSize(), 12u);
+	EXPECT_EQ(Agc::AgcDcbSetUcRegistersIndirectGetSize(), 20u);
+	EXPECT_EQ(Agc::AgcDcbSetIndexSizeGetSize(), 12u);
+	EXPECT_EQ(Agc::AgcDcbSetIndexBufferGetSize(), 12u);
+	EXPECT_EQ(Agc::AgcDcbSetIndexCountGetSize(), 8u);
+	EXPECT_EQ(Agc::AgcDcbDrawIndirectMultiGetSize(), 64u);
+	EXPECT_EQ(Agc::AgcDcbDrawIndexIndirectGetSize(), 20u);
+	EXPECT_EQ(Agc::AgcDcbDrawIndexIndirectMultiGetSize(), 64u);
+	EXPECT_EQ(Agc::AgcAcbEventWriteGetSize(7u), 8u);
+	EXPECT_EQ(Agc::AgcAcbRewindGetSize(), 8u);
+	EXPECT_EQ(Agc::AgcAcbDmaDataGetSize(), 28u);
+	EXPECT_EQ(Agc::AgcDcbDmaDataGetSize(), 28u);
+	EXPECT_EQ(Agc::AgcAcbDispatchIndirectGetSize(), 16u);
+	EXPECT_EQ(Agc::AgcDcbStallCommandBufferParserGetSize(), 8u);
+	EXPECT_EQ(Agc::AgcDcbGetLodStatsGetSize(), 20u);
+}
+
+TEST(Agc, UnregisterWorkloadStreamAndNewExports) {
+	constexpr auto invalid_value = static_cast<int>(0x8a6c0033u);
+	EXPECT_EQ(Agc::AgcDriverUnregisterWorkloadStream(0), invalid_value);
+	EXPECT_EQ(Agc::AgcDriverRegisterWorkloadStream(7, "stream"), 0);
+	EXPECT_EQ(Agc::AgcDriverUnregisterWorkloadStream(7), 0);
+	EXPECT_EQ(Agc::AgcDriverUnregisterWorkloadStream(7), invalid_value);
+	EXPECT_EQ(Agc::AgcDriverRegisterWorkloadStream(7, "stream2"), 0);
+	EXPECT_EQ(Agc::AgcDriverUnregisterWorkloadStream(7), 0);
+	EXPECT_EQ(AgcDriver::AgcDriverTriggerCapture(1), 0);
+
+	Loader::SymbolDatabase symbols;
+	Libs::InitAgcDriver_1(&symbols);
+	for (const char* nid: {
+	         "MDLD5Ly94Xk", "JOWmDrl+j20", "yUBESvCCJ4I", "TGEZzUWLbrc", "Y-5vneiBtzk",
+	         "0ZOG0jc9nRg", "M0ttm8h7SKA", "PxKWV2fVAps", "GPbUp9jXQa8", "rVOmPz2RBlg",
+	         "opR1JeJZCBU", "QhPDD513V0w", "aP1Ki9G3++4", "UQGTw4xRlcM", "ca4KPvp0qLQ",
+	         "j4emHHndCPY", "mljzuGDZRQ4", "pYoKs3lPy88", "mStuvI0zOtc", "r98I08t+LOg",
+	         "2ccJz9LQI+w", "rUuVjyR+Rd4", "+u6dKSLWM2o", "G0jrLdvEqDw", "Xq5WmbwPTnQ",
+	         "LepGrgk77sM", "M9yBzRKkjPc", "n5ElQVYsU1A",
+	     }) {
+		EXPECT_NE(symbols.FindByNid(nid, Loader::SymbolType::Func), nullptr) << nid;
+	}
 }
 
 TEST(AgcDeathTest, DrawIndirectMultiNeedsABuffer) {

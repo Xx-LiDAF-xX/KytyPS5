@@ -661,6 +661,8 @@ void TestReportedEventHle(const std::filesystem::path &directory) {
   Check(NpUniversalDataSystemDestroyContext(context) == 0 &&
             NpUniversalDataSystemDestroyContext(guest_context) == 0,
         "destroy UDS contexts of reported progress");
+  Check(Trophy::NpTrophy2UnregisterUnlockCallback() == 0,
+        "sceNpTrophy2UnregisterUnlockCallback returns OK");
   Trophy::g_states.clear();
   Trophy::g_packages.clear();
   Config::Shutdown();
