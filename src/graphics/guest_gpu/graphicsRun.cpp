@@ -152,8 +152,8 @@ void GuestGpu::SubmitFlipPreparation(uint64_t request_id) {
 void GuestGpu::SuspendPoint() {
 	EXIT_IF(IsGpuThread() || CommandScheduler::InDeferredOperation());
 	// Do not hold a queue lock while waiting: asynchronous work may be needed to
-	// finish the preceding graphics frame. The first point returns immediately.
-	m_suspend_point_ready->acquire();
+	// process the preceding graphics frame. The first point returns immediately.
+	m_suspend_point_ready.acquire();
 	Submission submission;
 	submission.type = SubmissionType::SuspendPoint;
 	Enqueue(std::move(submission));
@@ -677,11 +677,11 @@ bool GuestGpu::Process(Submission& submission) {
 		case SubmissionType::SuspendPoint:
 			// Age caches at the frame boundary, not once per command list.
 			m_renderer.RunGarbageCollector();
-			m_renderer.GetCommandScheduler().DeferPriorityOperation(
-			    [ready = m_suspend_point_ready] { ready->release(); });
-			m_renderer.GetOcclusionQueries().Publish(true);
 			cp.BufferFlush();
 			cp.Reset();
+			// Like completion labels, the point has executed once the CP has submitted every
+			// packet before it, without waiting for the host GPU.
+			m_suspend_point_ready.release();
 			break;
 	}
 
@@ -778,6 +778,9 @@ void CommandProcessor::ProcessPm4(Pm4Execution& execution) {
 			EXIT("unknown op\n\t%05" PRIx32 ":\n\tcmd_id = %08" PRIx32 "\n", offset, packet_header);
 		}
 
+		if (!g_cp_op_keeps_draw_window[opcode]) {
+			m_renderer.GetBufferCache().EndDrawWindow();
+		}
 		const auto packet_dw =
 		    handler(*this, packet_header & ~1u, packet + 1, remaining_dw, total_dw) + 1;
 		EXIT_IF(packet_dw > remaining_dw);
@@ -1097,11 +1100,15 @@ void CommandProcessor::ReleaseMem(uint32_t data_sel, uint32_t interrupt_selector
 	// Other labels go through the guest mapping: its fault keeps a clean cached copy current and
 	// downloads GPU-written bytes under the label before the store.
 	const auto write_label = [this, address](const void* value, uint64_t size) {
-		const auto vaddr   = reinterpret_cast<uint64_t>(address);
-		auto&      buffers = m_renderer.GetBufferCache();
-		if (!GuestRange {vaddr, size}.Valid() || !buffers.IsRegionGpuModified(vaddr, size) ||
-		    buffers.HasGpuDirtyBytes(vaddr, size) ||
-		    !LibKernel::Memory::TryWriteBacking(vaddr, value, size)) {
+		const auto vaddr    = reinterpret_cast<uint64_t>(address);
+		auto&      buffers  = m_renderer.GetBufferCache();
+		auto&      textures = m_renderer.GetTextureCache();
+		const bool beside_gpu_bytes =
+		    GuestRange {vaddr, size}.Valid() &&
+		    (buffers.IsRegionGpuModified(vaddr, size) ||
+		     textures.IsRegionGpuModified(vaddr, size)) &&
+		    !buffers.HasGpuDirtyBytes(vaddr, size) && !textures.HasGpuDirtyBytes(vaddr, size);
+		if (!beside_gpu_bytes || !LibKernel::Memory::TryWriteBacking(vaddr, value, size)) {
 			std::memcpy(address, value, size);
 		}
 	};

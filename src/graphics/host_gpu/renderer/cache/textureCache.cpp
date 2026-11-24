@@ -17,6 +17,7 @@
 #include "graphics/host_gpu/renderer/image/tiler.h"
 #include "graphics/host_gpu/renderer/render.h"
 #include "graphics/host_gpu/renderer/renderContext.h"
+#include "graphics/host_gpu/renderer/resolveCache.h"
 #include "kernel/memory.h"
 
 #include <algorithm>
@@ -48,12 +49,10 @@ constexpr uint64_t SmallTiledReadbackTexels = 64 * 64;
 	                           : desc.view_info.format;
 	const bool  cmask    = metadata.kind == ImageMetadataKind::Cmask;
 	if (cmask ? code == 0 : code == 0x20) {
-		if (metadata.clear_register_valid &&
-		    DecodePackedColorClear(format, metadata.clear_word, clear)) {
-			return true;
-		}
-		clear = {};
-		return true;
+		// Register clears belong to the color buffer; the texture pipe cannot decode them.
+		return desc.type == TextureCache::BindingType::RenderTarget &&
+		       metadata.clear_register_valid &&
+		       DecodePackedColorClear(format, metadata.clear_word, clear);
 	}
 	if (cmask) {
 		return false;
@@ -124,11 +123,13 @@ constexpr uint64_t SmallTiledReadbackTexels = 64 * 64;
 } // namespace
 
 TextureCache::TextureCache(GraphicContext& graphics, CommandScheduler& scheduler,
-                           PageManager& page_manager, BufferCache& buffer_cache)
+                           PageManager& page_manager, BufferCache& buffer_cache,
+                           ResolveCache& resolve_cache)
     : m_graphics(graphics), m_scheduler(scheduler), m_page_manager(page_manager),
       m_blit_helper(graphics, scheduler),
       m_tiler(graphics, scheduler, buffer_cache.GetUtilityBuffer(MemoryUsage::Stream)),
-      m_buffer_cache(buffer_cache), m_readback_linear_images(Config::ReadbackLinearImagesEnabled()),
+      m_buffer_cache(buffer_cache), m_resolve_cache(resolve_cache),
+      m_readback_linear_images(Config::ReadbackLinearImagesEnabled()),
       m_readback_tiled_images(Config::ReadbackTiledImagesEnabled()),
       m_readback_storage_images(Config::ReadbackStorageImagesEnabled()) {
 	if (m_graphics.CanReportMemoryUsage()) {
@@ -230,6 +231,7 @@ void TextureCache::RegisterImage(ImageId id) {
 	});
 	image.registered = true;
 	image.lru_id     = m_lru_cache.Insert(id, m_gc_tick);
+	m_resolve_cache.Invalidate();
 	m_total_used_memory += image.AccountedSize();
 	m_resolve_epoch.fetch_add(1, std::memory_order_relaxed);
 }
@@ -254,6 +256,7 @@ void TextureCache::UnregisterImage(ImageId id) {
 	m_lru_cache.Free(image.lru_id);
 	m_total_used_memory -= image.AccountedSize();
 	image.registered = false;
+	m_resolve_cache.Invalidate();
 	m_resolve_epoch.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -455,35 +458,6 @@ void TextureCache::UntrackImageRead(ImageId id) {
 	if (size != 0) {
 		m_page_manager.UpdatePageWatchers<false, true>(address, size);
 	}
-}
-
-void TextureCache::UntrackImageReadRange(ImageId id, uint64_t page_begin, uint64_t page_end) {
-	auto& image = m_slot_images[id];
-	if (!image.IsReadTracked()) {
-		return;
-	}
-	const auto cur_begin = image.read_track_addr;
-	const auto cur_end   = image.read_track_addr_end;
-	if (page_end <= cur_begin || page_begin >= cur_end) {
-		return;
-	}
-	if (page_begin <= cur_begin && page_end >= cur_end) {
-		UntrackImageRead(id);
-		return;
-	}
-	if (page_begin <= cur_begin) {
-		const auto trim_size  = page_end - cur_begin;
-		image.read_track_addr = page_end;
-		m_page_manager.UpdatePageWatchers<false, true>(cur_begin, trim_size);
-		return;
-	}
-	if (page_end >= cur_end) {
-		const auto trim_size      = cur_end - page_begin;
-		image.read_track_addr_end = page_begin;
-		m_page_manager.UpdatePageWatchers<false, true>(page_begin, trim_size);
-		return;
-	}
-	UntrackImageRead(id);
 }
 
 void TextureCache::QueueReadTrack(ImageId id, const Image& image) {
@@ -859,8 +833,12 @@ void Resolve(TextureCache& cache, ImageId cached_id, ImageId merged_id) {
 	// PS5 raw block images can span several packed BC mips. Transfer their complete
 	// guest bytes, including tail padding, before retiring the incompatible backing.
 	if (cached.SafeToDownload()) {
-		if (merged && merged->SafeToDownload() && !Publish(cache, *merged)) {
-			return;
+		if (merged && merged->SafeToDownload()) {
+			if (!Publish(cache, *merged)) {
+				return;
+			}
+			cache.m_pending_read_track.erase(merged_id);
+			cache.UntrackImageRead(merged_id);
 		}
 		if (!Publish(cache, cached)) {
 			return;
@@ -1111,6 +1089,8 @@ void TextureCache::InitializeImage(ImageId id) {
 		}
 		UploadImage(image, *source, source_offset);
 		image.ClearBufferModified();
+		m_pending_read_track.erase(id);
+		UntrackImageRead(id);
 	}
 	image.RefreshComplete();
 }
@@ -1353,6 +1333,7 @@ ImageId TextureCache::AssociateStencil(ImageId depth_id, GuestRange stencil) {
 	auto& record = m_slot_images[association];
 	TouchImage(record);
 	if (record.depth_id != depth_id || record.stencil_subresources != depth.stencil_subresources) {
+		m_resolve_cache.Invalidate();
 		ImageInfo plane {};
 		plane.data         = stencil;
 		plane.pixel_format = vk::Format::eS8Uint;
@@ -1420,6 +1401,7 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_format) {
 				block_alias = true;
 			}
 		}
+		desc.stamp = m_resolve_cache.Stamp(desc.info, candidates.size(), result);
 
 		int32_t view_mip   = -1;
 		int32_t view_layer = -1;
@@ -1617,6 +1599,9 @@ vk::ImageView TextureCache::FindDepthTarget(ImageId id, const ImageDesc& desc) {
 	image.info.metadata = desc.info.metadata;
 	if (desc.info.HasMetadata()) {
 		const auto [metadata, inserted] = m_surface_metas.try_emplace(desc.info.metadata.range.address);
+		if (inserted) {
+			m_resolve_cache.Invalidate();
+		}
 		if (inserted && image.info.htile_initial_clear) {
 			metadata->second.clear_mask.set();
 		}
@@ -1986,6 +1971,8 @@ bool TextureCache::DownloadImageMemory(ImageId id) {
 	                                               1, &barrier, 0, nullptr);
 	// With storage readback, guest accesses to its pages wait until the stored data lands.
 	if (m_readback_storage_images) {
+		m_pending_read_track.erase(id);
+		UntrackImageRead(id);
 		{
 			std::scoped_lock write_back_lock {m_write_back_mutex};
 			m_write_backs.push_back({range, m_scheduler.CurrentTick()});
@@ -2109,18 +2096,60 @@ bool TextureCache::CopyToImage(uint64_t address, uint64_t source, uint64_t size)
 	return true;
 }
 
-bool TextureCache::ReadMemory(uint64_t address, uint64_t size) {
+bool TextureCache::IsRegionGpuModified(uint64_t address, uint64_t size) {
+	if (m_read_tracked_count.load(std::memory_order_relaxed) == 0 ||
+	    !GuestRange {address, size}.Valid()) {
+		return false;
+	}
+	const auto page_begin = Common::AlignDown(address, TRACKER_PAGE_SIZE);
+	const auto page_end   = Common::AlignUp(address + size, TRACKER_PAGE_SIZE);
+	std::scoped_lock lock {m_lock};
+	bool             modified = false;
+	ForEachImageInRegion(page_begin, page_end - page_begin, [&](ImageId, Image& image) {
+		if (image.IsReadTracked() && image.read_track_addr < page_end &&
+		    page_begin < image.read_track_addr_end) {
+			modified = true;
+			return true;
+		}
+		return false;
+	});
+	return modified;
+}
+
+bool TextureCache::HasGpuDirtyBytes(uint64_t address, uint64_t size) {
+	if (m_read_tracked_count.load(std::memory_order_relaxed) == 0 ||
+	    !GuestRange {address, size}.Valid()) {
+		return false;
+	}
+	std::scoped_lock lock {m_lock};
+	bool             dirty = false;
+	ForEachImageInRegion(address, size, [&](ImageId, Image& image) {
+		if (image.IsReadTracked() && image.Overlaps(address, size)) {
+			dirty = true;
+			return true;
+		}
+		return false;
+	});
+	return dirty;
+}
+
+bool TextureCache::MaterializeReadTracked(uint64_t address, uint64_t size,
+                                          GuestRange skip_covered) {
 	if (m_read_tracked_count.load(std::memory_order_relaxed) == 0) {
 		return false;
 	}
 	const auto page_begin = Common::AlignDown(address, TRACKER_PAGE_SIZE);
 	const auto page_end   = Common::AlignUp(address + size, TRACKER_PAGE_SIZE);
+	auto       is_covered = [skip_covered](const Image& image) {
+		return skip_covered.Valid() && skip_covered.address <= image.info.data.address &&
+		       image.info.data.End() <= skip_covered.End();
+	};
 	{
 		std::scoped_lock lock {m_lock};
 		bool             found = false;
 		ForEachImageInRegion(page_begin, page_end - page_begin, [&](ImageId, Image& image) {
 			if (image.IsReadTracked() && image.read_track_addr < page_end &&
-			    page_begin < image.read_track_addr_end) {
+			    page_begin < image.read_track_addr_end && !is_covered(image)) {
 				found = true;
 				return true;
 			}
@@ -2135,35 +2164,28 @@ bool TextureCache::ReadMemory(uint64_t address, uint64_t size) {
 		     "addr=0x%016" PRIx64 " size=0x%016" PRIx64 "\n",
 		     address, size);
 	}
-	m_scheduler.Context().GetGpu().SendCommandSync([this, address, size, page_begin, page_end] {
+	m_scheduler.Context().GetGpu().SendCommandSync([this, page_begin, page_end, is_covered] {
 		struct PendingDownload {
 			ImageId                id;
 			GuestRange             range;
 			StreamBuffer::Download download;
 		};
 		std::vector<PendingDownload>    pending;
-		Common::SmallVector<ImageId, 8> untrack_full;
-		Common::SmallVector<ImageId, 8> untrack_range;
-		uint64_t                                wait_tick = 0;
+		Common::SmallVector<ImageId, 8> untrack_now;
+		uint64_t                        wait_tick = 0;
 
 		{
 			std::scoped_lock lock {m_lock};
 			Common::SmallVector<ImageId, 8> candidates;
 			ForEachImageInRegion(page_begin, page_end - page_begin, [&](ImageId id, Image& image) {
 				if (image.IsReadTracked() && image.read_track_addr < page_end &&
-				    page_begin < image.read_track_addr_end) {
+				    page_begin < image.read_track_addr_end && !is_covered(image)) {
 					candidates.push_back(id);
 				}
 			});
 			for (const auto id: candidates) {
-				auto&      image    = m_slot_images[id];
-				const bool overlaps = image.Overlaps(address, size);
-				// Download when the CPU reads inside the image, or when a single-page image shares
-				// the faulting page so a subsequent read to it sees fresh data after untracking.
-				const bool single_page =
-				    image.read_track_addr >= page_begin && image.read_track_addr_end <= page_end;
-				if ((overlaps || single_page) && !image.depth_id && image.SafeToDownload() &&
-				    CanDownload(image)) {
+				auto& image = m_slot_images[id];
+				if (!image.depth_id && image.SafeToDownload() && CanDownload(image)) {
 					const auto range = image.info.data;
 					auto       download =
 					    m_buffer_cache.GetUtilityBuffer(MemoryUsage::Download)
@@ -2197,17 +2219,10 @@ bool TextureCache::ReadMemory(uint64_t address, uint64_t size) {
 						continue;
 					}
 				}
-				if (overlaps || single_page) {
-					untrack_full.push_back(id);
-				} else {
-					untrack_range.push_back(id);
-				}
+				untrack_now.push_back(id);
 			}
-			for (const auto id: untrack_full) {
+			for (const auto id: untrack_now) {
 				UntrackImageRead(id);
-			}
-			for (const auto id: untrack_range) {
-				UntrackImageReadRange(id, page_begin, page_end);
 			}
 			if (!pending.empty()) {
 				wait_tick = m_scheduler.CurrentTick();
@@ -2235,7 +2250,12 @@ bool TextureCache::ReadMemory(uint64_t address, uint64_t size) {
 	return true;
 }
 
+bool TextureCache::ReadMemory(uint64_t address, uint64_t size) {
+	return MaterializeReadTracked(address, size, {});
+}
+
 void TextureCache::InvalidateMemory(uint64_t address, uint64_t size) {
+	(void)MaterializeReadTracked(address, size, GuestRange {address, size});
 	std::scoped_lock lock {m_lock};
 	const auto       page_begin = Common::AlignDown(address, TRACKER_PAGE_SIZE);
 	const auto       page_end   = Common::AlignUp(address + size, TRACKER_PAGE_SIZE);
@@ -2255,7 +2275,6 @@ void TextureCache::InvalidateMemory(uint64_t address, uint64_t size) {
 			UntrackImageRead(id);
 			continue;
 		}
-		UntrackImageReadRange(id, page_begin, page_end);
 		const auto image_begin = owner.info.data.address;
 		const auto image_end   = owner.info.data.End();
 		if (page_end < image_end) {
@@ -2393,10 +2412,10 @@ void TextureCache::RunGarbageCollector() {
 }
 
 void TextureCache::ProcessDownloadImages() {
-	if (m_readback_linear_images || m_readback_tiled_images) {
-		(void)DownloadQueuedImages();
+	if (!m_readback_linear_images && !m_readback_tiled_images) {
+		return;
 	}
-	ArmPendingReadWatchers();
+	(void)DownloadQueuedImages();
 }
 
 bool TextureCache::WriteBackImages() {
@@ -2409,10 +2428,8 @@ bool TextureCache::DownloadQueuedImages() {
 	std::scoped_lock lock {m_lock};
 	bool             downloaded = false;
 	for (const auto id: m_download_images) {
-		if (m_slot_images[id].IsGpuModified() && DownloadImageMemory(id)) {
-			downloaded = true;
-			m_pending_read_track.erase(id);
-			UntrackImageRead(id);
+		if (m_slot_images[id].IsGpuModified()) {
+			downloaded |= DownloadImageMemory(id);
 		}
 	}
 	m_download_images.clear();

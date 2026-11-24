@@ -4,11 +4,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 #include <vector>
-
-#if defined(_MSC_VER)
-#include <malloc.h>
-#endif
 
 namespace {
 std::vector<Loader::SymbolResolve> registrations;
@@ -63,24 +60,11 @@ struct GuardedMemory {
 	uint8_t* data;
 	size_t size;
 	explicit GuardedMemory(size_t bytes): size(bytes) {
-		// MSVC's STL does not provide std::aligned_alloc.
-#if defined(_MSC_VER)
-		allocation = static_cast<uint8_t*>(_aligned_malloc((bytes + 767u) & ~size_t{255}, 256));
-#else
-		allocation = static_cast<uint8_t*>(std::aligned_alloc(256, (bytes + 767u) & ~size_t{255}));
-#endif
-		CHECK(allocation != nullptr);
-		data = allocation + 256;
+		allocation = static_cast<uint8_t*>(::operator new(bytes + 512, std::align_val_t {256}));
+		data       = allocation + 256;
 		std::memset(allocation, 0xa7, bytes + 512);
 	}
-	~GuardedMemory() {
-		Check();
-#if defined(_MSC_VER)
-		_aligned_free(allocation);
-#else
-		std::free(allocation);
-#endif
-	}
+	~GuardedMemory() { Check(); ::operator delete(allocation, std::align_val_t {256}); }
 	void Check() const {
 		for (size_t i = 0; i < 256; ++i)
 			CHECK(allocation[i] == 0xa7 && data[size + i] == 0xa7);
@@ -357,16 +341,15 @@ void TestCombinedDecode() {
 	for (uint32_t packet = 0; packet < 6; ++packet) {
 		CHECK(Decoder::Decode(decoder, BackendInput(packet), {pixels.data, pixels.size}, &output) == Decoder::Result::Ok);
 		if (output.valid) CheckBackendPicture(output, frames++, pixels);
-		CHECK(Decoder::Receive(decoder, {pixels.data, pixels.size}, &output) == Decoder::Result::NoFrame);
+		CHECK(Decoder::Flush(decoder, {pixels.data, pixels.size}, &output) == Decoder::Result::Ok);
+		CHECK(!output.valid); // Legacy Flush is receive-only; the next AU remains acceptable.
 	}
 	CHECK(frames == 4);
-	// Flush drains the held frames and restarts the sequence after the last frame leaves.
+	CHECK(Decoder::Finalize(decoder) == Decoder::Result::Ok);
 	while (frames < 6) {
 		CHECK(Decoder::Flush(decoder, {pixels.data, pixels.size}, &output) == Decoder::Result::Ok);
 		CheckBackendPicture(output, frames++, pixels);
 	}
-	CHECK(Decoder::Flush(decoder, {pixels.data, pixels.size}, &output) == Decoder::Result::Ok);
-	CHECK(!output.valid);
 	Decoder::Destroy(decoder);
 }
 

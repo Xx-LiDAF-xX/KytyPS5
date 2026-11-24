@@ -9,6 +9,7 @@
 #include "graphics/host_gpu/pageManager.h"
 #include "graphics/host_gpu/regionManager.h"
 #include "graphics/host_gpu/renderer/cache/multiLevelPageTable.h"
+#include "graphics/host_gpu/renderer/cache/resolveStamp.h"
 #include "graphics/host_gpu/renderer/image/blitHelper.h"
 #include "graphics/host_gpu/renderer/image/image.h"
 #include "graphics/host_gpu/renderer/image/tiler.h"
@@ -30,6 +31,7 @@ class BufferCache;
 class CommandBuffer;
 class CommandScheduler;
 class RenderExecutor;
+class ResolveCache;
 class TextureCache;
 struct TextureCacheTestAccess;
 
@@ -48,10 +50,12 @@ public:
 		ImageViewInfo view_info;
 		BindingType   type = BindingType::Texture;
 		bool          heap = false; // PS5: resolved for a resident image heap.
+		// PS5: set by FindImage.
+		ResolveStamp stamp;
 	};
 
 	TextureCache(GraphicContext& graphics, CommandScheduler& scheduler, PageManager& page_manager,
-	             BufferCache& buffer_cache);
+	             BufferCache& buffer_cache, ResolveCache& resolve_cache);
 	~TextureCache();
 	KYTY_CLASS_NO_COPY(TextureCache);
 
@@ -73,9 +77,11 @@ public:
 	                                        uint32_t packed_clear);
 	void               InvalidateMemory(uint64_t address, uint64_t size);
 	void               InvalidateMemoryFromGPU(uint64_t address, uint64_t size);
-	// Downloads GPU-written images overlapping the faulting page on demand when read by the CPU;
-	// returns whether any read-tracked image overlapped the page.
+	// Downloads read-tracked GPU-written images overlapping the faulting page on demand; returns
+	// whether any read-tracked image overlapped the page.
 	[[nodiscard]] bool ReadMemory(uint64_t address, uint64_t size);
+	[[nodiscard]] bool IsRegionGpuModified(uint64_t address, uint64_t size);
+	[[nodiscard]] bool HasGpuDirtyBytes(uint64_t address, uint64_t size);
 	// Writes a copy into whole levels of one layer of a GPU-written image straight into it, and
 	// returns false for any other copy.
 	[[nodiscard]] bool CopyToImage(uint64_t address, uint64_t source, uint64_t size);
@@ -227,10 +233,10 @@ private:
 	void                      UntrackImageTail(ImageId id);
 	void                      TrackImageRead(ImageId id);
 	void                      UntrackImageRead(ImageId id);
-	void                      UntrackImageReadRange(ImageId id, uint64_t page_begin,
-	                                                uint64_t page_end);
 	void                      QueueReadTrack(ImageId id, const Image& image);
 	void                      ArmPendingReadWatchers();
+	[[nodiscard]] bool        MaterializeReadTracked(uint64_t address, uint64_t size,
+	                                                 GuestRange skip_covered);
 	void                      MarkAsMaybeDirty(ImageId id, Image& image);
 	void                      TrackImageDownload(ImageId id, Image& image);
 	[[nodiscard]] static bool SameBacking(const ImageInfo& cached, const ImageInfo& requested,
@@ -280,6 +286,7 @@ private:
 	BlitHelper                                        m_blit_helper;
 	TileManager                                       m_tiler;
 	BufferCache&                                      m_buffer_cache;
+	ResolveCache&                                     m_resolve_cache;
 	Common::SlotVector<Image>                         m_slot_images;
 	ImagePageTable                                    m_image_page_table;
 	Common::LeastRecentlyUsedCache<ImageId, uint64_t> m_lru_cache;
@@ -303,6 +310,7 @@ private:
 	friend class BufferCache;
 	friend class RenderExecutor;
 	friend class ImageHeap;
+	friend class ResolveCache;
 	friend bool BcAlias::Matches(const ImageInfo&, const ImageInfo&);
 	friend bool BcAlias::Publish(TextureCache&, Image&);
 	friend void BcAlias::Resolve(TextureCache&, ImageId, ImageId);
